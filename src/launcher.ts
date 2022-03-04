@@ -18,10 +18,12 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
     browserstackLocal?: BrowserstackLocal
 
     constructor (
-        private _options: BrowserstackConfig,
+        private _options: BrowserstackConfig | any,
         capabilities: Capabilities.RemoteCapability,
-        private _config: Options.Testrunner
-    ) {}
+        private _config: Options.Testrunner | any
+    ) {
+        this._config || (this._config = _options)
+    }
 
     onPrepare (config?: Options.Testrunner, capabilities?: Capabilities.RemoteCapabilities) {
         if (!this._options.browserstackLocal) {
@@ -30,8 +32,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
         const opts = {
             key: this._config.key,
-            forcelocal: true,
-            onlyAutomate: true,
+            forcelocal: this._config.services[0][1] ? this._config.services[0][1].forcelocal : false,
             ...this._options.opts
         }
 
@@ -39,17 +40,19 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
         if (Array.isArray(capabilities)) {
             capabilities.forEach((capability: Capabilities.DesiredCapabilities) => {
-                if (!capability['bstack:options']) {
-                    capability['bstack:options'] = {}
+                if (capability['bstack:options']) {
+                    capability['bstack:options'].local = true
+                } else {
+                    capability['browserstack.local'] = true
                 }
-                capability['bstack:options'].local = true
             })
         } else if (typeof capabilities === 'object') {
             Object.entries(capabilities as Capabilities.MultiRemoteCapabilities).forEach(([, caps]) => {
-                if (!(caps.capabilities as Capabilities.Capabilities)['bstack:options']) {
-                    (caps.capabilities as Capabilities.Capabilities)['bstack:options'] = {}
+                if ((caps.capabilities as Capabilities.Capabilities)['bstack:options']) {
+                    (caps.capabilities as Capabilities.Capabilities)['bstack:options']!.local = true
+                } else {
+                    (caps.capabilities as Capabilities.Capabilities)['browserstack.local'] = true
                 }
-                (caps.capabilities as Capabilities.Capabilities)['bstack:options']!.local = true
             })
         } else {
             throw TypeError('Capabilities should be an object or Array!')
