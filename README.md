@@ -37,7 +37,7 @@ export.config = {
     user: process.env.BROWSERSTACK_USERNAME,
     key: process.env.BROWSERSTACK_ACCESS_KEY,
     services: [
-        ['browserstack', {
+        ['@browserstack/wdio-browserstack-service', {
             browserstackLocal: true
         }]
     ],
