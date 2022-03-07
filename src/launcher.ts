@@ -7,7 +7,7 @@ import type { Capabilities, Services, Options } from '@wdio/types'
 
 import { BrowserstackConfig } from './types'
 
-const log = logger('@wdio/browserstack-service')
+const log = logger('@browserstack/wdio-browserstack-service')
 
 type BrowserstackLocal = BrowserstackLocalLauncher.Local & {
     pid?: number;

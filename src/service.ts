@@ -6,7 +6,7 @@ import type { Browser, MultiRemoteBrowser } from 'webdriverio'
 import { getBrowserDescription, getBrowserCapabilities, isBrowserstackCapability, getParentSuiteName } from './util'
 import { BrowserstackConfig, MultiRemoteAction, SessionResponse } from './types'
 
-const log = logger('@wdio/browserstack-service')
+const log = logger('@browserstack/wdio-browserstack-service')
 
 export default class BrowserstackService implements Services.ServiceInstance {
     private _sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
