@@ -11,7 +11,7 @@ The easiest way is to keep `@browserstack/wdio-browserstack-service` as a devDep
 ```json
 {
     "devDependencies": {
-        "@browserstack/wdio-browserstack-service": "^1.0.0"
+        "@browserstack/wdio-browserstack-service": "^1.0.1"
     }
 }
 ```
