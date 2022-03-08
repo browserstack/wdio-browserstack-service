@@ -31,7 +31,8 @@
     "webdriverio": "7.16.15"
   },
   "devDependencies": {
-    "@tsconfig/node12": "^1.0.9"
+    "@tsconfig/node12": "^1.0.9",
+    "jest": "^27.2.5"
   },
   "publishConfig": {
     "access": "public"
