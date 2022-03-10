@@ -1,7 +1,7 @@
 WebdriverIO Browserstack Service
 ==========
 
-> A WebdriverIO service that manages local tunnel and job metadata for Browserstack users.
+> The official BrowserStack WebdriverIO service that integrates your WebdriverIO test suite with BrowserStack.
 
 ## Installation
 
@@ -16,7 +16,7 @@ The easiest way is to keep `@browserstack/wdio-browserstack-service` as a devDep
 }
 ```
 
-You can simple do it by:
+or you can simply do it by:
 
 ```sh
 npm install @browserstack/wdio-browserstack-service --save-dev
