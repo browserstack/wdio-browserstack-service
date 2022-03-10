@@ -26,6 +26,16 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
     }
 
     onPrepare (config?: Options.Testrunner, capabilities?: Capabilities.RemoteCapabilities) {
+        if (Array.isArray(capabilities)) {
+            capabilities.forEach((capability: Capabilities.DesiredCapabilities | any) => {
+                const wdioServiceVersion = process.env.npm_package_version;
+                if (capability['bstack:options']) {
+                    capability['bstack:options'].wdioService = wdioServiceVersion;
+                } else {
+                    capability['browserstack.wdioService'] = wdioServiceVersion;
+                }
+            })
+        }
         if (!this._options.browserstackLocal) {
             return log.info('browserstackLocal is not enabled - skipping...')
         }
