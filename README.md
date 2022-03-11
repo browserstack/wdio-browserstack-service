@@ -6,17 +6,7 @@ WebdriverIO Browserstack Service
 ## Installation
 
 
-The easiest way is to keep `@browserstack/wdio-browserstack-service` as a devDependency in your `package.json`.
-
-```json
-{
-    "devDependencies": {
-        "@browserstack/wdio-browserstack-service": "^1.0.1"
-    }
-}
-```
-
-or you can simply do it by:
+You can simply do it by:
 
 ```sh
 npm install @browserstack/wdio-browserstack-service --save-dev
