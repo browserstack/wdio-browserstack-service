@@ -7,6 +7,9 @@ import type { Capabilities, Services, Options } from '@wdio/types'
 
 import { BrowserstackConfig } from './types'
 
+// @ts-ignore
+import { version } from '../package.json'
+
 const log = logger('@browserstack/wdio-browserstack-service')
 
 type BrowserstackLocal = BrowserstackLocalLauncher.Local & {
@@ -28,7 +31,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
     onPrepare (config?: Options.Testrunner, capabilities?: Capabilities.RemoteCapabilities) {
         if (Array.isArray(capabilities)) {
             capabilities.forEach((capability: Capabilities.DesiredCapabilities | any) => {
-                const wdioServiceVersion = process.env.npm_package_version;
+                const wdioServiceVersion = version;
                 if (capability['bstack:options']) {
                     capability['bstack:options'].wdioService = wdioServiceVersion;
                 } else {
