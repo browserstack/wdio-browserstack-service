@@ -32,7 +32,32 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         if (Array.isArray(capabilities)) {
             capabilities.forEach((capability: Capabilities.DesiredCapabilities | any) => {
                 const wdioServiceVersion = version;
+                let webdriverIOVersion: any = undefined;
+                const packageFile: any = process.env.npm_package_json;
+                if (packageFile !== undefined) {
+                    const { devDependencies, dependencies } = require(packageFile);
+                    if (devDependencies !== undefined) {
+                        webdriverIOVersion = devDependencies['webdriverio']
+                    } else if (dependencies !== undefined) {
+                        webdriverIOVersion = dependencies['webdriverio']
+                    }
+                } else {
+                    webdriverIOVersion = process.env.npm_package_dependencies_webdriverio;
+                    if (webdriverIOVersion === undefined) {
+                        webdriverIOVersion = process.env.npm_package_devDependencies_webdriverio;
+                    }
+                }
+                if (webdriverIOVersion !== undefined) {
+                    webdriverIOVersion = webdriverIOVersion.split('.')[0];
+                    if (webdriverIOVersion[0] === '^') {
+                        webdriverIOVersion = webdriverIOVersion.substring(1);
+                    }
+                    webdriverIOVersion = parseInt(webdriverIOVersion);
+                }
                 if (capability['bstack:options']) {
+                    capability['bstack:options'].wdioService = wdioServiceVersion;
+                } else if (webdriverIOVersion >= 7) {
+                    capability['bstack:options'] = {};
                     capability['bstack:options'].wdioService = wdioServiceVersion;
                 } else {
                     capability['browserstack.wdioService'] = wdioServiceVersion;
