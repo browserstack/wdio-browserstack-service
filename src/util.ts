@@ -73,7 +73,7 @@ export function getWebdriverIOVersion(): any {
         if (devDependencies !== undefined) {
             webdriverIOVersion = devDependencies['webdriverio']
         }
-        if (dependencies !== undefined) {
+        if (webdriverIOVersion !== undefined && dependencies !== undefined) {
             webdriverIOVersion = dependencies['webdriverio']
         }
     } else {
