@@ -6,6 +6,7 @@ import logger from '@wdio/logger'
 import type { Capabilities, Services, Options } from '@wdio/types'
 
 import { BrowserstackConfig } from './types'
+import { getWebdriverIOVersion, getBrowserstackWdioServiceVersion } from './util'
 
 // @ts-ignore
 import { version } from '../package.json'
@@ -31,35 +32,18 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
     onPrepare (config?: Options.Testrunner, capabilities?: Capabilities.RemoteCapabilities) {
         if (Array.isArray(capabilities)) {
             capabilities.forEach((capability: Capabilities.DesiredCapabilities | any) => {
-                const wdioServiceVersion = version;
-                let webdriverIOVersion: any = undefined;
-                const packageFile: any = process.env.npm_package_json;
-                if (packageFile !== undefined) {
-                    const { devDependencies, dependencies } = require(packageFile);
-                    if (devDependencies !== undefined) {
-                        webdriverIOVersion = devDependencies['webdriverio']
-                    } else if (dependencies !== undefined) {
-                        webdriverIOVersion = dependencies['webdriverio']
-                    }
-                } else {
-                    webdriverIOVersion = process.env.npm_package_dependencies_webdriverio;
-                    if (webdriverIOVersion === undefined) {
-                        webdriverIOVersion = process.env.npm_package_devDependencies_webdriverio;
-                    }
-                }
-                if (webdriverIOVersion !== undefined) {
-                    webdriverIOVersion = webdriverIOVersion.split('.')[0];
-                    if (webdriverIOVersion[0] === '^') {
-                        webdriverIOVersion = webdriverIOVersion.substring(1);
-                    }
-                    webdriverIOVersion = parseInt(webdriverIOVersion);
-                }
+                const wdioServiceVersion: string = getBrowserstackWdioServiceVersion();
+                const webdriverIOVersion: any = getWebdriverIOVersion();
                 if (capability['bstack:options']) {
+                    // if bstack:options present add wdioService inside it
                     capability['bstack:options'].wdioService = wdioServiceVersion;
                 } else if (webdriverIOVersion >= 7) {
+                    // in case of webdriver version 7 we need to add wdioService inside bstack:options,
+                    // so need to add bstack:options key first
                     capability['bstack:options'] = {};
                     capability['bstack:options'].wdioService = wdioServiceVersion;
                 } else {
+                    // on webdriver 6 and below can directly add at root level
                     capability['browserstack.wdioService'] = wdioServiceVersion;
                 }
             })
