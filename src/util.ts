@@ -3,6 +3,9 @@ import type { Capabilities } from '@wdio/types'
 
 import { BROWSER_DESCRIPTION } from './constants'
 
+// @ts-ignore
+import { version } from '../package.json'
+
 /**
  * get browser description for Browserstack service
  * @param cap browser capablities
@@ -57,4 +60,42 @@ export function getParentSuiteName(fullTitle: string, testSuiteTitle: string): s
         parentSuiteName += fullTitleWords[c++] + ' '
     }
     return parentSuiteName.trim()
+}
+
+// returns the webdriverIO version being used
+export function getWebdriverIOVersion(): any {
+    let webdriverIOVersion: any = undefined;
+    // process.env.npm_package_json returns the path of the package.json file
+    const packageFile: any = process.env.npm_package_json;
+    if (packageFile !== undefined) {
+        // try to get the webdriverIO version from the dependencies
+        const { devDependencies, dependencies } = require(packageFile);
+        if (devDependencies !== undefined) {
+            webdriverIOVersion = devDependencies['webdriverio']
+        }
+        if (dependencies !== undefined) {
+            webdriverIOVersion = dependencies['webdriverio']
+        }
+    } else {
+        // for node version > 12 process.env.npm_package_json is undefined
+        // we directly have access to the dependencies, using that here
+        webdriverIOVersion = process.env.npm_package_dependencies_webdriverio;
+        if (webdriverIOVersion === undefined) {
+            webdriverIOVersion = process.env.npm_package_devDependencies_webdriverio;
+        }
+    }
+    if (webdriverIOVersion !== undefined) {
+        // calculate the major version of the webdriverio package
+        webdriverIOVersion = webdriverIOVersion.split('.')[0];
+        if (webdriverIOVersion[0] === '^') {
+            webdriverIOVersion = webdriverIOVersion.substring(1);
+        }
+        webdriverIOVersion = parseInt(webdriverIOVersion);
+    }
+    return webdriverIOVersion;
+}
+
+// import the version from package.json file and return it
+export function getBrowserstackWdioServiceVersion(): string {
+    return version;
 }
