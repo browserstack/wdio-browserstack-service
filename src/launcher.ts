@@ -8,9 +8,6 @@ import type { Capabilities, Services, Options } from '@wdio/types'
 import { BrowserstackConfig } from './types'
 import { getWebdriverIOVersion, getBrowserstackWdioServiceVersion } from './util'
 
-// @ts-ignore
-import { version } from '../package.json'
-
 const log = logger('@browserstack/wdio-browserstack-service')
 
 type BrowserstackLocal = BrowserstackLocalLauncher.Local & {
