@@ -1,4 +1,14 @@
-# WebdriverIO Browserstack Service
+# Deprecation Note
+
+> The changes done as a part of this fork have now been merged into [@wdio/browserstack-service](https://www.npmjs.com/package/@wdio/browserstack-service), so we will be deprecating this package. Please install the service using:
+
+```sh
+npm install @wdio/browserstack-service --save-dev
+```
+
+---
+
+<s># WebdriverIO Browserstack Service
 
 > The official BrowserStack WebdriverIO service that integrates your WebdriverIO test suite with BrowserStack.
 
@@ -64,7 +74,7 @@ List of available local testing modifiers to be passed as opts:
 If doing simultaneous multiple local testing connections, set this uniquely for different processes -
 
 ```js
-opts = { localIdentifier: "randomstring" };
+opts = { localIdentifier: 'randomstring' };
 ```
 
 #### Verbose Logging
@@ -72,7 +82,7 @@ opts = { localIdentifier: "randomstring" };
 To enable verbose logging -
 
 ```js
-opts = { verbose: "true" };
+opts = { verbose: 'true' };
 ```
 
 Note - Possible values for 'verbose' modifier are '1', '2', '3' and 'true'
@@ -82,7 +92,7 @@ Note - Possible values for 'verbose' modifier are '1', '2', '3' and 'true'
 To route all traffic via local(your) machine -
 
 ```js
-opts = { forceLocal: "true" };
+opts = { forceLocal: 'true' };
 ```
 
 #### Folder Testing
@@ -90,7 +100,7 @@ opts = { forceLocal: "true" };
 To test local folder rather internal server, provide path to folder as value of this option -
 
 ```js
-opts = { f: "/my/awesome/folder" };
+opts = { f: '/my/awesome/folder' };
 ```
 
 #### Force Start
@@ -98,7 +108,7 @@ opts = { f: "/my/awesome/folder" };
 To kill other running Browserstack Local instances -
 
 ```js
-opts = { force: "true" };
+opts = { force: 'true' };
 ```
 
 #### Only Automate
@@ -106,7 +116,7 @@ opts = { force: "true" };
 To disable local testing for Live and Screenshots, and enable only Automate -
 
 ```js
-opts = { onlyAutomate: "true" };
+opts = { onlyAutomate: 'true' };
 ```
 
 #### Proxy
@@ -120,10 +130,10 @@ To use a proxy for local testing -
 
 ```js
 opts = {
-  proxyHost: "127.0.0.1",
-  proxyPort: "8000",
-  proxyUser: "user",
-  proxyPass: "password",
+  proxyHost: '127.0.0.1',
+  proxyPort: '8000',
+  proxyUser: 'user',
+  proxyPass: 'password',
 };
 ```
 
@@ -138,10 +148,10 @@ To use local proxy in local testing -
 
 ```js
 opts = {
-  localProxyHost: "127.0.0.1",
-  localProxyPort: "8000",
-  localProxyUser: "user",
-  localProxyPass: "password",
+  localProxyHost: '127.0.0.1',
+  localProxyPort: '8000',
+  localProxyUser: 'user',
+  localProxyPass: 'password',
 };
 ```
 
@@ -152,7 +162,7 @@ To use PAC (Proxy Auto-Configuration) in local testing -
 - pac-file: PAC (Proxy Auto-Configuration) file’s absolute path
 
 ```js
-opts = { "pac-file": "<pac_file_abs_path>" };
+opts = { 'pac-file': '<pac_file_abs_path>' };
 ```
 
 #### Binary Path
@@ -161,7 +171,7 @@ By default, BrowserStack local wrappers try downloading and executing the latest
 Path to specify local Binary path -
 
 ```js
-opts = { binarypath: "/path/to/binary" };
+opts = { binarypath: '/path/to/binary' };
 ```
 
 #### Logfile
@@ -170,9 +180,9 @@ To save the logs to the file while running with the '-v' argument, you can speci
 To specify the path to file where the logs will be saved -
 
 ```js
-opts = { verbose: "true", logFile: "./local.log" };
+opts = { verbose: 'true', logFile: './local.log' };
 ```
 
 ---
 
-For more information on WebdriverIO see the [homepage](https://webdriver.io).
+For more information on WebdriverIO see the [homepage](https://webdriver.io). </s>
