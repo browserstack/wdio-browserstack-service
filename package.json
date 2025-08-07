@@ -1,0 +1,36 @@
+{
+  "name": "browserstack-proto",
+  "version": "1.0.0",
+  "description": "Protobuf definitions for BrowserStack SDK",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/**/*",
+    "src/proto/**/*.proto"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist src/generated",
+    "generate": "buf generate",
+    "build": "npm run clean && npm run generate && tsc",
+    "prepare": "npm run build",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "browserstack",
+    "proto",
+    "grpc",
+    "webdriverio"
+  ],
+  "author": "BrowserStack",
+  "license": "MIT",
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.5.2",
+    "@grpc/grpc-js": "1.13.3"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.55.1",
+    "ts-proto": "^2.7.5",
+    "typescript": "^5.4.5"
+  }
+}
