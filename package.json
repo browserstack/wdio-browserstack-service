@@ -27,7 +27,7 @@
     "@wdio/types": "7.16.14",
     "browserstack-local": "^1.4.5",
     "got": "^11.0.2",
-    "webdriverio": "7.16.15"
+    "webdriverio": "9.18.4"
   },
   "devDependencies": {
     "@tsconfig/node12": "^1.0.9",
