@@ -1,13 +1,24 @@
 {
-  "extends": "./tsconfig.prod.json",
   "compilerOptions": {
-    "baseUrl": ".",
-    "outDir": "./build",
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "outDir": "./dist",
     "rootDir": "./src",
-    "inlineSourceMap": true
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "allowSyntheticDefaultImports": true
   },
   "include": [
-    "src/**/*",
-    "../../@types"
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
   ]
 }
