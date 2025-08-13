@@ -1,9 +1,18 @@
 {
   "name": "@browserstack/wdio-browserstack-service",
   "version": "2.0.0",
-  "description": "Protobuf definitions for BrowserStack SDK",
+  "description": "WebdriverIO service for better Browserstack integration",
+  "author": "Browserstack",
+  "homepage": "https://github.com/browserstack/wdio-browserstack-service",
   "type": "module",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/browserstack/wdio-browserstack-service.git"
+  },
   "types": "dist/index.d.ts",
   "files": [
     "dist/**/*",
@@ -22,7 +31,9 @@
     "grpc",
     "webdriverio"
   ],
-  "author": "BrowserStack",
+  "bugs": {
+    "url": "https://github.com/browserstack/wdio-browserstack-service/issues"
+  },
   "license": "MIT",
   "dependencies": {
     "@bufbuild/protobuf": "^2.5.2",
