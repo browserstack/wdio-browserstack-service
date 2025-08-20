@@ -1,0 +1,10 @@
+version: v2
+plugins:
+  - local: protoc-gen-ts_proto
+    out: src/generated
+    opt:
+      - importSuffix=.js
+      - outputServices=grpc-js
+      - esModuleInterop=true
+      - outputPartialMethods=false
+      - useExactTypes=false
