@@ -73,22 +73,6 @@ npm run generate
 npm run build
 ```
 
-### Prerequisites
-- [Buf CLI](https://docs.buf.build/installation)
-- Node.js ≥16
-
-### Generate & Build
-```bash
-# Clean generated artifacts
-npm run clean
-
-# Generate TS code from .proto definitions
-npm run generate
-
-# Compile to JavaScript & type declarations
-npm run build
-```
-
 Generated files appear under `dist/` and should be published to npm.
 
 ## Development
