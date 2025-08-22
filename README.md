@@ -73,9 +73,6 @@ npm run generate
 npm run build
 ```
 
-## Code Generation
-This project uses Buf and `ts-proto` to generate TypeScript definitions from Protobuf.
-
 ### Prerequisites
 - [Buf CLI](https://docs.buf.build/installation)
 - Node.js ≥16
