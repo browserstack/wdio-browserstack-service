@@ -28,6 +28,7 @@ Users should install and configure the service as documented in the linked READM
 ## Setup & Configuration
 Add the service to your WebdriverIO configuration (`wdio.conf.js`):
 <!-- Usage is provided by @wdio/browserstack-service. -->
+```
 export BROWSERSTACK_USERNAME=your_username
 export BROWSERSTACK_ACCESS_KEY=your_access_key
 ```
