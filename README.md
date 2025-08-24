@@ -42,10 +42,17 @@ const client = new SDKClient('grpc.browserstack.com:443');
 
 // Start a session
 const startReq = StartBinSessionRequestConstructor.create({
-	sdkLanguage: 'typescript',
-	sdkVersion: '2.0.0',
+	binSessionId: this.binSessionId,
+	sdkLanguage: CLIUtils.getSdkLanguage(),
+	sdkVersion: packageVersion,
 	pathProject: process.cwd(),
-	cliArgs: process.argv,
+	pathConfig: path.resolve(process.cwd(), 'browserstack.yml'),
+	cliArgs: process.argv.slice(2),
+	frameworks: [automationFrameworkDetail.name, testFrameworkDetail.name],
+	frameworkVersions,
+	language: CLIUtils.getSdkLanguage(),
+	testFramework: testFrameworkDetail.name,
+	wdioConfig: wdioConfig,
 });
 
 client.startBinSession(startReq).then(response => {
