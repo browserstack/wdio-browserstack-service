@@ -37,27 +37,43 @@ export BROWSERSTACK_ACCESS_KEY=your_access_key
 Import and use the gRPC client and message constructors:
 ```ts
 import { SDKClient, StartBinSessionRequestConstructor } from '@browserstack/wdio-browserstack-service';
+import path from 'path';
+import process from 'process';
+import { CLIUtils } from '@browserstack/cli-utils'; // example import, adjust if needed
+import { version as packageVersion } from './package.json'; // adjust to your setup
 
 // Initialize the client (uses default insecure credentials unless overridden)
 const client = new SDKClient('grpc.browserstack.com:443');
 
-// Start a session
+// Collect framework details
+const automationFrameworkDetail = CLIUtils.getAutomationFrameworkDetail();
+const testFrameworkDetail = CLIUtils.getTestFrameworkDetail();
+
+const frameworkVersions = {
+  ...automationFrameworkDetail.version,
+  ...testFrameworkDetail.version
+};
+
+// Build StartBinSessionRequest
 const startReq = StartBinSessionRequestConstructor.create({
-	binSessionId: this.binSessionId,
-	sdkLanguage: CLIUtils.getSdkLanguage(),
-	sdkVersion: packageVersion,
-	pathProject: process.cwd(),
-	pathConfig: path.resolve(process.cwd(), 'browserstack.yml'),
-	cliArgs: process.argv.slice(2),
-	frameworks: [automationFrameworkDetail.name, testFrameworkDetail.name],
-	frameworkVersions,
-	language: CLIUtils.getSdkLanguage(),
-	testFramework: testFrameworkDetail.name,
-	wdioConfig: wdioConfig,
+  binSessionId: 'your-session-id', // replace with actual session id
+  sdkLanguage: CLIUtils.getSdkLanguage(),
+  sdkVersion: packageVersion,
+  pathProject: process.cwd(),
+  pathConfig: path.resolve(process.cwd(), 'browserstack.yml'),
+  cliArgs: process.argv.slice(2),
+  frameworks: [automationFrameworkDetail.name, testFrameworkDetail.name],
+  frameworkVersions,
+  language: CLIUtils.getSdkLanguage(),
+  testFramework: testFrameworkDetail.name,
+  wdioConfig: {}, // provide your WDIO config if applicable
 });
 
+// Start a session
 client.startBinSession(startReq).then(response => {
-	console.log('Started session:', response.binSessionId);
+  console.log('Started session:', response.binSessionId);
+}).catch(err => {
+  console.error('Failed to start session:', err);
 });
 ```
 
