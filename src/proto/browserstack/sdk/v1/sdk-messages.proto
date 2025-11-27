@@ -113,6 +113,13 @@ message TestOrchestration {
     optional bool run_previously_failed_first = 1;
     optional RetryTestsOnFailure retry_tests_on_failure = 2;
     optional AbortBuildOnFailure abort_build_on_failure = 3;
+    optional RunSmartSelection run_smart_selection = 4;
+}
+
+message RunSmartSelection {
+    bool enabled = 1;
+    string mode = 2;
+    repeated string source = 3;
 }
 
 message RetryTestsOnFailure {
@@ -129,6 +136,7 @@ message TestOrchestrationRequest{
     string bin_session_id = 1;
     repeated string test_files = 2;
     optional string orchestration_strategy = 3;
+    optional string orchestration_metadata = 4;
 }
 
 message TestOrchestrationResponse{
