@@ -6,6 +6,8 @@ message AIBrowserExtensionRequest {
     string bin_session_id = 1;
     string browser_name = 2;
     string browser_version = 3;
+    optional string client_worker_id = 500;
+    optional string platform_index = 501;
 }
 
 message AIBrowserExtensionResponse {
@@ -17,6 +19,7 @@ message AIBrowserExtensionResponse {
 message AISelfHealGetRequest {
     string bin_session_id = 1;
     optional string platform_index = 2;
+    optional string client_worker_id = 500;
 
     string framework_session_id = 3;
     string locator_type = 4;
@@ -34,6 +37,7 @@ message AISelfHealGetResponse {
 message AISelfHealStepRequest {
     string bin_session_id = 1;
     optional string platform_index = 2;
+    optional string client_worker_id = 500;
 
     string framework_session_id = 3;
     bool is_success = 4;

@@ -29,6 +29,7 @@ message ObservabilityConfigRequest {
     string test_framework_version = 4;
     optional string hub_url = 5;
     optional string capabilities = 6;
+    optional string client_worker_id = 500;
 }
 
 message ObservabilityConfigResponse {
