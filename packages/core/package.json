@@ -1,0 +1,47 @@
+{
+  "name": "@browserstack/wdio-browserstack-service",
+  "version": "2.0.2",
+  "description": "WebdriverIO service for better Browserstack integration",
+  "author": "Browserstack",
+  "homepage": "https://github.com/browserstack/wdio-browserstack-service",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/browserstack/wdio-browserstack-service.git"
+  },
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/**/*",
+    "src/proto/**/*.proto"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist src/generated",
+    "generate": "buf generate",
+    "build": "npm run clean && npm run generate && tsc",
+    "prepare": "npm run build",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "browserstack",
+    "proto",
+    "grpc",
+    "webdriverio"
+  ],
+  "bugs": {
+    "url": "https://github.com/browserstack/wdio-browserstack-service/issues"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.5.2",
+    "@grpc/grpc-js": "1.13.3"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.55.1",
+    "ts-proto": "^2.7.5",
+    "typescript": "^5.4.5"
+  }
+}

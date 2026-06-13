@@ -1,0 +1,69 @@
+name: Release
+
+# Publishes @wdio/browserstack-service to npm via OIDC Trusted Publishing
+# (no long-lived NPM_TOKEN). One-time setup by an @wdio npm org admin on npmjs.com:
+#   @wdio/browserstack-service -> Settings -> Trusted Publisher -> GitHub Actions
+#     Organization/user: browserstack
+#     Repository:        wdio-browserstack-service
+#     Workflow filename: release.yml
+#     Environment:       (leave empty)
+# Requires: PUBLIC repo (for provenance), npm >= 11.5.1, Node >= 22.14.0.
+#
+# The gRPC core (@browserstack/wdio-browserstack-service) is in .changeset ignore,
+# so this workflow never versions or publishes it.
+
+on:
+  push:
+    branches:
+      - main   # v9 line -> dist-tag "latest"
+      - v8     # v8 line -> dist-tag "v8" (from publishConfig.tag on the v8 branch)
+
+# Never run main and v8 releases on top of each other.
+concurrency: release-${{ github.ref }}
+
+permissions:
+  contents: write       # commit the "Version Packages" PR + create git tags
+  pull-requests: write  # open the "Version Packages" PR
+  id-token: write       # OIDC for npm trusted publishing + provenance
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Changesets needs full history/tags
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22            # resolves to >= 22.14 on the runner (OIDC floor)
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      # Trusted Publishing needs npm >= 11.5.1. Pin to the 11.x line so a future
+      # npm major can never silently change publish behaviour.
+      - name: Upgrade npm to an OIDC-capable version
+        run: npm install -g npm@11
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Create Release PR or publish to npm
+        uses: changesets/action@v1
+        with:
+          version: npm run version    # changeset version (opens the "Version Packages" PR)
+          publish: npm run release     # changeset publish (honors publishConfig.tag per branch)
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No NPM_TOKEN: auth is OIDC via id-token: write above.
+          NPM_CONFIG_PROVENANCE: 'true'

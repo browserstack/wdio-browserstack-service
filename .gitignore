@@ -1,3 +1,24 @@
 node_modules
+
+# build outputs
 dist
 generated
+build
+src/generated
+packages/*/dist
+packages/*/build
+packages/*/src/generated
+
+# test/coverage
+coverage
+packages/*/coverage
+
+# packed tarballs & logs
+*.tgz
+*.log
+logs
+
+# local/editor
+.DS_Store
+.env
+.env.*
