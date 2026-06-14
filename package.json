@@ -37,7 +37,7 @@
   "license": "MIT",
   "dependencies": {
     "@bufbuild/protobuf": "^2.5.2",
-    "@grpc/grpc-js": "1.13.3"
+    "@grpc/grpc-js": "^1.13.3"
   },
   "devDependencies": {
     "@bufbuild/buf": "^1.55.1",
