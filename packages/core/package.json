@@ -1,7 +1,7 @@
 {
   "name": "@browserstack/wdio-browserstack-service",
   "version": "2.0.2",
-  "description": "WebdriverIO service for better Browserstack integration",
+  "description": "gRPC/protobuf core for the BrowserStack WebdriverIO service",
   "author": "Browserstack",
   "homepage": "https://github.com/browserstack/wdio-browserstack-service",
   "type": "module",
@@ -28,8 +28,7 @@
   "keywords": [
     "browserstack",
     "proto",
-    "grpc",
-    "webdriverio"
+    "grpc"
   ],
   "bugs": {
     "url": "https://github.com/browserstack/wdio-browserstack-service/issues"
