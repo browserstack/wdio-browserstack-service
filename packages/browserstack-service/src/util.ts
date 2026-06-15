@@ -1454,10 +1454,14 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
         })
 
         const formData = new FormData()
-        // openAsBlob returns a Blob backed by a file descriptor — undici streams
-        // from disk during the upload instead of materialising the full archive
+        // openAsBlob (Node >=20) returns a Blob backed by a file descriptor — undici
+        // streams from disk during the upload instead of materialising the full archive
         // in V8 heap (which readFileSync + new Blob([Buffer]) would do twice).
-        const file = await fs.openAsBlob(tarGzPath, { type: 'application/x-gzip' })
+        // Node 18.20 (still supported per `engines`) lacks fs.openAsBlob, so fall back
+        // to reading the (small) log archive into a Blob there.
+        const file = typeof fs.openAsBlob === 'function'
+            ? await fs.openAsBlob(tarGzPath, { type: 'application/x-gzip' })
+            : new Blob([fs.readFileSync(tarGzPath)], { type: 'application/x-gzip' })
         formData.append('data', file, 'logs.tar.gz')
         formData.append('clientBuildUuid', clientBuildUuid)
 

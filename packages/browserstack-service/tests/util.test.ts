@@ -68,7 +68,11 @@ const log = logger('test')
 
 vi.mock('fetch')
 vi.mock('git-repo-info')
-vi.useFakeTimers().setSystemTime(new Date('2020-01-01'))
+// Fake only Date (not `performance`): these tests need a deterministic system
+// clock but never advance timers. Faking `performance` too makes performance.now()
+// negative under the 2020 system time, which Node 18's perf_hooks rejects with
+// ERR_PERFORMANCE_INVALID_TIMESTAMP (Node 20+ tolerates it). Mirrors reporter.test.ts.
+vi.useFakeTimers({ toFake: ['Date'] }).setSystemTime(new Date('2020-01-01'))
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
 
 // Mock testHub utilities

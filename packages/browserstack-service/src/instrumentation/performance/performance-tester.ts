@@ -18,6 +18,18 @@ import type { CsvWriter } from 'csv-writer/src/lib/csv-writer.js'
 import type { ObjectMap } from 'csv-writer/src/lib/lang/object.js'
 import type { Browser } from 'webdriverio'
 
+// Telemetry must never throw into business logic. Node 18's perf_hooks rejects
+// negative timestamps (e.g. performance.now() under faked timers, or any other
+// edge) with ERR_PERFORMANCE_INVALID_TIMESTAMP; Node 20+ tolerates them. Wrapping
+// mark/measure keeps an instrumentation failure from breaking a caller's hook
+// (e.g. a service before()), and is a no-op on the happy path.
+function safeMark(markName: string) {
+    try { performance.mark(markName) } catch { /* instrumentation must not throw */ }
+}
+function safeMeasure(measureName: string, start: string, end: string) {
+    try { performance.measure(measureName, start, end) } catch { /* instrumentation must not throw */ }
+}
+
 type PerformanceDetails = {
     success?: true,
     failure?: string,
@@ -224,7 +236,7 @@ export default class PerformanceTester {
         const endMark = `${label}-end-${uniqueId}`
 
         // Create the start mark with unique ID
-        performance.mark(startMark)
+        safeMark(startMark)
 
         // Store details with measurement context
         const detailsWithContext = {
@@ -240,8 +252,8 @@ export default class PerformanceTester {
                     returnVal
                         .then(v => {
                             // Use specific marks for this call
-                            performance.mark(endMark)
-                            performance.measure(label, startMark, endMark)
+                            safeMark(endMark)
+                            safeMeasure(label, startMark, endMark)
 
                             this.details[label] = Object.assign({
                                 success: true,
@@ -255,8 +267,8 @@ export default class PerformanceTester {
 
                             resolve(v)
                         }).catch(e => {
-                            performance.mark(endMark)
-                            performance.measure(label, startMark, endMark)
+                            safeMark(endMark)
+                            safeMeasure(label, startMark, endMark)
 
                             this.details[label] = Object.assign({
                                 success: false,
@@ -274,8 +286,8 @@ export default class PerformanceTester {
             }
 
             // Synchronous execution
-            performance.mark(endMark)
-            performance.measure(label, startMark, endMark)
+            safeMark(endMark)
+            safeMeasure(label, startMark, endMark)
 
             this.details[label] = Object.assign({
                 success: true,
@@ -289,8 +301,8 @@ export default class PerformanceTester {
 
             return returnVal
         } catch (er) {
-            performance.mark(endMark)
-            performance.measure(label, startMark, endMark)
+            safeMark(endMark)
+            safeMeasure(label, startMark, endMark)
 
             this.details[label] = Object.assign({
                 success: false,
@@ -309,13 +321,13 @@ export default class PerformanceTester {
     static start(event: string) {
         const finalEvent = event + '-start'
         if (this.eventsMap[finalEvent]) {return}
-        performance.mark(finalEvent)
+        safeMark(finalEvent)
         this.eventsMap[finalEvent] = 1
     }
 
     static end(event: string, success = true, failure?: string | unknown, details = {}) {
-        performance.mark(event + '-end')
-        performance.measure(event, event + '-start', event + '-end')
+        safeMark(event + '-end')
+        safeMeasure(event, event + '-start', event + '-end')
         // Clear the start-mark guard so a subsequent start(event) for the same
         // event actually marks a new start. Without this, start() short-circuits
         // and the next end() measures from the original start mark — inflated
