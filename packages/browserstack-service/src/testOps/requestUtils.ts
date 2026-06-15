@@ -6,8 +6,7 @@ import {
 } from '../constants.js'
 import { BStackLogger } from '../bstackLogger.js'
 import { DEFAULT_REQUEST_CONFIG, getLogTag } from '../util.js'
-import fetchWrap from '../fetchWrapper.js'
-import { format } from 'node:util'
+import got from 'got'
 import APIUtils from '../cli/apiUtils.js'
 
 export async function uploadEventData (eventData: UploadType | Array<UploadType>, eventUrl: string = DATA_EVENT_ENDPOINT) {
@@ -31,18 +30,18 @@ export async function uploadEventData (eventData: UploadType | Array<UploadType>
 
     try {
         const url = `${APIUtils.DATA_ENDPOINT}/${eventUrl}`
-        const data = await fetchWrap(url, {
-            method: 'POST',
+        const data = await got.post(url, {
+            agent: DEFAULT_REQUEST_CONFIG.agent,
             headers: {
                 ...DEFAULT_REQUEST_CONFIG.headers,
                 'Authorization': `Bearer ${process.env[BROWSERSTACK_TESTHUB_JWT]}`
             },
-            body: JSON.stringify(eventData)
-        })
-        BStackLogger.debug(`[${logTag}] Success response: ${JSON.stringify(await data.json())}`)
+            json: eventData
+        }).json()
+        BStackLogger.debug(`[${logTag}] Success response: ${JSON.stringify(data)}`)
     } catch (error) {
-        BStackLogger.debug(`[${logTag}] Failed. Error: ${format(error)}`)
-        throw error
+        BStackLogger.debug(`[${logTag}] Failed. Error: ${error}`)
+        throw new Error('Request failed with exception: ' + error)
     }
 }
 

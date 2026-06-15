@@ -9,12 +9,12 @@ import type TestFrameworkInstance from '../instances/testFrameworkInstance.js'
 import { TestFrameworkState } from '../states/testFrameworkState.js'
 import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
-import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
+import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, setBrowserstackAnnotation } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '@browserstack/wdio-browserstack-service'
+import type { Capabilities } from '@wdio/types'
 import PerformanceTester from '../../instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from '../../instrumentation/performance/constants.js'
 import type { FetchDriverExecuteParamsEventRequest, FetchDriverExecuteParamsEventResponse } from '@browserstack/wdio-browserstack-service'
@@ -33,8 +33,9 @@ export default class AccessibilityModule extends BaseModule {
     static MODULE_NAME = 'AccessibilityModule'
     accessibilityMap: Map<number, boolean>
     LOG_DISABLED_SHOWN: Map<number, boolean>
-    testMetadata: Record<string, { [key: string]: unknown; }> = {}
-    currentTestName: string | null = null
+    testMetadata: Record<string, any> = {}
+    centralAuthA11yConfig: Record<string, unknown> = {}
+    centralAuthConfigFetched: boolean = false
 
     constructor(accessibilityConfig: Accessibility, isNonBstackA11y: boolean) {
         super()
@@ -44,8 +45,8 @@ export default class AccessibilityModule extends BaseModule {
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.POST, this.onAfterTest.bind(this))
         this.accessibility = Boolean(accessibilityConfig)
-        const accessibilityOptions = (BrowserstackCLI.getInstance().options as Record<string, unknown>)?.accessibilityOptions as { [key: string]: string | boolean | undefined }
-        this.autoScanning = Boolean(accessibilityOptions?.autoScanning ?? true)
+        const accessibilityOptions = (BrowserstackCLI.getInstance().options as any)?.accessibilityOptions
+        this.autoScanning = accessibilityOptions?.autoScanning ?? true
         this.scriptInstance = accessibilityScripts
         this.accessibilityMap = new Map()
         this.LOG_DISABLED_SHOWN = new Map()
@@ -81,6 +82,10 @@ export default class AccessibilityModule extends BaseModule {
             }
             if (this.isAppAccessibility) {
                 this.accessibility = validateCapsWithAppA11y(platformA11yMeta)
+            } else if (this.isNonBstackA11y){
+                if (validateCapsWithNonBstackA11y(platformA11yMeta.browser_name as string, platformA11yMeta.browser_version as string)){
+                    this.accessibility = true
+                }
             } else {
                 const device = this.getCapability(inputCaps, 'deviceName')
                 const chromeOptions = this.getCapability(inputCaps, 'goog:chromeOptions')
@@ -88,37 +93,37 @@ export default class AccessibilityModule extends BaseModule {
             }
 
             //patching getA11yResultsSummary
-            (browser as WebdriverIO.Browser).getAccessibilityResultsSummary = async () => {
+            (browser as any).getAccessibilityResultsSummary = async () => {
                 if (this.isAppAccessibility) {
-                    return await getAppA11yResultsSummary(true, browser, this.currentTestName, isBrowserstackSession, this.accessibility, sessionId)
+                    return await getAppA11yResultsSummary(true, browser, isBrowserstackSession, this.accessibility, sessionId)
                 }
                 return await this.getA11yResultsSummary(browser)
             }
 
             //patching getA11yResults
-            (browser as WebdriverIO.Browser).getAccessibilityResults = async () => {
+            (browser as any).getAccessibilityResults = async () => {
                 if (this.isAppAccessibility) {
-                    return await getAppA11yResults(true, browser, this.currentTestName, isBrowserstackSession, this.accessibility, sessionId)
+                    return await getAppA11yResults(true, browser, isBrowserstackSession, this.accessibility, sessionId)
                 }
                 return await this.getA11yResults(browser)
             }
 
             //patching performScan
-            (browser as WebdriverIO.Browser).performScan = async () => {
+            (browser as any).performScan = async () => {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
                 return await this.performScanCli(browser)
             }
 
-            (browser as WebdriverIO.Browser).startA11yScanning = async () => {
+            (browser as any).startA11yScanning = async () => {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
                 this.logger.warn('Accessibility scanning cannot be started from outside the test')
             }
 
-            (browser as WebdriverIO.Browser).stopA11yScanning = async () => {
+            (browser as any).stopA11yScanning = async () => {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
@@ -140,7 +145,6 @@ export default class AccessibilityModule extends BaseModule {
                     .filter((command) => command.name && command.class)
                     .forEach((command) => {
                         browser.overwriteCommand(
-                            // @ts-expect-error fix type
                             command.name,
                             this.commandWrapper.bind(this, command),
                             command.class === 'Element'
@@ -153,7 +157,7 @@ export default class AccessibilityModule extends BaseModule {
         }
     }
 
-    private async commandWrapper(command: Command, originFunction: Function, ...args: unknown[]) {
+    private async commandWrapper(command: any, originFunction: Function, ...args: any[]) {
         try {
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
@@ -164,7 +168,7 @@ export default class AccessibilityModule extends BaseModule {
                 // Perform accessibility scan before command if script is available
                 if (
                     !command.name.includes('execute') ||
-                    !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
+                    !this.shouldPatchExecuteScript(args.length ? args[0] : null)
                 ) {
                     try {
                         await this.performScanCli(browser, command.name)
@@ -187,22 +191,21 @@ export default class AccessibilityModule extends BaseModule {
         }
     }
 
-    async onBeforeTest(args: Record<string, unknown>) {
+    async onBeforeTest(args: any) {
         try {
-            this.logger.debug('Accessibility before test hook. Starting accessibility scan for this test case.')
-            const suiteTitle = (typeof args.suiteTitle === 'string' ? args.suiteTitle : '') || ''
-            const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string } : {}) || {}
 
-            this.currentTestName = test.title || null
+            this.logger.debug('Accessibility before test hook. Starting accessibility scan for this test case.')
+            const suiteTitle = args.suiteTitle || ''
+            const test = args.test || {}
+
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const testInstance: TestFrameworkInstance = TestFramework.getTrackedInstance()
 
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
             const accessibilityOptions = this.config.accessibilityOptions
-            const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title || '', accessibilityOptions as Record<string, string> | undefined) && this.accessibility
+            const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title, accessibilityOptions as { [key: string]: any } | undefined) && this.accessibility
 
             this.accessibilityMap.set(sessionId, shouldScanTest)
-
             // Create test metadata similar to accessibility-handler
             const testIdentifier = String(testInstance.getContext().getId())
             this.testMetadata[testIdentifier] = {
@@ -212,7 +215,7 @@ export default class AccessibilityModule extends BaseModule {
 
             const browser = AutomationFramework.getDriver(autoInstance) as WebdriverIO.Browser
 
-            (browser as WebdriverIO.Browser).startA11yScanning = async () => {
+            (browser as any).startA11yScanning = async () => {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
@@ -225,7 +228,7 @@ export default class AccessibilityModule extends BaseModule {
                 await this._setAnnotation('Accessibility scanning has started')
             }
 
-            (browser as WebdriverIO.Browser).stopA11yScanning = async () => {
+            (browser as any).stopA11yScanning = async () => {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
@@ -233,7 +236,7 @@ export default class AccessibilityModule extends BaseModule {
                 await this._setAnnotation('Accessibility scanning has stopped')
             }
 
-            (browser as WebdriverIO.Browser).performScan = async () => {
+            (browser as any).performScan = async () => {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
@@ -278,13 +281,12 @@ export default class AccessibilityModule extends BaseModule {
 
             if (!autoInstance || !testInstance) {
                 this.logger.error('No tracked instances found for accessibility after test')
-                this.currentTestName = null
                 return
             }
 
             // Get test metadata that was stored in onBeforeTest
             const testIdentifier = String(testInstance.getContext().getId())
-            const testMetadata = testInstance.getData(`accessibility_metadata_${testIdentifier}`) as { [key: string]: unknown; }
+            const testMetadata = testInstance.getData(`accessibility_metadata_${testIdentifier}`)
 
             if (!testMetadata) {
                 this.logger.debug('No accessibility metadata found for this test')
@@ -309,7 +311,7 @@ export default class AccessibilityModule extends BaseModule {
                         'thBuildUuid': process.env.BROWSERSTACK_TESTHUB_UUID,
                         'thJwtToken': process.env.BROWSERSTACK_TESTHUB_JWT
                     }
-                    const driverExecuteParams = await this.getDriverExecuteParams()
+                    const driverExecuteParams = await this.getDriverExecuteParams('saveResults')
                     dataForExtension = { ...dataForExtension, ...driverExecuteParams }
 
                     // final scan and saving the results
@@ -326,9 +328,6 @@ export default class AccessibilityModule extends BaseModule {
 
         } catch (error) {
             this.logger.error(`Accessibility results could not be processed for the test case. Error: ${error}`)
-        } finally {
-            this.currentTestName = null
-            this.logger.debug('[AccessibilityModule] Current test name cleared after test completion')
         }
     }
 
@@ -357,8 +356,8 @@ export default class AccessibilityModule extends BaseModule {
             return (capabilities as WebdriverIO.Capabilities)['goog:chromeOptions']
         } else {
             const bstackOptions = (capabilities as WebdriverIO.Capabilities)['bstack:options']
-            if (bstackOptions && Object.prototype.hasOwnProperty.call(bstackOptions, key)) {
-                return (bstackOptions as Record<string, unknown>)[key]
+            if (bstackOptions && bstackOptions?.[key as keyof Capabilities.BrowserStackCapabilities]) {
+                return bstackOptions?.[key as keyof Capabilities.BrowserStackCapabilities]
             } else if ((capabilities as WebdriverIO.Capabilities)[legacyKey as keyof WebdriverIO.Capabilities]) {
                 return (capabilities as WebdriverIO.Capabilities)[legacyKey as keyof WebdriverIO.Capabilities]
             }
@@ -369,30 +368,42 @@ export default class AccessibilityModule extends BaseModule {
     private async performScanCli(
         browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser,
         commandName?: string
-    ): Promise<Record<string, unknown> | undefined> {
+    ): Promise<{ [key: string]: any; } | undefined> {
         return await PerformanceTester.measureWrapper(
             PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.PERFORM_SCAN,
             async () => {
                 try {
+                    // Fetch central auth accessibility configuration
+                    const centralAuthConfig = await this.fetchCentralAuthA11yConfig('scan')
                     if (!this.accessibility) {
                         this.logger.debug('Not an Accessibility Automation session.')
                         return
                     }
                     if (this.isAppAccessibility) {
-                        const testName=this.currentTestName || undefined
+                        // Get app accessibility params and merge with central auth config
+                        const appAccessibilityParams = _getParamsForAppAccessibility(commandName)
+
+                        // Merge with central auth config
+                        const mergedParams: Record<string, any> = { ...appAccessibilityParams, ...centralAuthConfig }
+
+                        // Use centralAuthToken if available
+                        if (centralAuthConfig.centralAuthToken) {
+                            // Set the auth header with the token value
+                            mergedParams.centralAuthHeader = centralAuthConfig.centralAuthToken
+                        }
                         const results: unknown = await (browser as WebdriverIO.Browser).execute(
-                            formatString(this.scriptInstance.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName))) as string,
+                            formatString(this.scriptInstance.performScan, JSON.stringify(mergedParams)) as string,
                             {}
                         )
                         BStackLogger.debug(util.format(results as string))
-                        return (results as Record<string, unknown> | undefined)
+                        return (results as { [key: string]: any; } | undefined)
                     }
                     const results = await (browser as WebdriverIO.Browser).executeAsync(
                         this.scriptInstance.performScan as string,
                         { 'method': commandName || '' }
                     )
-                    return (results as Record<string, unknown> | undefined)
-                } catch (err: unknown) {
+                    return (results as { [key: string]: any; } | undefined)
+                } catch (err: any) {
                     this.logger.error('Accessibility Scan could not be performed : ' + err)
                     return
                 }
@@ -401,7 +412,7 @@ export default class AccessibilityModule extends BaseModule {
         )()
     }
 
-    private async sendTestStopEvent(browser: WebdriverIO.Browser, dataForExtension: Record<string, unknown>) {
+    private async sendTestStopEvent(browser: WebdriverIO.Browser, dataForExtension: any) {
         try {
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
@@ -409,12 +420,10 @@ export default class AccessibilityModule extends BaseModule {
                 this.logger.debug('Not an Accessibility Automation session.')
                 return
             }
-
-            if (this.accessibilityMap.get(sessionId)) {
+            if (sessionId && this.accessibilityMap.get(sessionId)) {
                 this.logger.debug('Performing scan before saving results')
                 await this.performScanCli(browser)
             }
-
             if (this.isAppAccessibility) {
                 return
             }
@@ -428,7 +437,7 @@ export default class AccessibilityModule extends BaseModule {
         }
     }
 
-    async getA11yResults(browser: WebdriverIO.Browser): Promise<Array<Record<string, unknown>>> {
+    async getA11yResults(browser: WebdriverIO.Browser): Promise<Array<{ [key: string]: any; }>> {
         return await PerformanceTester.measureWrapper(
             PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.GET_RESULTS,
             async () => {
@@ -439,9 +448,9 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results')
                     await this.performScanCli(browser)
-                    const results: Array<Record<string, unknown>> = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResults as string)
+                    const results: Array<{ [key: string]: any; }> = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResults as string)
                     return results
-                } catch (error: unknown) {
+                } catch (error: any) {
                     this.logger.error('No accessibility results were found.')
                     this.logger.debug(`getA11yResults Failed. Error: ${error}`)
                     return []
@@ -450,7 +459,7 @@ export default class AccessibilityModule extends BaseModule {
         )()
     }
 
-    async getA11yResultsSummary(browser: WebdriverIO.Browser): Promise<Record<string, unknown>> {
+    async getA11yResultsSummary(browser: WebdriverIO.Browser): Promise<{ [key: string]: any; }> {
         return await PerformanceTester.measureWrapper(
             PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.GET_RESULTS_SUMMARY,
             async () => {
@@ -461,7 +470,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results summary')
                     await this.performScanCli(browser)
-                    const summaryResults: Record<string, unknown> = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResultsSummary as string)
+                    const summaryResults: { [key: string]: any; } = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResultsSummary as string)
                     return summaryResults
                 } catch {
                     this.logger.error('No accessibility summary was found.')
@@ -471,10 +480,10 @@ export default class AccessibilityModule extends BaseModule {
         )()
     }
 
-    async getDriverExecuteParams(): Promise<Record<string, unknown>> {
+    async getDriverExecuteParams(scriptName: string) {
         const payload: Omit<FetchDriverExecuteParamsEventRequest, 'binSessionId'> = {
             product: 'accessibility',
-            scriptName: 'saveResults'
+            scriptName: scriptName
         }
         const response: FetchDriverExecuteParamsEventResponse = await GrpcClient.getInstance().fetchDriverExecuteParamsEvent(payload)
         if (response.success) {
@@ -488,14 +497,27 @@ export default class AccessibilityModule extends BaseModule {
         const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
         const browser = AutomationFramework.getDriver(autoInstance) as WebdriverIO.Browser
 
-        if (this.accessibility && isBrowserstackSession(browser)) {
-            await (browser as WebdriverIO.Browser).execute(`browserstack_executor: ${JSON.stringify({
-                action: 'annotate',
-                arguments: {
-                    data: message,
-                    level: 'info'
-                }
-            })}`)
+        await setBrowserstackAnnotation(browser, message, this.accessibility)
+    }
+
+    /**
+     * Fetch central auth accessibility configuration for the given script name.
+     * Returns cached config if already fetched, otherwise loads and caches it.
+     *
+     * @param scriptName - Name of the script to fetch config for
+     * @returns Configuration object, empty object if error occurs
+     */
+    async fetchCentralAuthA11yConfig(scriptName: string): Promise<Record<string, unknown>> {
+        try {
+            if (this.centralAuthConfigFetched) {
+                return this.centralAuthA11yConfig
+            }
+            this.centralAuthA11yConfig = await this.getDriverExecuteParams(scriptName)
+            this.centralAuthConfigFetched = true
+            return this.centralAuthA11yConfig
+        } catch (error) {
+            this.logger.error(`fetchCentralAuthA11yConfig: Failed to fetch driver execute params for ${scriptName}: ${util.format(error)}`)
+            return {}
         }
     }
 

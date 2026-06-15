@@ -4,13 +4,29 @@ import BrowserStackConfig from './config.js'
 import { saveFunnelData } from './instrumentation/funnelInstrumentation.js'
 import { fileURLToPath } from 'node:url'
 import { BROWSERSTACK_TESTHUB_JWT } from './constants.js'
+import { BStackLogger } from './bstackLogger.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import TestOpsConfig from './testOps/testOpsConfig.js'
-import { BStackLogger } from './bstackLogger.js'
 import { BrowserstackCLI } from './cli/index.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+function getInterruptSignals(): string[] {
+    const allSignals: string[] = [
+        'SIGTERM',
+        'SIGINT',
+        'SIGHUP'
+    ]
+    if (process.platform !== 'win32') {
+        allSignals.push('SIGABRT')
+        allSignals.push('SIGQUIT')
+    } else {
+        // For windows Ctrl+Break
+        allSignals.push('SIGBREAK')
+    }
+    return allSignals
+}
 
 export function setupExitHandlers() {
     const handleCLICleanup = () => {
@@ -25,8 +41,8 @@ export function setupExitHandlers() {
                         cliProcess.kill('SIGTERM')
                         BStackLogger.debug('CLI process terminated successfully with SIGTERM (Windows)')
                     } else {
-                        cliProcess.kill('SIGINT')
-                        BStackLogger.debug('CLI process terminated successfully with SIGINT (Unix)')
+                        cliProcess.kill('SIGKILL')
+                        BStackLogger.debug('CLI process terminated successfully with SIGKILL (Unix)')
                     }
                 } catch (processError) {
                     BStackLogger.debug(`CLI process termination error: ${processError}`)
@@ -44,16 +60,33 @@ export function setupExitHandlers() {
             BStackLogger.debug(`Error in CLI cleanup: ${error}`)
         }
     }
+
     process.on('exit', () => {
+        BStackLogger.debug('Exit handler called')
+
         const isCLIEnabled = BrowserstackCLI.getInstance().isRunning()
         handleCLICleanup()
+
         const args = shouldCallCleanup(BrowserStackConfig.getInstance(), isCLIEnabled)
         if (Array.isArray(args) && args.length) {
             BStackLogger.debug(`Spawning cleanup.js with args: ${args.join(', ')}`)
-            const childProcess = spawn('node', [`${path.join(__dirname, 'cleanup.js')}`, ...args], { detached: true, stdio: 'inherit', env: { ...process.env } })
+            const childProcess = spawn('node', [`${path.join(__dirname, 'cleanup.js')}`, ...args], {
+                detached: true,
+                stdio: 'ignore',
+                env: { ...process.env }
+            })
             childProcess.unref()
         }
     })
+
+    getInterruptSignals().forEach((sig: string) => {
+        process.on(sig, () => {
+            BStackLogger.debug(`${sig} received, setting kill signal`)
+            BrowserStackConfig.getInstance().setKillSignal(sig)
+        })
+    })
+
+    BStackLogger.debug('Exit handlers registered')
 }
 
 export function shouldCallCleanup(config: BrowserStackConfig, isCLIEnabled = false): string[] {
@@ -70,7 +103,7 @@ export function shouldCallCleanup(config: BrowserStackConfig, isCLIEnabled = fal
     if (PerformanceTester.isEnabled()) {
         process.env.PERF_USER_NAME = config.userName
         process.env.PERF_TESTHUB_UUID = TestOpsConfig.getInstance().buildHashedId
-        process.env.SDK_RUN_ID = config.sdkRunID
+        process.env.PERF_SDK_RUN_ID = config.sdkRunID
         args.push('--performanceData')
     }
 

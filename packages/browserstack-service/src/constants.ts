@@ -1,7 +1,7 @@
 import type { BrowserstackConfig } from './types.js'
-import pkg from '../package.json' with { type: 'json' }
-
-const bstackServiceVersion = pkg.version
+import { createRequire } from 'node:module'
+const require = createRequire(import.meta.url)
+const { version: bstackServiceVersion } = require('../package.json')
 
 export const BROWSER_DESCRIPTION = [
     'device',
@@ -23,7 +23,9 @@ export const VALID_APP_EXTENSION = [
 export const DEFAULT_OPTIONS: Partial<BrowserstackConfig> = {
     setSessionName: true,
     setSessionStatus: true,
-    testObservability: true
+    testObservability: true,
+    testReporting: true,
+    accessibility: false
 }
 
 export const consoleHolder: typeof console = Object.assign({}, console)
@@ -42,8 +44,10 @@ export const DEFAULT_WAIT_TIMEOUT_FOR_PENDING_UPLOADS = 5000 // 5s
 export const DEFAULT_WAIT_INTERVAL_FOR_PENDING_UPLOADS = 100 // 100ms
 export const BSTACK_SERVICE_VERSION = bstackServiceVersion
 
-export const NOT_ALLOWED_KEYS_IN_CAPS = ['includeTagsInTestingScope', 'excludeTagsInTestingScope', 'testManagementOptions']
-export const BROWSERSTACK_TEST_PLAN_ID = 'BROWSERSTACK_TEST_PLAN_ID'
+export const UPDATED_CLI_ENDPOINT =  'sdk/v1/update_cli'
+export const CLI_STOP_TIMEOUT = 3000
+
+export const NOT_ALLOWED_KEYS_IN_CAPS = ['includeTagsInTestingScope', 'excludeTagsInTestingScope']
 
 export const LOGS_FILE = 'logs/bstack-wdio-service.log'
 export const CLI_DEBUG_LOGS_FILE = 'log/sdk-cli-debug.log'
@@ -63,6 +67,7 @@ export const PERCY_DOM_CHANGING_COMMANDS_ENDPOINTS = [
 ]
 
 export const CAPTURE_MODES = ['click', 'auto', 'screenshot', 'manual', 'testcase']
+
 export const LOG_KIND_USAGE_MAP = {
     'TEST_LOG': 'log',
     'TEST_SCREENSHOT': 'screenshot',
@@ -82,10 +87,6 @@ export const TCG_INFO = {
     tcgRegion: 'use',
     tcgUrl: TCG_URL,
 }
-
-// Smart Selection Mode Constants
-export const SMART_SELECTION_MODE_RELEVANT_FIRST = 'relevantFirst'
-export const SMART_SELECTION_MODE_RELEVANT_ONLY = 'relevantOnly'
 
 // Env variables - Define all the env variable constants over here
 
@@ -119,36 +120,45 @@ export const TESTOPS_BUILD_COMPLETED_ENV = 'BS_TESTOPS_BUILD_COMPLETED'
 // Whether percy has started successfully or not
 export const BROWSERSTACK_PERCY = 'BROWSERSTACK_PERCY'
 
+export const BSTACK_A11Y_POLLING_TIMEOUT = 'BSTACK_A11Y_POLLING_TIMEOUT'
+
 // Whether session is a accessibility session
 export const BROWSERSTACK_ACCESSIBILITY = 'BROWSERSTACK_ACCESSIBILITY'
 
-// Whether session is a test reporting session
+// Whether session is a test reporting session (new name)
+export const BROWSERSTACK_TEST_REPORTING = 'BROWSERSTACK_TEST_REPORTING'
+
+// Debug flag for test reporting
+export const BROWSERSTACK_TEST_REPORTING_DEBUG = 'BROWSERSTACK_TEST_REPORTING_DEBUG'
+
+// Build tag environment variable for test reporting
+export const TEST_REPORTING_BUILD_TAG = 'TEST_REPORTING_BUILD_TAG'
+
+// Build name environment variable for test reporting
+export const TEST_REPORTING_BUILD_NAME = 'TEST_REPORTING_BUILD_NAME'
+
+// Project name environment variable for test reporting
+export const TEST_REPORTING_PROJECT_NAME = 'TEST_REPORTING_PROJECT_NAME'
+
+// Whether session is a observability session (legacy name)
 export const BROWSERSTACK_OBSERVABILITY = 'BROWSERSTACK_OBSERVABILITY'
 
-// New Test Reporting and Analytics environment variables
-export const BROWSERSTACK_TEST_REPORTING = 'BROWSERSTACK_TEST_REPORTING'
-export const BROWSERSTACK_TEST_REPORTING_DEBUG = 'BROWSERSTACK_TEST_REPORTING_DEBUG'
-export const TEST_REPORTING_BUILD_TAG = 'TEST_REPORTING_BUILD_TAG'
-export const TEST_REPORTING_PROJECT_NAME = 'TEST_REPORTING_PROJECT_NAME'
-export const TEST_REPORTING_BUILD_NAME = 'TEST_REPORTING_BUILD_NAME'
+// Legacy environment variables for backward compatibility
+export const TEST_OBSERVABILITY_BUILD_TAG = 'TEST_OBSERVABILITY_BUILD_TAG'
+export const TEST_OBSERVABILITY_BUILD_NAME = 'TEST_OBSERVABILITY_BUILD_NAME'
+export const TEST_OBSERVABILITY_PROJECT_NAME = 'TEST_OBSERVABILITY_PROJECT_NAME'
 
 // Maximum size of VCS info which is allowed
 export const MAX_GIT_META_DATA_SIZE_IN_BYTES = 64 * 1024
 
-/* The value to be appended at the end if git metadata is larger than MAX_GIT_META_DATA_SIZE_IN_BYTES
+/* The value to be appended at the end if git metadata is larger than
+MAX_GIT_META_DATA_SIZE_IN_BYTES
 */
 export const GIT_META_DATA_TRUNCATED = '...[TRUNCATED]'
 
-// CLI related constants
-export const CLI_STOP_TIMEOUT = 5000 // 5 seconds
-export const BINARY_BUSY_ERROR_CODES = ['ETXTBSY', 'EBUSY']
-export const MAX_SPAWN_RETRIES = 3
-export const SPAWN_RETRY_DELAY_MS = 1000
 export const WDIO_NAMING_PREFIX = 'WebdriverIO-'
-export const PERF_METRICS_WAIT_TIME = 2000
 
-// API Endpoint constants
-export const UPDATED_CLI_ENDPOINT = 'sdk/v1/update_cli'
+export const PERF_METRICS_WAIT_TIME = 2000
 
 /**
  * Module Hook Events - Performance event names for module lifecycle tracking
@@ -192,3 +202,4 @@ export const MODULE_HOOK_EVENTS = {
     APPAUTOMATE_ON_START: 'MODULE_APPAUTOMATE_ON_START',
     APPAUTOMATE_ON_DRIVER_INIT: 'MODULE_APPAUTOMATE_ON_DRIVER_INIT',
 } as const
+

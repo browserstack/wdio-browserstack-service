@@ -8,7 +8,6 @@ import { isValidEnabledValue } from '../util.js'
  */
 export async function applyOrchestrationIfEnabled(
     specs: string[],
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     config: Record<string, any>
 ): Promise<string[]> {
     // Initialize orchestration handler
@@ -25,10 +24,9 @@ export async function applyOrchestrationIfEnabled(
         return specs
     }
 
-    orchestrationHandler.addToOrderingInstrumentationData('enabled', orchestrationHandler.testOrderingEnabled())
-
     const startTime = performance.now()
 
+    // if (orchestrationHandler.testOrderingEnabled()) {
     BStackLogger.info('Test orchestration is enabled. Attempting to reorder test files.')
 
     // Get the test files from the specs - pass them as received

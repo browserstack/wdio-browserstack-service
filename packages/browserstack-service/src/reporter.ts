@@ -15,10 +15,7 @@ import {
     getGitMetaData,
     removeAnsiColors,
     getHookType,
-    getPlatformVersion,
-    getResolvedDeviceName,
-    isObjectEmpty,
-    generateHashCodeFromFields
+    getPlatformVersion
 } from './util.js'
 import { BStackLogger } from './bstackLogger.js'
 import type { Capabilities } from '@wdio/types'
@@ -36,9 +33,8 @@ class _TestReporter extends WDIOReporter {
     private _gitConfigured: boolean = false
     private _currentHook: CurrentRunInfo = {}
     public static currentTest: CurrentRunInfo = {}
-    private _userCaps?: Capabilities.ResolvedTestrunnerCapabilities = {}
+    private _userCaps?: Capabilities.RemoteCapability = {}
     private listener = Listener.getInstance()
-    public static hashCodeToHandleTestSkip: Record<string, string> = {}
 
     async onRunnerStart (runnerStats: RunnerStats) {
         this._capabilities = runnerStats.capabilities as WebdriverIO.Capabilities
@@ -53,7 +49,7 @@ class _TestReporter extends WDIOReporter {
     }
 
     private getUserCaps(runnerStats: RunnerStats) {
-        return runnerStats.capabilities
+        return runnerStats.instanceOptions[runnerStats.sessionId]?.capabilities
     }
 
     registerListeners () {
@@ -115,7 +111,7 @@ class _TestReporter extends WDIOReporter {
                     // Sometimes in cases where a file has two suites. Then the file name be unknown for second suite, so getting the filename from first suite
                     filename = this._suiteName || suiteStats.file
                 }
-            } catch {
+            } catch (e) {
                 BStackLogger.debug('Error in decoding file name of suite')
             }
         }
@@ -217,29 +213,10 @@ class _TestReporter extends WDIOReporter {
 
         testStats.start ||= new Date()
         testStats.end ||= new Date()
-        const testData = await this.getRunData(testStats, 'TestRunSkipped')
-        const testFinishHashCode = generateHashCodeFromFields(
-            [
-                testData.integrations?.browserstack?.browser ?? '',
-                testData.integrations?.browserstack?.browser_version ?? '',
-                testData.integrations?.browserstack?.platform ?? '',
-                testData.integrations?.browserstack?.session_id ?? '',
-                testData.integrations?.capabilities ?? {},
-                testData.file_name ?? '',
-                testData.scopes ?? [],
-                testData.name ?? ''
-            ]
-        )
-        if (_TestReporter.hashCodeToHandleTestSkip !== null && !isObjectEmpty(_TestReporter.hashCodeToHandleTestSkip) && testFinishHashCode in _TestReporter.hashCodeToHandleTestSkip) {
-            if (_TestReporter.hashCodeToHandleTestSkip[testFinishHashCode] !== '') {
-                testData.uuid = _TestReporter.hashCodeToHandleTestSkip[testFinishHashCode]
-            }
-        }
-
-        this.listener.testFinished(testData)
+        this.listener.testFinished(await this.getRunData(testStats, 'TestRunSkipped'))
     }
 
-    async getRunData(testStats: TestStats | HookStats, eventType: string) {
+    async getRunData(testStats: TestStats | HookStats, eventType: string): Promise<TestData> {
         const framework = this._config?.framework
         const scopes = this._suites.map(s => s.title)
         const identifier = testStats.type === 'test' ? (testStats as TestStats).fullTitle : this.getHookIdentifier(testStats as HookStats)
@@ -283,16 +260,6 @@ class _TestReporter extends WDIOReporter {
             /* istanbul ignore next */
             const cloudProvider = getCloudProvider({ options: { hostname: this._config?.hostname } } as WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser)
             testData.integrations = {}
-            // For Appium / App-Automate, server-resolved fields like `deviceModel`
-            // live on the live driver session. The user-requested input caps —
-            // including the `bstack:options.deviceName` regex — live on
-            // `this._userCaps`. Pass live caps first (resolved) and userCaps
-            // second (regex/input-cap fallback) so the resolver never has to
-            // fall back to `this._capabilities` (negotiated runner caps,
-            // which may omit bstack:options).
-            const liveBrowserCaps = (globalThis as unknown as {
-                browser?: { capabilities?: WebdriverIO.Capabilities }
-            })?.browser?.capabilities
             /* istanbul ignore next */
             testData.integrations[cloudProvider] = {
                 capabilities: this._capabilities,
@@ -300,8 +267,7 @@ class _TestReporter extends WDIOReporter {
                 browser: this._capabilities?.browserName,
                 browser_version: this._capabilities?.browserVersion,
                 platform: this._capabilities?.platformName,
-                platform_version: getPlatformVersion(this._capabilities, this._userCaps as WebdriverIO.Capabilities),
-                device: getResolvedDeviceName(liveBrowserCaps, this._userCaps as WebdriverIO.Capabilities)
+                platform_version: getPlatformVersion(this._capabilities, this._userCaps as WebdriverIO.Capabilities)
             }
         }
 
@@ -316,10 +282,6 @@ class _TestReporter extends WDIOReporter {
                     testData.failure_type = error.message === null ? null : error.message.toString().match(/AssertionError/) ? 'AssertionError' : 'UnhandledError' //verify if this is working
                 }
             }
-        }
-
-        if (eventType === 'TestRunSkipped') {
-            eventType = 'TestRunFinished'
         }
 
         if (eventType.match(/HookRun/)) {

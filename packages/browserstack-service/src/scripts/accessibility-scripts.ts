@@ -2,18 +2,6 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 
-interface Scripts {
-    scan: string
-    getResults: string
-    getResultsSummary: string
-    saveResults: string
-}
-
-interface Command {
-    name: string
-    class: string
-}
-
 class AccessibilityScripts {
     private static instance: AccessibilityScripts | null = null
 
@@ -21,7 +9,7 @@ class AccessibilityScripts {
     public getResults: string | null = null
     public getResultsSummary: string | null = null
     public saveTestResults: string | null = null
-    public commandsToWrap: Array<Command> | null = null
+    public commandsToWrap: Array<any> | null = null
     public ChromeExtension: { [key: string]: unknown } = {}
 
     public browserstackFolderPath = ''
@@ -41,7 +29,6 @@ class AccessibilityScripts {
         return AccessibilityScripts.instance
     }
 
-    /* eslint-disable @typescript-eslint/no-unused-vars */
     public getWritableDir(): string {
         const orderedPaths = [
             path.join(os.homedir(), '.browserstack'),
@@ -58,7 +45,7 @@ class AccessibilityScripts {
                 fs.mkdirSync(orderedPath, { recursive: true })
                 return orderedPath
 
-            } catch (error) {
+            } catch (e) {
                 /* no-empty */
             }
         }
@@ -73,12 +60,12 @@ class AccessibilityScripts {
                     this.update(JSON.parse(data))
                 }
             }
-        } catch {
+        } catch (error: any) {
             /* Do nothing */
         }
     }
 
-    public update(data: { commands: [], scripts: Scripts, nonBStackInfraA11yChromeOptions: {} }) {
+    public update(data: { commands: any[], scripts: Record<string, any>, nonBStackInfraA11yChromeOptions: {} }) {
         if (data.scripts) {
             this.performScan = data.scripts.scan
             this.getResults = data.scripts.getResults
@@ -91,7 +78,6 @@ class AccessibilityScripts {
         if (data.nonBStackInfraA11yChromeOptions){
             this.ChromeExtension = data.nonBStackInfraA11yChromeOptions
         }
-
     }
 
     public store() {
@@ -113,4 +99,3 @@ class AccessibilityScripts {
 }
 
 export default AccessibilityScripts.checkAndGetInstance()
-export { Command }

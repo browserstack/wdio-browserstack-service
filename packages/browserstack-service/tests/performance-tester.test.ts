@@ -7,6 +7,12 @@ import * as bstackLogger from '../src/bstackLogger.js'
 import PerformanceTester from '../src/instrumentation/performance/performance-tester.js'
 import { PERF_MEASUREMENT_ENV } from '../src/constants.js'
 
+vi.mock('csv-writer', () => ({
+    createObjectCsvWriter: vi.fn(() => ({
+        writeRecords: vi.fn().mockResolvedValue(null),
+    })),
+}))
+
 vi.mock('node:fs/promises', () => ({
     default: {
         createReadStream: vi.fn().mockReturnValue({ pipe: vi.fn() }),
@@ -29,12 +35,6 @@ vi.mock('node:fs', () => ({
     }
 }))
 
-vi.mock('csv-writer', () => ({
-    createObjectCsvWriter: vi.fn(() => ({
-        writeRecords: vi.fn().mockResolvedValue(null),
-    })),
-}))
-
 const bstackLoggerSpy = vi.spyOn(bstackLogger.BStackLogger, 'logToFile')
 bstackLoggerSpy.mockImplementation(() => {})
 
@@ -55,7 +55,6 @@ describe('PerformanceTester', function () {
         beforeEach(() => {
             process.env[PERF_MEASUREMENT_ENV] = 'true'
         })
-
         it('should start monitoring', () => {
             expect(PerformanceTester.started).toBe(false)
             PerformanceTester.startMonitoring('temp.csv')
@@ -158,7 +157,7 @@ describe('PerformanceTester', function () {
     describe('measureWrapper', () => {
         beforeEach(() => {
             vi.spyOn(PerformanceTester, 'getProcessId').mockReturnValue('mockedProcessId')
-            PerformanceTester.browser = { sessionId: 'mockedSessionId' } as WebdriverIO.Browser
+            PerformanceTester.browser = { sessionId: 'mockedSessionId' }
             PerformanceTester.scenarioThatRan = ['mockedScenario']
             vi.spyOn(PerformanceTester, 'measure')
         })

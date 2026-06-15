@@ -2,32 +2,25 @@ import InsightsHandler from '../insights-handler.js'
 import TestReporter from '../reporter.js'
 import { PercyLogger } from './PercyLogger.js'
 import { isUndefined } from '../util.js'
-import { createRequire } from 'node:module'
 
-const require = createRequire(import.meta.url)
-
-const tryRequire = function (pkg: string, fallback: unknown) {
+const tryRequire = async function (pkg: string, fallback: any) {
     try {
-        const mod = require(pkg)
-        if (mod && typeof mod === 'object' && 'default' in mod) {
-            return (mod as { default: unknown }).default
-        }
-        return mod
+        return (await import(pkg)).default
     } catch {
         return fallback
     }
 }
 
-const percySnapshot = tryRequire('@percy/selenium-webdriver', null)
+const percySnapshot = await tryRequire('@percy/selenium-webdriver', null)
 
-const percyAppScreenshot = tryRequire('@percy/appium-app', {})
+const percyAppScreenshot = await tryRequire('@percy/appium-app', {})
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
-let snapshotHandler = (...args: unknown[]) => {
+let snapshotHandler = (...args: any[]) => {
     PercyLogger.error('Unsupported driver for percy')
 }
 if (percySnapshot) {
-    snapshotHandler = (browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, snapshotName: string, options?: { [key: string]: unknown }) => {
+    snapshotHandler = (browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, snapshotName: string, options?: { [key: string]: any }) => {
         if (process.env.PERCY_SNAPSHOT === 'true') {
             let { name, uuid } = InsightsHandler.currentTest
             if (isUndefined(name)) {
@@ -48,7 +41,7 @@ export const snapshot = snapshotHandler
 This is a helper method which appends some internal fields
 to the options object being sent to Percy methods
 */
-const screenshotHelper = (type: string, driverOrName: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser | string, nameOrOptions?: string | { [key: string]: unknown }, options?: { [key: string]: unknown }) => {
+const screenshotHelper = (type: string, driverOrName: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser | string, nameOrOptions?: string | { [key: string]: any }, options?: { [key: string]: any }) => {
     let { name, uuid } = InsightsHandler.currentTest
     if (isUndefined(name)) {
         ({ name, uuid } = TestReporter.currentTest)
@@ -75,22 +68,22 @@ const screenshotHelper = (type: string, driverOrName: WebdriverIO.Browser | Webd
 }
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
-let screenshotHandler = async (...args: unknown[]) => {
+let screenshotHandler = async (...args: any[]) => {
     PercyLogger.error('Unsupported driver for percy')
 }
 if (percySnapshot && percySnapshot.percyScreenshot) {
-    screenshotHandler = (browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser | string, screenshotName?: string | { [key: string]: unknown }, options?: { [key: string]: unknown }) => {
+    screenshotHandler = (browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser | string, screenshotName?: string | { [key: string]: any }, options?: { [key: string]: any }) => {
         return screenshotHelper('web', browser, screenshotName, options)
     }
 }
 export const screenshot = screenshotHandler
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
-let screenshotAppHandler = async (...args: unknown[]) => {
+let screenshotAppHandler = async (...args: any[]) => {
     PercyLogger.error('Unsupported driver for percy')
 }
 if (percyAppScreenshot) {
-    screenshotAppHandler = (driverOrName: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser | string, nameOrOptions?: string | { [key: string]: unknown }, options?: { [key: string]: unknown }) => {
+    screenshotAppHandler = (driverOrName: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser | string, nameOrOptions?: string | { [key: string]: any }, options?: { [key: string]: any }) => {
         return screenshotHelper('app', driverOrName, nameOrOptions, options)
     }
 }

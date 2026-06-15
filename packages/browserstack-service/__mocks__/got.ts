@@ -1,21 +1,10 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { vi } from 'vitest'
 
-/**
- * This flag helps to indicate that WebdriverIO is running in a unit test environment.
- * Setting this environment changes the behavior of some functions to e.g. not exit
- * the process or enter code sections that are hard to mock out.
- */
-process.env.WDIO_UNIT_TESTS = '1'
-globalThis.WDIO_RESQ_SCRIPT = ''
-globalThis.WDIO_FAKER_SCRIPT = ''
-
-// W3C WebDriver element identifier suffix. Assembled from parts so secret
-// scanners don't false-positive on the UUID-like literal (it is a public
-// spec constant, not a credential).
+// W3C WebDriver element identifier suffix, assembled from parts so secret scanners
+// don't false-positive on the UUID-like literal (it is a public spec constant).
 const W3C_SUFFIX = ['6066', '11e4', 'a52e', '4f7354' + '66cecf'].join('-')
-const ELEMENT_KEY = `element-${W3C_SUFFIX}`
-const SHADOW_ELEMENT_KEY = `shadow-${W3C_SUFFIX}`
+export const ELEMENT_KEY = `element-${W3C_SUFFIX}`
+export const SHADOW_ELEMENT_KEY = `shadow-${W3C_SUFFIX}`
 
 let manualMockResponse: any
 
@@ -29,24 +18,6 @@ const genericSubElementId = 'some-sub-elem-321'
 const genericSubSubElementId = 'some-sub-sub-elem-231'
 const genericShadowElementId = 'some-shadow-elem-123'
 const genericSubShadowElementId = 'some-shadow-sub-elem-321'
-
-/**
- * Transform the specified property of each object in the collection by replacing 'mockFunction' with a predefined function (vi.fn()).
- * This is intended to ensure that, when converting the request body to a string, functions are retained and not omitted.
- * @param collection - An array of objects to process.
- * @returns A new array with updated objects.
- */
-const transformPropertyWithMockFunction = (collection: any[]) => {
-    return collection.map(item => {
-        for (const prop in item) {
-            if (item[prop] && item[prop] === 'mockFunction') {
-                item[prop] = vi.fn()
-            }
-        }
-        return item
-    })
-}
-
 const requestMock: any = vi.fn().mockImplementation((uri, params) => {
     let value: any = {}
     let jsonwpMode = false
@@ -68,24 +39,13 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
         if (!(uri as URL).pathname.match(pattern)) {
             continue
         }
-        return Response.json(response)
-    }
-
-    let body: any = params?.body
-
-    try {
-        body = body && JSON.parse(body.toString())
-    } catch {
-        return Response.json({}, {
-            status: 422,
-            statusText: 'Unprocessable Entity'
-        })
+        return response
     }
 
     if (
-        body &&
-        body.capabilities &&
-        body.capabilities.alwaysMatch.jsonwpMode
+        params.json &&
+        params.json.capabilities &&
+        params.json.capabilities.alwaysMatch.jsonwpMode
     ) {
         jsonwpMode = true
         sessionResponse = {
@@ -95,86 +55,61 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
     }
 
     if (
-        body &&
-        body.capabilities &&
-        body.capabilities.alwaysMatch.mobileMode
+        params.json &&
+        params.json.capabilities &&
+        params.json.capabilities.alwaysMatch.mobileMode
     ) {
         sessionResponse.capabilities.deviceName = 'iNode'
     }
 
     if (
-        body &&
-        body.capabilities &&
-        body.capabilities.alwaysMatch.mobileMode &&
-        body.capabilities.alwaysMatch.nativeAppMode
+        params.json &&
+        params.json.capabilities &&
+        params.json.capabilities.alwaysMatch.keepBrowserName
     ) {
-        sessionResponse.capabilities.app = 'mockApp'
-        delete sessionResponse.capabilities.browserName
-        delete sessionResponse.capabilities.browserVersion
+        sessionResponse.capabilities.browserName = params.json.capabilities.alwaysMatch.browserName
     }
 
     if (
-        body &&
-        body.capabilities &&
-        body.capabilities.alwaysMatch.mobileMode &&
-        body.capabilities.alwaysMatch.windowsAppMode
+        params.json &&
+        params.json.desiredCapabilities &&
+        params.json.desiredCapabilities['sauce:options']
     ) {
-        sessionResponse.capabilities['appium:automationName'] = 'windows'
-        delete sessionResponse.capabilities.browserName
-    }
-
-    if (
-        body &&
-        body.capabilities &&
-        body.capabilities.alwaysMatch.mobileMode &&
-        body.capabilities.alwaysMatch.macAppMode
-    ) {
-        sessionResponse.capabilities['appium:automationName'] = 'mac2'
-        delete sessionResponse.capabilities.browserName
-    }
-
-    if (
-        body &&
-        body.capabilities &&
-        body.capabilities.alwaysMatch.keepBrowserName
-    ) {
-        sessionResponse.capabilities.browserName = body.capabilities.alwaysMatch.browserName
-    }
-
-    if (body?.capabilities?.alwaysMatch?.browserName === 'bidi') {
-        sessionResponse.capabilities.webSocketUrl = 'ws://webdriver.io'
+        sessionResponse.capabilities['sauce:options'] = params.json.desiredCapabilities['sauce:options']
     }
 
     switch (uri.pathname) {
     case path:
         value = sessionResponse
 
-        if (body.capabilities.alwaysMatch.browserName && body.capabilities.alwaysMatch.browserName.includes('devtools')) {
+        if (params.json.capabilities.alwaysMatch.browserName && params.json.capabilities.alwaysMatch.browserName.includes('noW3C')) {
+            value.desiredCapabilities = { browserName: 'mockBrowser' }
+            delete value.capabilities
+        }
+
+        if (params.json.capabilities.alwaysMatch.browserName && params.json.capabilities.alwaysMatch.browserName.includes('devtools')) {
             value.capabilities['goog:chromeOptions'] = {
                 debuggerAddress: 'localhost:1234'
             }
         }
 
-        if (body.capabilities.alwaysMatch.platformName && body.capabilities.alwaysMatch.platformName.includes('iOS')) {
+        if (params.json.capabilities.alwaysMatch.platformName && params.json.capabilities.alwaysMatch.platformName.includes('iOS')) {
             value.capabilities.platformName = 'iOS'
-        }
-        if (body.capabilities.alwaysMatch.platformName && body.capabilities.alwaysMatch.platformName.includes('Android')) {
-            value.capabilities.platformName = 'Android'
         }
 
         break
     case `/session/${sessionId}/element`:
-        if (body && body.value === '#nonexisting') {
+        if (params.json && params.json.value === '#nonexisting') {
             value = { elementId: null }
             break
         }
 
-        if (body && body.value === 'html') {
+        if (params.json && params.json.value === 'html') {
             value = { [ELEMENT_KEY]: 'html-element' }
             break
         }
 
-        if (body && body.value === '#slowRerender') {
+        if (params.json && params.json.value === '#slowRerender') {
             ++requestMock.retryCnt
             if (requestMock.retryCnt === 2) {
                 ++requestMock.retryCnt
@@ -273,57 +208,49 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
     case `${path}/${sessionId}/element/${genericElementId}/property/tagName`:
         value = 'BODY'
         break
-    case `/session/${sessionId}/element/${genericElementId}/css/display`:
-        value = 'contents'
-        break
     case `/session/${sessionId}/execute`:
     case `/session/${sessionId}/execute/sync`: {
-        const script = Function(body.script)
-        const args = transformPropertyWithMockFunction(body.args.map((arg: any) => (arg && (arg.ELEMENT || arg[ELEMENT_KEY])) || arg))
+        const script = Function(params.json.script)
+        const args = params.json.args.map((arg: any) => (arg && (arg.ELEMENT || arg[ELEMENT_KEY])) || arg)
+
         let result: any = null
-        if (body.script.includes('resq')) {
-            if (body.script.includes('react$$')) {
+        if (params.json.script.includes('resq')) {
+            if (params.json.script.includes('react$$')) {
                 result = [
                     { [ELEMENT_KEY]: genericElementId },
                     { [ELEMENT_KEY]: 'some-elem-456' },
                     { [ELEMENT_KEY]: 'some-elem-789' },
                 ]
-            } else if (body.script.includes('react$')) {
+            } else if (params.json.script.includes('react$')) {
                 result = args[0] === 'myNonExistingComp'
                     ? new Error('foobar')
                     : { [ELEMENT_KEY]: genericElementId }
             } else {
                 result = null
             }
-        } else if (body.script.includes('testLocatorStrategy')) {
+        } else if (params.json.script.includes('testLocatorStrategy')) {
             result = { [ELEMENT_KEY]: genericElementId }
-        } else if (body.script.includes('testLocatorStrategiesMultiple')) {
+        } else if (params.json.script.includes('testLocatorStrategiesMultiple')) {
             result = [
                 { [ELEMENT_KEY]: genericElementId },
                 { [ELEMENT_KEY]: 'some-elem-456' },
                 { [ELEMENT_KEY]: 'some-elem-789' },
             ]
-        } else if (body.script.includes('previousElementSibling')) {
-            result = body.args[0][ELEMENT_KEY] === genericSubElementId
+        } else if (params.json.script.includes('previousElementSibling')) {
+            result = params.json.args[0][ELEMENT_KEY] === genericSubElementId
                 ? { [ELEMENT_KEY]: 'some-previous-elem' }
                 : {}
-        } else if (body.script.includes('parentElement')) {
-            result = body.args[0][ELEMENT_KEY] === genericSubElementId
+        } else if (params.json.script.includes('parentElement')) {
+            result = params.json.args[0][ELEMENT_KEY] === genericSubElementId
                 ? { [ELEMENT_KEY]: 'some-parent-elem' }
                 : {}
-        } else if (body.script.includes('nextElementSibling')) {
-            result = body.args[0][ELEMENT_KEY] === genericElementId
+        } else if (params.json.script.includes('nextElementSibling')) {
+            result = params.json.args[0][ELEMENT_KEY] === genericElementId
                 ? { [ELEMENT_KEY]: 'some-next-elem' }
                 : {}
-        } else if (body.script.includes('scrollX')) {
+        } else if (params.json.script.includes('scrollX')) {
             result = [0, 0]
-        } else if (body.script.includes('function isFocused')) {
-            result = true
-        } else if (body.script.includes('mobile:')) {
-            result = true
-        } else if (body.script.includes('document.URL')) {
-            result = 'https://webdriver.io/?foo=bar'
-        } else if (body.script.includes('function checkVisibility')) {
+        } else if (params.json.script.includes('function isFocused')) {
             result = true
         } else {
             result = script.apply(this, args)
@@ -333,9 +260,9 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
         value = Boolean(result) || result === false || result === 0 || result === null ? result : {}
         break
     } case `/session/${sessionId}/execute/async`: {
-        const script = Function(body.script)
+        const script = Function(params.json.script)
         let result
-        script.call(this, ...body.args, (_result: any) => result = _result)
+        script.call(this, ...params.json.args, (_result: any) => result = _result)
         value = result ?? {}
         break
     } case `${path}/${sessionId}/element/${genericElementId}/elements`:
@@ -427,9 +354,10 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
 
         if (requestMock.retryCnt > 1) {
             const response = { value: null }
-            return Response.json(response, {
-                status: 200,
-                headers: { foo: 'bar' }
+            return Promise.resolve({
+                headers: { foo: 'bar' },
+                statusCode: 200,
+                body: response
             })
         }
 
@@ -441,9 +369,10 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
             }
         }
 
-        return Response.json(error, {
-            status: 404,
-            headers: { foo: 'bar' }
+        return Promise.resolve({
+            headers: { foo: 'bar' },
+            statusCode: 404,
+            body: error
         })
     }
 
@@ -451,9 +380,10 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
      * empty response
      */
     if (uri.pathname === '/empty') {
-        return Response.json('', {
-            status: 500,
-            headers: { foo: 'bar' }
+        return Promise.resolve({
+            headers: { foo: 'bar' },
+            statusCode: 500,
+            body: ''
         })
     }
 
@@ -461,9 +391,9 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
      * session error due to wrong path
      */
     if (uri.pathname === '/wrong/path') {
-        return Response.json({}, {
-            status: 404,
-            headers: { foo: 'bar' }
+        return Promise.resolve({
+            headers: { foo: 'bar' },
+            statusCode: 404
         })
     }
 
@@ -478,45 +408,17 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
          */
         if (requestMock.retryCnt > 3) {
             const response = { value: 'caught' }
-
-            return Response.json(response, {
-                status: 200,
-                headers: { foo: 'bar' }
+            return Promise.resolve({
+                headers: { foo: 'bar' },
+                statusCode: 200,
+                body: response
             })
         }
 
-        return Response.json({}, {
-            status: 400,
-            headers: { foo: 'bar' }
-        })
-    }
-
-    /**
-     * simulate failing response with HTML
-     */
-    if (uri.pathname === '/failing-html') {
-        ++requestMock.retryCnt
-
-        /**
-         * success this request if you retry 3 times
-         */
-        if (requestMock.retryCnt > 3) {
-            const response = { value: 'caught-html' }
-
-            return Response.json(response, {
-                status: 200,
-                headers: { foo: 'bar' }
-            })
-        }
-
-        return new Response('<html>\n' +
-            '<head><title>504 Gateway Time-out</title></head>\n' +
-            '<body>\n' +
-            '<center><h1>504 Gateway Time-out</h1></center>\n' +
-            '</body>\n' +
-            '</html>', {
-            status: 504,
-            headers: { 'Content-Type': 'text/html' }
+        return Promise.resolve({
+            headers: { foo: 'bar' },
+            statusCode: 400,
+            body: {}
         })
     }
 
@@ -548,22 +450,20 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
         response = response.value
     }
 
-    return Response.json(response, {
-        status: statusCode,
-        headers: { foo: 'bar' }
+    return Promise.resolve({
+        headers: { foo: 'bar' },
+        statusCode,
+        body: response
     })
 })
 
+requestMock.extend = vi.fn().mockReturnValue(requestMock)
+requestMock.put = vi.fn().mockReturnValue(Promise.resolve({}))
 requestMock.retryCnt = 0
 requestMock.setMockResponse = (value: any) => {
     manualMockResponse = value
 }
 requestMock.customResponseFor = (pattern: RegExp, response: any) => {
-    const existingEntry = Array.from(customResponses.values())
-        .find((p) => p.pattern.toString() === pattern.toString())
-    if (existingEntry) {
-        customResponses.delete(existingEntry)
-    }
     customResponses.add({ pattern, response })
 }
 
@@ -575,4 +475,4 @@ requestMock.resetSessionId = () => {
     sessionId = defaultSessionId
 }
 
-vi.stubGlobal('fetch', requestMock)
+export default requestMock

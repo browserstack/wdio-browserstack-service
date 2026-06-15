@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { GrpcClient } from '../../../src/cli/grpcClient.js'
-import * as bstackLogger from '../../../src/bstackLogger.js'
+import { GrpcClient } from '../../src/cli/grpcClient.js'
+import * as bstackLogger from '../../src/bstackLogger.js'
 import type { SDKClient } from '@browserstack/wdio-browserstack-service'
-import { CLIUtils } from '../../../src/cli/cliUtils.js'
+import { CLIUtils } from '../../src/cli/cliUtils.js'
 import type grpc from '@grpc/grpc-js'
 
 const bstackLoggerSpy = vi.spyOn(bstackLogger.BStackLogger, 'logToFile')
@@ -18,14 +18,6 @@ describe('GrpcClient', () => {
     afterEach(() => {
         vi.resetAllMocks()
         vi.restoreAllMocks()
-    })
-
-    describe('Singleton Pattern', () => {
-        it('should return the same instance when called multiple times', () => {
-            const instance1 = GrpcClient.getInstance()
-            const instance2 = GrpcClient.getInstance()
-            expect(instance1).toBe(instance2)
-        })
     })
 
     describe('getClient()', () => {
@@ -90,11 +82,7 @@ describe('GrpcClient', () => {
                     sdkLanguage: 'typescript',
                     language: 'typescript',
                     frameworks: ['webdriver', ''],
-                    frameworkVersions: {},
-                    // Additional fields that the implementation actually sends
-                    pathProject: expect.any(String),
-                    pathConfig: expect.any(String),
-                    cliArgs: expect.any(Array)
+                    frameworkVersions: {}
                 }),
                 expect.any(Function)
             )
@@ -103,11 +91,9 @@ describe('GrpcClient', () => {
         it('throws error when client is not initialized', async () => {
             grpcClient.client = null
 
-            // The implementation logs but doesn't throw, then crashes when accessing this.client!
-            // This results in a TypeError when trying to access properties on null
             await expect(grpcClient.startBinSession('test-config'))
                 .rejects
-                .toThrow(TypeError)
+                .toThrow()
         })
 
         it('handles gRPC call errors', async () => {
@@ -138,42 +124,9 @@ describe('GrpcClient', () => {
             expect(response).toEqual(mockResponse)
         })
 
-        it('successfully stops bin session', async () => {
-            const mockResponse = { status: 'success' }
-            const mockStopBinSession = vi.fn().mockImplementation((req, cb) => cb(null, mockResponse))
-            grpcClient.client = { stopBinSession: mockStopBinSession } as any
-
-            const response = await grpcClient.stopBinSession()
-
-            expect(response).toEqual(mockResponse)
-            expect(mockStopBinSession).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    binSessionId: 'test-session-id'
-                }),
-                expect.any(Function)
-            )
-        })
-
-        it('returns undefined when binSessionId is missing', async () => {
+        it('throws error when binSessionId is missing', async () => {
             grpcClient.binSessionId = undefined
 
-            // The implementation catches the error and doesn't re-throw, returning undefined
-            await expect(grpcClient.stopBinSession()).resolves.toBeUndefined()
-        })
-
-        it('returns undefined when client is not initialized', async () => {
-            grpcClient.client = null
-
-            // The implementation logs but doesn't throw, then catches any errors and returns undefined
-            await expect(grpcClient.stopBinSession()).resolves.toBeUndefined()
-        })
-
-        it('returns undefined when gRPC call fails', async () => {
-            const mockError = new Error('Stop session failed')
-            const mockStopBinSession = vi.fn().mockImplementation((req, cb) => cb(mockError))
-            grpcClient.client = { stopBinSession: mockStopBinSession } as any
-
-            // The implementation catches gRPC errors and returns undefined instead of throwing
             await expect(grpcClient.stopBinSession()).resolves.toBeUndefined()
         })
     })
@@ -199,10 +152,9 @@ describe('GrpcClient', () => {
         it('throws error when client is not initialized', async () => {
             grpcClient.client = null
 
-            // The implementation logs but doesn't throw, then crashes when accessing this.client!
             await expect(grpcClient.connectBinSession())
                 .rejects
-                .toThrow(TypeError)
+                .toThrow()
         })
 
         it('handles gRPC call errors', async () => {

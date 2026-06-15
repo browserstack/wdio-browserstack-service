@@ -1,13 +1,13 @@
 import path from 'node:path'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import got from 'got'
 import logger from '@wdio/logger'
 
 import AccessibilityHandler from '../src/accessibility-handler.js'
-import type { BrowserstackConfig, BrowserstackOptions } from '../src/types.js'
-import type { Options } from '@wdio/types'
 import * as utils from '../src/util.js'
-import type { Capabilities } from '@wdio/types'
+import type { Capabilities, Options } from '@wdio/types'
 import * as bstackLogger from '../src/bstackLogger.js'
+import type { BrowserstackConfig, BrowserstackOptions } from '../src/types.js'
 
 const log = logger('test')
 let accessibilityHandler: AccessibilityHandler
@@ -17,6 +17,7 @@ let options: BrowserstackConfig & BrowserstackOptions
 let config : Options.Testrunner
 let accessibilityOpts: { [key: string]: any }
 
+vi.mock('got')
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
 vi.useFakeTimers().setSystemTime(new Date('2020-01-01'))
 vi.mock('uuid', () => ({ v4: () => '123456789' }))
@@ -27,6 +28,8 @@ bstackLoggerSpy.mockImplementation(() => {})
 describe('App Automate Accessibility Handler', () => {
     beforeEach(() => {
         vi.mocked(log.info).mockClear()
+        vi.mocked(got).mockClear()
+        vi.mocked(got.put).mockClear()
 
         browser = {
             sessionId: 'app123',
@@ -57,11 +60,11 @@ describe('App Automate Accessibility Handler', () => {
                 needsReview: true
             }
         }
-
         options = {
             accessibility: true
-        }
-        config = {}
+        } as BrowserstackConfig & BrowserstackOptions
+
+        config = {} as Options.Testrunner
 
         accessibilityHandler = new AccessibilityHandler(browser, caps, options, true, config, 'mocha', true, false, accessibilityOpts)
     })

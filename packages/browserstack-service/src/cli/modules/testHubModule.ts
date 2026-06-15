@@ -53,8 +53,8 @@ export default class TestHubModule extends BaseModule {
 
     onBeforeTest(args: Record<string, unknown>) {
         this.logger.debug('onBeforeTest: Called after test hook from cli configured module!!!')
-        const autoInstance = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
-        const instances = [autoInstance]
+        const autoInstace = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
+        const instances = [autoInstace]
         args.autoInstance = instances
         this.sendTestSessionEvent(args)
     }
@@ -112,7 +112,7 @@ export default class TestHubModule extends BaseModule {
 
             this.logger.debug(`sendTestFrameworkEvent for testState: ${testFrameworkState} hookState: ${testHookState}`)
             const platformIndex = process.env.WDIO_WORKER_ID ? parseInt(process.env.WDIO_WORKER_ID.split('-')[0]) : 0
-            const uuid = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) || instance.getRef()
+            const uuid =  TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) || instance.getRef()
             const eventJson = Buffer.from(JSON.stringify(Object.fromEntries(testData)))
             const executionContext = { hash: trackedContext.getId(), threadId: trackedContext.getThreadId().toString(), processId: trackedContext.getProcessId().toString() }
             const payload: Omit<TestFrameworkEventRequest, 'binSessionId'> = {
@@ -188,6 +188,7 @@ export default class TestHubModule extends BaseModule {
                     ? 'browserstack'
                     : 'unknown_grid'
 
+                // eslint-disable-next-line camelcase
                 const automationSession: AutomationSession = {
                     provider: sessionProvider,
                     ref: autoInstance.getRef(),

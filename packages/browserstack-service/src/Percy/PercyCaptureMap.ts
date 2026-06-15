@@ -3,12 +3,8 @@
  * unique screenshot names for percy
  */
 
-interface Map {
-    [key: string]: Record<string, number>
-}
-
 class PercyCaptureMap {
-    #map: Map = {}
+    #map: any = {}
 
     increment(sessionName: string, eventName: string) {
         if (!this.#map[sessionName]) {

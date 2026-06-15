@@ -1,5 +1,4 @@
 import { BStackLogger } from '../cliLogger.js'
-import type { SDKClient } from '@browserstack/wdio-browserstack-service'
 
 /**
  * Base class for BrowserStack modules
@@ -9,7 +8,7 @@ export default class BaseModule {
     binSessionId: string|null
     platformIndex: number
     config: Record<string, unknown>
-    client: SDKClient | null
+    client: any
     /**
      * Create a new BaseModule
      */
@@ -43,10 +42,10 @@ export default class BaseModule {
      * Configure the module with session information
      * @param {string} binSessionId - The bin session ID
      * @param {number} platformIndex - The platform index
-     * @param {SDKClient | null} client - The gRPC client service
+     * @param {Object} client - The gRPC client service
      * @param {Object} config - Configuration options
      */
-    configure(binSessionId: string|null, platformIndex: number, client: SDKClient | null, config = {}) {
+    configure(binSessionId: string|null, platformIndex: number, client: unknown, config = {}) {
         this.binSessionId = binSessionId
         this.platformIndex = platformIndex
         this.client = client

@@ -1,13 +1,9 @@
 import { vi } from 'vitest'
 
 import { EventEmitter } from 'node:events'
-// Runtime stubs for the stats classes — the code under test references them only as TS
-// types (erased at runtime). Importing the real @wdio/reporter from within its own mock
-// deadlocks vitest's module loader and hangs reporter.test.ts at collection.
-class HookStats {}
-class RunnerStats {}
-class SuiteStats {}
-class TestStats {}
+// Standalone: stats classes are public named exports of the published @wdio/reporter
+// (in the monorepo this mock imported them from packages/wdio-reporter/src).
+import { HookStats, RunnerStats, SuiteStats, TestStats } from '@wdio/reporter'
 import { Chalk } from '../chalk.ts'
 
 export default class WDIOReporter extends EventEmitter {
@@ -84,4 +80,5 @@ export default class WDIOReporter extends EventEmitter {
     /* istanbul ignore next */
     onRunnerEnd () {}
 }
+
 export { HookStats, RunnerStats, SuiteStats, TestStats }

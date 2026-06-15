@@ -208,19 +208,5 @@ describe('TestFrameworkInstance', () => {
             expect(testFrameworkInstance.testFrameworks).toEqual(['mocha', 'jasmine'])
             expect(instance2.testFrameworks).toEqual(['jest'])
         })
-
-        it('should share the same createdAt timestamp due to module-level const', () => {
-            const context2 = new TrackedContext('test-id-2', 222, 333, 'test-type-2')
-            const instance2 = new TestFrameworkInstance(
-                context2,
-                ['jest'],
-                { 'jest': '27.0.0' },
-                TestFrameworkState.TEST,
-                HookState.PRE
-            )
-
-            // Both instances should have the same createdAt because of module-level const now = new Date()
-            expect(testFrameworkInstance.getCreatedAt()).toBe(instance2.getCreatedAt())
-        })
     })
 })

@@ -3,22 +3,11 @@ import { OrchestrationUtils } from './testorcherstrationutils.js'
 import { GrpcClient } from '../cli/grpcClient.js'
 import { BrowserstackCLI } from '../cli/index.js'
 import { BStackLogger } from '../bstackLogger.js'
-import type { BrowserstackConfig } from '../types.js'
-
-type TestOrchestrationConfig = BrowserstackConfig & Record<string, unknown> & {
-    projectName?: string
-    buildName?: string
-    testOrchestration?: {
-        enabled?: boolean
-    }
-}
-
-type OrderingInstrumentationValue = string | number | boolean | null
 
 /**
  * Checks if a value is true
  */
-function isTrue(value: unknown): boolean {
+function isTrue(value: any): boolean {
     if (typeof value === 'boolean') {
         return value
     }
@@ -33,45 +22,33 @@ function isTrue(value: unknown): boolean {
  */
 export class TestOrchestrationHandler {
     private static _instance: TestOrchestrationHandler | null = null
-    private config: TestOrchestrationConfig
+    private config: Record<string, any>
     private testOrderingServerHandler: TestOrderingServer
     private orchestrationUtils: OrchestrationUtils | null
-    private orderingInstrumentationData: Record<string, OrderingInstrumentationValue>
+    private orderingInstrumentationData: Record<string, any>
     private testOrderingApplied: boolean
     private isTestOrderingEnabled: boolean
 
     /**
      * @param config Service configuration
      */
-    constructor(config: Record<string, unknown>) {
-        this.config = config as TestOrchestrationConfig
+    constructor(config: Record<string, any>) {
+        this.config = config
         this.testOrderingServerHandler = new TestOrderingServer(this.config)
         this.orchestrationUtils = OrchestrationUtils.getInstance(config)
         this.orderingInstrumentationData = {}
         this.testOrderingApplied = false
-        this.isTestOrderingEnabled = this.config.testOrchestration?.enabled || false
+        this.isTestOrderingEnabled = config.testOrchestration?.enabled || false
     }
 
     /**
      * Get or create an instance of TestOrchestrationHandler
      */
-    static getInstance(config: Record<string, unknown>): TestOrchestrationHandler {
+    static getInstance(config: Record<string, any>): TestOrchestrationHandler {
         if (TestOrchestrationHandler._instance === null && config !== null) {
             TestOrchestrationHandler._instance = new TestOrchestrationHandler(config)
         }
         return TestOrchestrationHandler._instance as TestOrchestrationHandler
-    }
-
-    /**
-     * Checks if test ordering is enabled
-     * Do not apply test ordering when:
-     * - O11y is not enabled
-     * - Ordering is not enabled
-     * - projectName is None
-     * - buildName is None
-     */
-    testOrderingEnabled(): boolean {
-        return this.isTestOrderingEnabled
     }
 
     /**
@@ -82,24 +59,9 @@ export class TestOrchestrationHandler {
     }
 
     /**
-     * Checks if test ordering checks should be logged
-     */
-    shouldLogTestOrderingChecks(): boolean {
-        return (
-            !this.testOrderingEnabled() &&
-            this.orchestrationUtils !== null &&
-            this.orchestrationUtils.testOrderingEnabled()
-        )
-    }
-
-    /**
      * Logs test ordering checks
      */
     logTestOrderingChecks(): void {
-        if (!this.shouldLogTestOrderingChecks()) {
-            return
-        }
-
         if (this.config.projectName === undefined || this.config.buildName === undefined) {
             BStackLogger.info("Test Reordering can't work as buildName or projectName is null. Please set a non-null value.")
         }
@@ -107,6 +69,21 @@ export class TestOrchestrationHandler {
         if (!this._isObservabilityEnabled()) {
             BStackLogger.info("Test Reordering can't work as testReporting is disabled. Please enable it from browserstack.yml file.")
         }
+    }
+
+    /**
+     * Checks if test ordering is applied
+     */
+    isTestOrderingApplied(): boolean {
+        return this.testOrderingApplied
+    }
+
+    /**
+     * Sets whether test ordering is applied
+     */
+    setTestOrderingApplied(orderingApplied: boolean): void {
+        this.testOrderingApplied = orderingApplied
+        this.addToOrderingInstrumentationData('applied', orderingApplied)
     }
 
     /**
@@ -119,8 +96,8 @@ export class TestOrchestrationHandler {
                 return null
             }
 
-            let orchestrationStrategy: string | null = null
-            const orchestrationMetadata: Record<string, unknown> = this.orchestrationUtils?.getTestOrchestrationMetadata() || {}
+            let orchestrationStrategy = null
+            const orchestrationMetadata = this.orchestrationUtils?.getTestOrchestrationMetadata() || {}
 
             if (this.orchestrationUtils !== null) {
                 orchestrationStrategy = this.orchestrationUtils.getTestOrderingName()
@@ -149,8 +126,8 @@ export class TestOrchestrationHandler {
             this.addToOrderingInstrumentationData('splitTestsAPICallCount', this.testOrderingServerHandler.getSplitTestsApiCallCount())
 
             return orderedTestFiles
-        } catch (error) {
-            BStackLogger.debug(`[reorderTestFiles] Error in ordering test classes: ${error}`)
+        } catch (e) {
+            BStackLogger.debug(`[reorderTestFiles] Error in ordering test classes: ${e}`)
         }
         return null
     }
@@ -158,14 +135,14 @@ export class TestOrchestrationHandler {
     /**
      * Adds data to the ordering instrumentation data
      */
-    addToOrderingInstrumentationData(key: string, value: OrderingInstrumentationValue): void {
+    addToOrderingInstrumentationData(key: string, value: any): void {
         this.orderingInstrumentationData[key] = value
     }
 
     /**
      * Gets the ordering instrumentation data
      */
-    getOrderingInstrumentationData(): Record<string, OrderingInstrumentationValue> {
+    getOrderingInstrumentationData(): Record<string, any> {
         return this.orderingInstrumentationData
     }
 }

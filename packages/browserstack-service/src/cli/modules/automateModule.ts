@@ -3,6 +3,7 @@ import { BStackLogger } from '../cliLogger.js'
 import TestFramework from '../frameworks/testFramework.js'
 import { TestFrameworkState } from '../states/testFrameworkState.js'
 import { HookState } from '../states/hookState.js'
+import got from 'got'
 import type { Frameworks, Options } from '@wdio/types'
 import AutomationFramework from '../frameworks/automationFramework.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
@@ -13,9 +14,6 @@ import PerformanceTester from '../../instrumentation/performance/performance-tes
 import * as PERFORMANCE_SDK_EVENTS from '../../instrumentation/performance/constants.js'
 import APIUtils from '../apiUtils.js'
 import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
-import { _fetch as fetch } from '../../fetchWrapper.js'
-
-import util from 'node:util'
 
 interface TestResult {
     testName: string
@@ -100,14 +98,14 @@ export default class AutomateModule extends BaseModule {
     async onAfterTest(args: Record<string, unknown>) {
         this.logger.debug('onAfterTest: inside automate module after test hook!')
         const instace = args.instance as TestFrameworkInstance
-        const { error, passed, skipped } = args.result as { error: Error | null, passed: boolean, skipped?: boolean }
+        const { error, passed } = args.result as { error: Error | null, passed: boolean }
         const _failReasons: string[] = []
 
-        if (!passed && !skipped) {
+        if (!passed) {
             _failReasons.push((error && error.message) || 'Unknown Error')
         }
 
-        const status = passed || skipped ? 'passed' : 'failed'
+        const status = passed ? 'passed' : 'failed'
         const reason = _failReasons.length > 0 ? _failReasons.join('\n') : undefined
 
         const autoInstance = AutomationFramework.getTrackedInstance()
@@ -195,10 +193,10 @@ export default class AutomateModule extends BaseModule {
         this.sessionMap.clear()
     }
 
-    async markSessionName(sessionId: string, sessionName: string, config: { user: string; key: string; }): Promise<void> {
+    async markSessionName(sessionId: string, sessionName: string, config: { user: string; key: string;}): Promise<void> {
         return await PerformanceTester.measureWrapper(
             PERFORMANCE_SDK_EVENTS.AUTOMATE_EVENTS.SESSION_NAME,
-            async (sessionId: string, sessionName: string, config: { user: string; key: string; }) => {
+            async (sessionId: string, sessionName: string, config: { user: string; key: string;}) => {
                 try {
                     const auth = Buffer.from(`${config.user}:${config.key}`).toString('base64')
                     const isAppAutomate = this.config.app
@@ -208,7 +206,7 @@ export default class AutomateModule extends BaseModule {
                         this.logger.info('Marking session name for Automate')
                     }
 
-                    const sessionNameApiUrl = isAppAutomate
+                    const sessionStatusApiUrl = isAppAutomate
                         ? `${APIUtils.BROWSERSTACK_AA_API_URL}/app-automate/sessions/${sessionId}.json`
                         : `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate/sessions/${sessionId}.json`
 
@@ -216,18 +214,20 @@ export default class AutomateModule extends BaseModule {
                         name: sessionName
                     }
 
-                    const options = {
+                    const options: any = {
                         method: 'PUT',
+                        url: sessionStatusApiUrl,
                         headers: {
                             Authorization: `Basic ${auth}`,
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify(requestBody)
+                        json: requestBody,
+                        responseType: 'json'
                     }
 
-                    const response = await fetch(sessionNameApiUrl, options)
-                    const responseData = await response.json()
-                    this.logger.debug(`Session name updated: ${util.format(responseData)}. Done for sessionId ${sessionId}`)
+                    const response = await got(options)
+                    this.logger.debug('Session name updated:', response.body)
+                    this.logger.debug(`Done for sessionId ${sessionId}`)
                 } catch (err) {
                     this.logger.error(`Failed to update session name on BrowserStack: ${err}`)
                 }
@@ -257,18 +257,19 @@ export default class AutomateModule extends BaseModule {
                         ...(sessionErrorMessage ? { reason: sessionErrorMessage } : {})
                     }
 
-                    const options = {
+                    const options: any = {
                         method: 'PUT',
+                        url: sessionStatusApiUrl,
                         headers: {
                             Authorization: `Basic ${auth}`,
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify(body)
+                        json: body,
+                        responseType: 'json'
                     }
 
-                    const response = await fetch(sessionStatusApiUrl, options)
-                    const responseData = await response.json()
-                    this.logger.debug(`Session status updated: ${util.format(responseData)}. Done for sessionId ${sessionId}`)
+                    const response = await got(options)
+                    this.logger.debug('Session update response:', response.body)
                 } catch (err) {
                     this.logger.error(`Failed to update session status on BrowserStack: ${err}`)
                 }

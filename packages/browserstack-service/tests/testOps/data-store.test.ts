@@ -1,3 +1,4 @@
+
 import { expect, vi, it, describe, beforeEach, afterEach } from 'vitest'
 import * as DataStore from '../../src/data-store.js'
 import fs from 'node:fs'
@@ -77,5 +78,7 @@ describe('DataStore', () => {
         expect(mockFs.writeFileSync).toHaveBeenCalledOnce()
         const expectedFileName = 'worker-data-' + process.pid + '.json'
         expect(mockFs.writeFileSync).toHaveBeenCalledWith(expect.stringContaining(expectedFileName), JSON.stringify(testData))
+
+        // No need to cleanup as fs methods are mocked
     })
 })

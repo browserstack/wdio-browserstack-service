@@ -117,7 +117,7 @@ describe('TestHubModule', () => {
                 expect.any(Function)
             )
 
-            // Should register for all test states and hook states (11*3) + 1 specific registration for onBeforeTest
+            // Should register for all test states and hook states
             const expectedCalls = Object.values(TestFrameworkState).length * Object.values(HookState).length + 1
             expect(TestFramework.registerObserver).toHaveBeenCalledTimes(expectedCalls)
         })

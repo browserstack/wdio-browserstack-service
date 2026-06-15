@@ -2,12 +2,16 @@ import * as FunnelTestEvent from '../../src/instrumentation/funnelInstrumentatio
 import { sendFinish, sendStart } from '../../src/instrumentation/funnelInstrumentation.js'
 import { BStackLogger } from '../../src/bstackLogger.js'
 import fs from 'node:fs'
+import got from 'got'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { FUNNEL_INSTRUMENTATION_URL } from '../../src/constants.js'
 import type { BrowserstackHealing } from '@browserstack/ai-sdk-node'
 
-vi.mock('fetch')
-const mockedFetch = vi.mocked(fetch)
+vi.mock('got', () => ({
+    default: {
+        post: vi.fn()
+    }
+}))
 
 const config = {
     userName: 'your-username',
@@ -70,17 +74,17 @@ describe('funnelInstrumentation', () => {
             const config = { userName: '', accessKey: '' }
             await FunnelTestEvent.sendStart(config as any)
 
-            expect(fetch).not.toHaveBeenCalled()
+            expect(got.post).not.toHaveBeenCalled()
         })
 
         it('sendStart calls sends request with correct data', async () => {
             await sendStart(config as any)
 
-            expect(fetch).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
-                method: 'POST',
+            expect(got.post).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
                 headers: expect.any(Object),
-                body: expect.any(String) // TODO: find a way to match exact
-            }))
+                username: config.userName,
+                password: config.accessKey,
+                json: expectedEventData }))
         })
     })
 
@@ -107,32 +111,40 @@ describe('funnelInstrumentation', () => {
                     product: expect.arrayContaining(['observability', 'automate']),
                     productUsage: expect.objectContaining({
                         testObservability: expect.any(Object)
-                    })
+                    }),
+                    framework: 'framework',
+                    isCLIEnabled: false
                 },
             }
 
             await sendFinish(finishConfig as any)
-            expect(fetch).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
-                method: 'POST',
+            expect(got.post).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
                 headers: expect.any(Object),
-                body: expect.any(String) // TODO: find a way to match exact
-            }))
+                username: finishConfig.userName,
+                password: finishConfig.accessKey,
+                json: finishExpectedEventData }))
         })
 
         it('includes isCLIEnabled=true in event_properties when explicitly passed', async () => {
-            mockedFetch.mockReturnValueOnce(Promise.resolve(Response.json({})))
             await sendFinish(config as any, true)
-            const [[, { body }]] = mockedFetch.mock.calls
-            const parsedBody = JSON.parse(body as string)
-            expect(parsedBody.event_properties.isCLIEnabled).toBe(true)
+            expect(got.post).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
+                json: expect.objectContaining({
+                    event_properties: expect.objectContaining({
+                        isCLIEnabled: true
+                    })
+                })
+            }))
         })
 
         it('defaults isCLIEnabled to false in event_properties when not provided', async () => {
-            mockedFetch.mockReturnValueOnce(Promise.resolve(Response.json({})))
             await sendFinish(config as any)
-            const [[, { body }]] = mockedFetch.mock.calls
-            const parsedBody = JSON.parse(body as string)
-            expect(parsedBody.event_properties.isCLIEnabled).toBe(false)
+            expect(got.post).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
+                json: expect.objectContaining({
+                    event_properties: expect.objectContaining({
+                        isCLIEnabled: false
+                    })
+                })
+            }))
         })
     })
 
@@ -143,64 +155,115 @@ describe('funnelInstrumentation', () => {
         expect(fs.writeFileSync).toHaveBeenCalledWith(filePath, expect.any(String))
     })
 
-    it('saveFunnelData writes isCLIEnabled=true in event_properties when explicitly passed', () => {
+    it('saveFunnelData writes isCLIEnabled=true when explicitly passed', () => {
         BStackLogger.ensureLogsFolder = vi.fn()
-        let writtenData = ''
-        vi.spyOn(fs, 'writeFileSync').mockImplementationOnce((_path, data) => { writtenData = data as string })
-        FunnelTestEvent.saveFunnelData('SDKTestSuccessful', config as any, true)
-        const parsed = JSON.parse(writtenData)
-        expect(parsed.event_properties.isCLIEnabled).toBe(true)
+        vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => {})
+        const filePath = FunnelTestEvent.saveFunnelData('SDKTestSuccessful', config as any, true)
+        const writtenData = JSON.parse((fs.writeFileSync as any).mock.calls[0][1])
+        expect(writtenData.event_properties.isCLIEnabled).toBe(true)
+        expect(fs.writeFileSync).toHaveBeenCalledWith(filePath, expect.any(String))
     })
 
-    it('saveFunnelData defaults isCLIEnabled to false in event_properties when not provided', () => {
+    it('saveFunnelData defaults isCLIEnabled to false when not provided', () => {
         BStackLogger.ensureLogsFolder = vi.fn()
-        let writtenData = ''
-        vi.spyOn(fs, 'writeFileSync').mockImplementationOnce((_path, data) => { writtenData = data as string })
-        FunnelTestEvent.saveFunnelData('SDKTestSuccessful', config as any)
-        const parsed = JSON.parse(writtenData)
-        expect(parsed.event_properties.isCLIEnabled).toBe(false)
+        vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => {})
+        const filePath = FunnelTestEvent.saveFunnelData('SDKTestSuccessful', config as any)
+        const writtenData = JSON.parse((fs.writeFileSync as any).mock.calls[0][1])
+        expect(writtenData.event_properties.isCLIEnabled).toBe(false)
+        expect(fs.writeFileSync).toHaveBeenCalledWith(filePath, expect.any(String))
     })
 
     it('fireFunnelRequest sends request with correct data', async () => {
         const data = { key: 'value', userName: '[REDACTED]', accessKey: '[REDACTED]' }
-        mockedFetch.mockReturnValueOnce(Promise.resolve(Response.json({})))
         await FunnelTestEvent.fireFunnelRequest(data)
-        expect(fetch).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
-            method: 'POST',
+        expect(got.post).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
             headers: expect.any(Object),
-            body: JSON.stringify(data)
+            username: data.userName,
+            password: data.accessKey,
+            json: data
         }))
     })
 
-    // NOT WORKING CODE:
-
     describe('Healing instrumentation', () => {
 
-        it('should not send instrumentation event in case user receives an upgrade required warning', async () => {
+        it('should display upgrade required warning', async () => {
             const authResult = { message: 'Upgrade required' } as BrowserstackHealing.InitErrorResponse
             FunnelTestEvent.handleHealingInstrumentation(authResult, config as any, true)
-            expect(fetch).not.toHaveBeenCalled()
+            expect(got.post).not.toHaveBeenCalled()
         })
 
         it('should send server error event when isAuthenticated is false and status is 5xx', async () => {
             const authResult = { isAuthenticated: false, status: 500 } as BrowserstackHealing.InitErrorResponse
-
             FunnelTestEvent.handleHealingInstrumentation(authResult, config as any, true)
 
-            expect(fetch).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
-                method: 'POST',
-                headers: {
-                    'Authorization': `Basic ${Buffer.from(`${config.userName}:${config.accessKey}`).toString('base64')}`,
-                    'content-type': 'application/json',
-                },
-
-                body: expect.stringContaining('SDKTestTcgDownResponse')
+            expect(got.post).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
+                headers: expect.any(Object),
+                username: config.userName,
+                password: config.accessKey,
+                json: {
+                    userName: '[REDACTED]',
+                    accessKey: '[REDACTED]',
+                    event_type: 'SDKTestTcgDownResponse',
+                    detectedFramework: 'WebdriverIO-framework',
+                    event_properties: {
+                        language_framework: 'WebdriverIO_framework',
+                        referrer: expect.stringContaining('WebdriverIO-'),
+                        language: 'WebdriverIO',
+                        languageVersion: process.version,
+                        buildName: config.buildName,
+                        buildIdentifier: config.buildIdentifier,
+                        os: expect.any(String),
+                        hostname: expect.any(String),
+                        productMap: {
+                            'observability': true,
+                            'accessibility': true,
+                            'percy': true,
+                            'automate': true,
+                            'app_automate': false
+                        },
+                        product: expect.arrayContaining(['observability', 'automate', 'percy', 'accessibility']),
+                        framework: 'framework',
+                        isCLIEnabled: false
+                    }
+                }
             }))
-            const [[, { body }]] = (fetch as jest.Mock).mock.calls
-            const parsedBody = JSON.parse(body)
+        })
 
-            expectedEventData.event_type = 'SDKTestTcgDownResponse'
-            expect(parsedBody).toEqual(expect.objectContaining(expectedEventData))
+        it('should send authentication failure event when isAuthenticated is false and status is 4xx', async () => {
+            const authResult = { isAuthenticated: false, status: 401 } as BrowserstackHealing.InitErrorResponse
+            FunnelTestEvent.handleHealingInstrumentation(authResult, config as any, true)
+
+            expect(got.post).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
+                headers: expect.any(Object),
+                username: config.userName,
+                password: config.accessKey,
+                json: {
+                    userName: '[REDACTED]',
+                    accessKey: '[REDACTED]',
+                    event_type: 'SDKTestTcgAuthFailure',
+                    detectedFramework: 'WebdriverIO-framework',
+                    event_properties: {
+                        language_framework: 'WebdriverIO_framework',
+                        referrer: expect.stringContaining('WebdriverIO-'),
+                        language: 'WebdriverIO',
+                        languageVersion: process.version,
+                        buildName: config.buildName,
+                        buildIdentifier: config.buildIdentifier,
+                        os: expect.any(String),
+                        hostname: expect.any(String),
+                        productMap: {
+                            'observability': true,
+                            'accessibility': true,
+                            'percy': true,
+                            'automate': true,
+                            'app_automate': false
+                        },
+                        product: expect.arrayContaining(['observability', 'automate', 'percy', 'accessibility']),
+                        framework: 'framework',
+                        isCLIEnabled: false
+                    }
+                }
+            }))
         })
 
         it('should send initialization success event when userId is present', async () => {
@@ -216,20 +279,37 @@ describe('funnelInstrumentation', () => {
 
             FunnelTestEvent.handleHealingInstrumentation(authResult, config as any, true)
 
-            expect(fetch).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
-                method: 'POST',
-                headers: {
-                    'Authorization': `Basic ${Buffer.from(`${config.userName}:${config.accessKey}`).toString('base64')}`,
-                    'content-type': 'application/json',
-                },
-
-                body: expect.stringContaining('SDKTestTcgtInitSuccessful')
+            expect(got.post).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
+                headers: expect.any(Object),
+                username: config.userName,
+                password: config.accessKey,
+                json: {
+                    userName: '[REDACTED]',
+                    accessKey: '[REDACTED]',
+                    event_type: 'SDKTestTcgtInitSuccessful',
+                    detectedFramework: 'WebdriverIO-framework',
+                    event_properties: {
+                        language_framework: 'WebdriverIO_framework',
+                        referrer: expect.stringContaining('WebdriverIO-'),
+                        language: 'WebdriverIO',
+                        languageVersion: process.version,
+                        buildName: config.buildName,
+                        buildIdentifier: config.buildIdentifier,
+                        os: expect.any(String),
+                        hostname: expect.any(String),
+                        productMap: {
+                            'observability': true,
+                            'accessibility': true,
+                            'percy': true,
+                            'automate': true,
+                            'app_automate': false
+                        },
+                        product: expect.arrayContaining(['observability', 'automate', 'percy', 'accessibility']),
+                        framework: 'framework',
+                        isCLIEnabled: false
+                    }
+                }
             }))
-            const [[, { body }]] = (fetch as jest.Mock).mock.calls
-            const parsedBody = JSON.parse(body)
-
-            expectedEventData.event_type = 'SDKTestTcgtInitSuccessful'
-            expect(parsedBody).toEqual(expect.objectContaining(expectedEventData))
         })
 
         it('should send initialization failed event if status is 4xx', async () => {
@@ -241,40 +321,82 @@ describe('funnelInstrumentation', () => {
 
             FunnelTestEvent.handleHealingInstrumentation(authResult, config as any, true)
 
-            expect(fetch).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
-                method: 'POST',
-                headers: {
-                    'Authorization': `Basic ${Buffer.from(`${config.userName}:${config.accessKey}`).toString('base64')}`,
-                    'content-type': 'application/json',
-                },
-
-                body: expect.stringContaining('SDKTestInitFailedResponse')
+            expect(got.post).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
+                headers: expect.any(Object),
+                username: config.userName,
+                password: config.accessKey,
+                json: {
+                    userName: '[REDACTED]',
+                    accessKey: '[REDACTED]',
+                    event_type: 'SDKTestInitFailedResponse',
+                    detectedFramework: 'WebdriverIO-framework',
+                    event_properties: {
+                        language_framework: 'WebdriverIO_framework',
+                        referrer: expect.stringContaining('WebdriverIO-'),
+                        language: 'WebdriverIO',
+                        languageVersion: process.version,
+                        buildName: config.buildName,
+                        buildIdentifier: config.buildIdentifier,
+                        os: expect.any(String),
+                        hostname: expect.any(String),
+                        productMap: {
+                            'observability': true,
+                            'accessibility': true,
+                            'percy': true,
+                            'automate': true,
+                            'app_automate': false
+                        },
+                        product: expect.arrayContaining(['observability', 'automate', 'percy', 'accessibility']),
+                        framework: 'framework',
+                        isCLIEnabled: false
+                    }
+                }
             }))
-            const [[, { body }]] = (fetch as jest.Mock).mock.calls
-            const parsedBody = JSON.parse(body)
-
-            expectedEventData.event_type = 'SDKTestInitFailedResponse'
-            expect(parsedBody).toEqual(expect.objectContaining(expectedEventData))
         })
 
-        it('should send server error event when isAuthenticated is false and status is 5xx', async () => {
-            const authResult = { isAuthenticated: true } as any
+        it('should send invalid TCG auth with user impact event if status is invalid', async () => {
+            const authResult = {
+                isAuthenticated: true
+            } as any
 
-            FunnelTestEvent.handleHealingInstrumentation(authResult, config as any, true)
+            const bstackConfig = {
+                ...config,
+                selfHeal: true
+            }
 
-            expect(fetch).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
-                method: 'POST',
-                headers: {
-                    'Authorization': `Basic ${Buffer.from(`${config.userName}:${config.accessKey}`).toString('base64')}`,
-                    'content-type': 'application/json',
-                },
-                body: expect.stringContaining('SDKTestInvalidTcgAuthResponseWithUserImpact')
+            FunnelTestEvent.handleHealingInstrumentation(authResult, bstackConfig as any, true)
+
+            expect(got.post).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
+                headers: expect.any(Object),
+                username: config.userName,
+                password: config.accessKey,
+                json: {
+                    userName: '[REDACTED]',
+                    accessKey: '[REDACTED]',
+                    event_type: 'SDKTestInvalidTcgAuthResponseWithUserImpact',
+                    detectedFramework: 'WebdriverIO-framework',
+                    event_properties: {
+                        language_framework: 'WebdriverIO_framework',
+                        referrer: expect.stringContaining('WebdriverIO-'),
+                        language: 'WebdriverIO',
+                        languageVersion: process.version,
+                        buildName: config.buildName,
+                        buildIdentifier: config.buildIdentifier,
+                        os: expect.any(String),
+                        hostname: expect.any(String),
+                        productMap: {
+                            'observability': true,
+                            'accessibility': true,
+                            'percy': true,
+                            'automate': true,
+                            'app_automate': false
+                        },
+                        product: expect.arrayContaining(['observability', 'automate', 'percy', 'accessibility']),
+                        framework: 'framework',
+                        isCLIEnabled: false
+                    }
+                }
             }))
-            const [[, { body }]] = (fetch as jest.Mock).mock.calls
-            const parsedBody = JSON.parse(body)
-
-            expectedEventData.event_type = 'SDKTestInvalidTcgAuthResponseWithUserImpact'
-            expect(parsedBody).toEqual(expect.objectContaining(expectedEventData))
         })
 
         it('should not send user impact event if selfHeal is not enabled by user', async () => {
@@ -284,7 +406,7 @@ describe('funnelInstrumentation', () => {
 
             FunnelTestEvent.handleHealingInstrumentation(authResult, config as any, false)
 
-            expect(fetch).not.toHaveBeenCalled()
+            expect(got.post).not.toHaveBeenCalled()
         })
 
         it('should handle exceptions during healing instrumentation', async () => {
@@ -301,7 +423,7 @@ describe('funnelInstrumentation', () => {
             FunnelTestEvent.handleHealingInstrumentation(authResult, config as any, true)
 
             expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Error in handling healing instrumentation:'))
-            expect(fetch).not.toHaveBeenCalled() // Ensure no event is sent
+            expect(got.post).not.toHaveBeenCalled() // Ensure no event is sent
         })
 
         it('should handle healing not enabled for user', async () => {
@@ -317,7 +439,7 @@ describe('funnelInstrumentation', () => {
 
             FunnelTestEvent.handleHealingInstrumentation(authResult, config as any, false)
 
-            expect(fetch).not.toHaveBeenCalled()
+            expect(got.post).not.toHaveBeenCalled()
         })
 
         it('should handle healing disabled for the group', async () => {
@@ -338,7 +460,7 @@ describe('funnelInstrumentation', () => {
 
             FunnelTestEvent.handleHealingInstrumentation(authResult, bstackConfig as any, true)
 
-            expect(fetch).not.toHaveBeenCalled()
+            expect(got.post).not.toHaveBeenCalled()
             expect(BStackLogger.warn).toHaveBeenCalledWith('Healing is not enabled for your group, please contact the admin')
         })
     })

@@ -10,7 +10,7 @@ import { CLIUtils } from '../../src/cli/cliUtils.js'
 import PerformanceTester from '../../src/instrumentation/performance/performance-tester.js'
 import { EVENTS as PerformanceEvents } from '../../src/instrumentation/performance/constants.js'
 import type { Options } from '@wdio/types'
-import type { BrowserstackConfig, BrowserstackOptions } from '../../src/types.js'
+import { nodeRequest } from '../../src/util.js'
 import APIUtils from '../../src/cli/apiUtils.js'
 
 const bstackLoggerSpy = vi.spyOn(bstackLogger.BStackLogger, 'logToFile')
@@ -72,7 +72,6 @@ describe('CLIUtils', () => {
                 }
             } as Record <string, unknown>
         } as Options.Testrunner
-        const createBrowserstackOptions = (overrides: Record<string, unknown> = {}) => overrides as unknown as BrowserstackConfig & BrowserstackOptions
 
         it('returns stringified config with basic options', () => {
             const capabilities = [
@@ -86,6 +85,7 @@ describe('CLIUtils', () => {
             expect(parsed).toEqual({
                 userName: 'testuser',
                 accessKey: 'testkey',
+                buildName: 'common-build',
                 buildTag: [],
                 isNonBstackA11yWDIO: true,
                 testContextOptions: {
@@ -158,74 +158,21 @@ describe('CLIUtils', () => {
         })
 
         it('prioritizes options over capability values', () => {
-            const capabilities = {
+            const capabilities = [{
                 browserName: 'chrome',
-                browserVersion: '91.0',
                 'bstack:options': {
-                    buildName: 'cap-build',
-                    projectName: 'cap-project'
+                    buildName: 'cap-build'
                 }
-            }
+            }]
             const options = {
-                testObservabilityOptions: {
-                    buildName: 'opt-build',
-                    projectName: 'opt-project'
-                }
-            } as any
-            const result = CLIUtils.getBinConfig(mockConfig, capabilities, options)
-            const parsed = JSON.parse(result)
-
-            expect(parsed.buildName).toBe('opt-build')
-            expect(parsed.projectName).toBe('opt-project')
-            // Platform capabilities retain their original values from bstack:options
-            // expect(parsed.platforms[0].buildName).toBe('cap-build')
-            // expect(parsed.platforms[0].projectName).toBe('cap-project')
-        })
-
-        it('includes testManagementOptions when testPlanId is provided', () => {
-            const capabilities = [
-                { browserName: 'chrome' }
-            ]
-            const options = createBrowserstackOptions({
-                testManagementOptions: {
-                    testPlanId: 'tm-plan-123'
-                }
-            })
+                buildName: 'opt-build'
+            }
 
             const result = CLIUtils.getBinConfig(mockConfig, capabilities, options)
             const parsed = JSON.parse(result)
 
-            expect(parsed.testManagementOptions).toEqual({
-                testPlanId: 'tm-plan-123'
-            })
-        })
-
-        it('omits empty testManagementOptions and strips unrelated keys', () => {
-            const capabilities = [
-                { browserName: 'chrome' }
-            ]
-            const emptyPlanOptions = createBrowserstackOptions({
-                testManagementOptions: {
-                    testPlanId: '   ',
-                    ignoredKey: 'ignored'
-                }
-            })
-            const validPlanOptions = createBrowserstackOptions({
-                testManagementOptions: {
-                    testPlanId: ' tm-plan-456 ',
-                    ignoredKey: 'ignored'
-                }
-            })
-
-            const emptyPlanResult = CLIUtils.getBinConfig(mockConfig, capabilities, emptyPlanOptions)
-            const emptyPlanParsed = JSON.parse(emptyPlanResult)
-            expect(emptyPlanParsed.testManagementOptions).toBeUndefined()
-
-            const validPlanResult = CLIUtils.getBinConfig(mockConfig, capabilities, validPlanOptions)
-            const validPlanParsed = JSON.parse(validPlanResult)
-            expect(validPlanParsed.testManagementOptions).toEqual({
-                testPlanId: 'tm-plan-456'
-            })
+            expect(parsed.buildName).toBe('common-build')
+            expect(parsed.platforms[0]).not.toHaveProperty('buildName')
         })
     })
 
@@ -431,7 +378,7 @@ describe('CLIUtils', () => {
             expect(CLIUtils.downloadLatestBinary).toHaveBeenCalledWith(mockResponse.url, mockCliDir)
         })
 
-        it('uses SHELL_EXECUTE_ERROR when runShellCommand fails', async () => {
+        it('uses default cli_version when existing path is empty', async () => {
             vi.spyOn(CLIUtils, 'runShellCommand').mockResolvedValue('SHELL_EXECUTE_ERROR')
             vi.spyOn(CLIUtils, 'requestToUpdateCLI').mockResolvedValue({})
 
@@ -441,18 +388,6 @@ describe('CLIUtils', () => {
             expect(CLIUtils.runShellCommand).toHaveBeenCalled()
             expect(CLIUtils.requestToUpdateCLI).toHaveBeenCalledWith(
                 expect.objectContaining({ cli_version: 'SHELL_EXECUTE_ERROR' }),
-                mockConfig
-            )
-        })
-
-        it('uses default cli_version when existing path is empty', async () => {
-            vi.spyOn(CLIUtils, 'requestToUpdateCLI').mockResolvedValue({})
-
-            const result = await CLIUtils.checkAndUpdateCli('', mockCliDir, mockConfig)
-
-            expect(result).toBe('')
-            expect(CLIUtils.requestToUpdateCLI).toHaveBeenCalledWith(
-                expect.objectContaining({ cli_version: '0' }),
                 mockConfig
             )
         })
@@ -521,10 +456,15 @@ describe('CLIUtils', () => {
 
         beforeEach(() => {
             vi.resetAllMocks()
-
-            // Mock fetch to return a mock response
-            global.fetch = vi.fn().mockResolvedValue({
-                json: vi.fn().mockResolvedValue({ status: 'success' })
+            vi.mock('../../src/util.js', async () => {
+                // Remove the type annotation from importActual
+                const actual = await vi.importActual('../../src/util.js')
+                return {
+                    ...actual,
+                    nodeRequest: vi.fn().mockResolvedValue({ status: 'success' }),
+                    getBrowserStackUser: vi.fn().mockReturnValue('testuser'),
+                    getBrowserStackKey: vi.fn().mockReturnValue('testkey'),
+                }
             })
         })
 
@@ -538,42 +478,36 @@ describe('CLIUtils', () => {
                 param2: 'value2'
             }
 
-            const mockJsonResponse = { updated_cli_version: '2.0.0' }
-            global.fetch = vi.fn().mockResolvedValue({
-                json: vi.fn().mockResolvedValue(mockJsonResponse)
-            })
+            vi.mocked(nodeRequest).mockResolvedValue({})
 
             await CLIUtils.requestToUpdateCLI(queryParams, mockConfig)
 
-            expect(global.fetch).toHaveBeenCalledWith(
+            expect(nodeRequest).toHaveBeenCalledWith(
+                'GET',
                 expect.stringContaining('param1=value1'),
-                expect.objectContaining({
-                    method: 'GET',
-                    headers: expect.objectContaining({
-                        Authorization: expect.stringContaining('Basic')
-                    })
-                })
+                expect.any(Object),
+                APIUtils.BROWSERSTACK_AUTOMATE_API_URL
             )
-            expect(global.fetch).toHaveBeenCalledWith(
+            expect(nodeRequest).toHaveBeenCalledWith(
+                'GET',
                 expect.stringContaining('param2=value2'),
-                expect.any(Object)
+                expect.any(Object),
+                APIUtils.BROWSERSTACK_AUTOMATE_API_URL
             )
         })
 
-        it('returns response from fetch', async () => {
+        it('returns response from nodeRequest', async () => {
             const mockResponse = { updated_cli_version: '2.0.0' }
-            global.fetch = vi.fn().mockResolvedValue({
-                json: vi.fn().mockResolvedValue(mockResponse)
-            })
+            vi.mocked(nodeRequest).mockResolvedValue(mockResponse)
 
             const result = await CLIUtils.requestToUpdateCLI({}, mockConfig)
 
             expect(result).toEqual(mockResponse)
         })
 
-        it('handles errors from fetch', async () => {
+        it('handles errors from nodeRequest', async () => {
             const mockError = new Error('Network error')
-            global.fetch = vi.fn().mockRejectedValue(mockError)
+            vi.mocked(nodeRequest).mockRejectedValue(mockError)
 
             await expect(CLIUtils.requestToUpdateCLI({}, mockConfig))
                 .rejects
@@ -629,6 +563,7 @@ describe('CLIUtils', () => {
 
             CLIUtils.downloadFileStream(
                 mockWriteStream,
+                'binary-1.0.0',
                 mockZipFilePath,
                 mockCliDir,
                 resolve,

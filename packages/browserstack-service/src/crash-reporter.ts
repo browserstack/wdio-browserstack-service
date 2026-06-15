@@ -1,4 +1,5 @@
 import type { Capabilities, Options } from '@wdio/types'
+import got from 'got'
 
 import { BSTACK_SERVICE_VERSION, BROWSERSTACK_TESTHUB_UUID, WDIO_NAMING_PREFIX } from './constants.js'
 import type { BrowserstackConfig, CredentialsForCrashReportUpload, UserConfigforReporting } from './types.js'
@@ -6,9 +7,7 @@ import { DEFAULT_REQUEST_CONFIG, getObservabilityKey, getObservabilityUser } fro
 import { BStackLogger } from './bstackLogger.js'
 import APIUtils from './cli/apiUtils.js'
 
-import { _fetch as fetch } from './fetchWrapper.js'
-
-type Dict = Record<string, unknown>
+type Dict = Record<string, any>
 
 export default class CrashReporter {
     /* User test config for build run minus PII */
@@ -24,7 +23,7 @@ export default class CrashReporter {
         process.env.CREDENTIALS_FOR_CRASH_REPORTING = JSON.stringify(this.credentialsForCrashReportUpload)
     }
 
-    static setConfigDetails(userConfig: Options.Testrunner, capabilities: Capabilities.TestrunnerCapabilities, options: BrowserstackConfig & Options.Testrunner) {
+    static setConfigDetails(userConfig: Options.Testrunner, capabilities: Capabilities.RemoteCapability, options: BrowserstackConfig & Options.Testrunner) {
         const configWithoutPII = this.filterPII(userConfig)
         const filteredCapabilities = this.filterCapabilities(capabilities)
         this.userConfigForReporting = {
@@ -41,7 +40,7 @@ export default class CrashReporter {
         this.setCredentialsForCrashReportUpload(options, userConfig)
     }
 
-    static async uploadCrashReport(exception: string, stackTrace: string) {
+    static async uploadCrashReport(exception: any, stackTrace: string) {
         try {
             if (!this.credentialsForCrashReportUpload.username || !this.credentialsForCrashReportUpload.password) {
                 this.credentialsForCrashReportUpload = process.env.CREDENTIALS_FOR_CRASH_REPORTING !== undefined ? JSON.parse(process.env.CREDENTIALS_FOR_CRASH_REPORTING) : this.credentialsForCrashReportUpload
@@ -75,30 +74,15 @@ export default class CrashReporter {
             config: this.userConfigForReporting
         }
         const url = `${APIUtils.DATA_ENDPOINT}/api/v1/analytics`
-
-        const encodedAuth = Buffer.from(`${this.credentialsForCrashReportUpload.username}:${this.credentialsForCrashReportUpload.password}`, 'utf8').toString('base64')
-        const headers: Record<string, string> = {
-            ...DEFAULT_REQUEST_CONFIG.headers,
-            Authorization: `Basic ${encodedAuth}`,
-        }
-
-        const response = await fetch(url, {
-            method: 'POST',
-            body: JSON.stringify(data),
-            headers
+        got.post(url, {
+            ...DEFAULT_REQUEST_CONFIG,
+            ...this.credentialsForCrashReportUpload,
+            json: data
+        }).text().then(response => {
+            BStackLogger.debug(`[Crash_Report_Upload] Success response: ${JSON.stringify(response)}`)
+        }).catch((error) => {
+            BStackLogger.error(`[Crash_Report_Upload] Failed due to ${error}`)
         })
-
-        if (response.ok) {
-            let body = await response.text()
-            try {
-                body = JSON.stringify(JSON.parse(body))
-            } catch {
-                // Response is not JSON, use text as-is
-            }
-            BStackLogger.debug(`[Crash_Report_Upload] Success response: ${body}`)
-        } else {
-            BStackLogger.error(`[Crash_Report_Upload] Failed due to ${response.body}`)
-        }
     }
 
     static recursivelyRedactKeysFromObject(obj: Dict | Array<Dict>, keys: string[]) {
@@ -111,31 +95,21 @@ export default class CrashReporter {
             for (const prop in obj) {
                 if (keys.includes(prop.toLowerCase())) {
                     obj[prop] = '[REDACTED]'
-                } else if (typeof obj[prop] === 'object' && obj[prop] !== null) {
-                    this.recursivelyRedactKeysFromObject(obj[prop] as Dict | Array<Dict>, keys)
-                } else if (typeof obj[prop] === 'string') {
-                    try {
-                        const parsed = JSON.parse(obj[prop] as string)
-                        if (typeof parsed === 'object' && parsed !== null) {
-                            this.recursivelyRedactKeysFromObject(parsed as Dict | Array<Dict>, keys)
-                            obj[prop] = JSON.stringify(parsed)
-                        }
-                    } catch {
-                        // Not valid JSON, leave as-is
-                    }
+                } else if (typeof obj[prop] === 'object') {
+                    this.recursivelyRedactKeysFromObject(obj[prop], keys)
                 }
             }
         }
     }
 
-    static deletePIIKeysFromObject(obj: { [key: string]: unknown }) {
+    static deletePIIKeysFromObject(obj: {[key: string]: any}) {
         if (!obj) {
             return
         }
         ['user', 'username', 'key', 'accessKey'].forEach(key => delete obj[key])
     }
 
-    static filterCapabilities(capabilities: Capabilities.TestrunnerCapabilities) {
+    static filterCapabilities(capabilities: Capabilities.RemoteCapability) {
         const capsCopy = JSON.parse(JSON.stringify(capabilities))
         this.recursivelyRedactKeysFromObject(capsCopy, ['extensions'])
         return capsCopy
@@ -152,19 +126,15 @@ export default class CrashReporter {
                 if (Array.isArray(serviceArray) && serviceArray.length >= 2 && serviceArray[0] === 'browserstack') {
                     for (let idx = 1; idx < serviceArray.length; idx++) {
                         this.deletePIIKeysFromObject(serviceArray[idx])
-                        if (serviceArray[idx]) {
-                            // Handle both new testReportingOptions and legacy testObservabilityOptions
-                            this.deletePIIKeysFromObject(serviceArray[idx].testReportingOptions)
-                            this.deletePIIKeysFromObject(serviceArray[idx].testObservabilityOptions)
-                        }
+                        serviceArray[idx] && this.deletePIIKeysFromObject(serviceArray[idx].testObservabilityOptions)
                     }
                     finalServices.push(serviceArray)
                     break
                 }
             }
-        } catch (err) {
+        } catch (err: any) {
             /* Wrong configuration like strings instead of json objects could break this method, needs no action */
-            BStackLogger.error(`Error in parsing user config PII with error ${err ? ((err as Error).stack || err) : err}`)
+            BStackLogger.error(`Error in parsing user config PII with error ${err ? (err.stack || err) : err}`)
             return configWithoutPII
         }
         configWithoutPII.services = finalServices

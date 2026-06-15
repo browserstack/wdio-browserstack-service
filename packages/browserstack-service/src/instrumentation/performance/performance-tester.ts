@@ -8,15 +8,13 @@ import worker from 'node:worker_threads'
 import path from 'node:path'
 import { arch, hostname, platform, type, version } from 'node:os'
 
+import got from 'got'
+
 import { BStackLogger } from '../../bstackLogger.js'
 import { PERF_MEASUREMENT_ENV } from '../../constants.js'
 import APIUtils from '../../cli/apiUtils.js'
 import { CLIUtils } from '../../cli/cliUtils.js'
 import { EVENTS } from './constants.js'
-import fetchWrap from '../../fetchWrapper.js'
-import type { CsvWriter } from 'csv-writer/src/lib/csv-writer.js'
-import type { ObjectMap } from 'csv-writer/src/lib/lang/object.js'
-import type { Browser } from 'webdriverio'
 
 // Telemetry must never throw into business logic. Node 18's perf_hooks rejects
 // negative timestamps (e.g. performance.now() under faked timers, or any other
@@ -43,15 +41,15 @@ type PerformanceDetails = {
 
 export default class PerformanceTester {
     static _observer: PerformanceObserver
-    static _csvWriter: CsvWriter<ObjectMap<{}>>
+    static _csvWriter: any
     private static _events: PerformanceEntry[] = []
-    private static _measuredEvents: Array<PerformanceEntry | Record<string, unknown>> = []
+    private static _measuredEvents: PerformanceEntry[] = []
     private static _hasStoppedGeneration = false
     private static _stopGenerateCallCount = 0
     static started = false
-    static details: { [key: string]: PerformanceDetails } = {}
-    static eventsMap: { [key: string]: number } = {}
-    static browser?: Browser
+    static details: {[key: string]: PerformanceDetails} = {}
+    static eventsMap: {[key: string]: number} = {}
+    static browser?: WebdriverIO.Browser
     static scenarioThatRan: string[]
     static jsonReportDirName = 'performance-report'
     static jsonReportDirPath = path.join(process.cwd(), 'logs', this.jsonReportDirName)
@@ -67,13 +65,12 @@ export default class PerformanceTester {
             list.getEntries()
                 .filter((entry) => entry.entryType === 'measure')
                 .forEach(entry => {
-                    let finalEntry: Record<string, unknown> = entry.toJSON() as Record<string, unknown>
+                    let finalEntry: any = entry
+                    finalEntry = entry.toJSON()
 
                     try {
                         if (typeof finalEntry.startTime === 'number' && typeof performance.timeOrigin === 'number') {
-                            const originalStartTime = finalEntry.startTime
                             finalEntry.startTime = performance.timeOrigin + finalEntry.startTime
-                            BStackLogger.debug(`Timestamp conversion for ${entry.name}: ${originalStartTime} -> ${finalEntry.startTime} (timeOrigin: ${performance.timeOrigin})`)
                         }
                     } catch (e) {
                         BStackLogger.debug(`Error converting startTime to epoch: ${util.format(e)}`)
@@ -189,19 +186,19 @@ export default class PerformanceTester {
         })
         this._csvWriter.writeRecords(dat)
             .then(() => BStackLogger.info('Performance CSV report generated successfully'))
-            .catch((error: Error) => console.error(error))
+            .catch((error: any) => console.error(error))
     }
 
     static Measure(label: string, details: PerformanceDetails = {}) {
         const self = this
         return (
-            target: object,
+            target: Object,
             key: string | symbol,
-            descriptor: TypedPropertyDescriptor<Function>) => {
-            const originalMethod: Function|undefined = descriptor.value
+            descriptor: TypedPropertyDescriptor<any>) => {
+            const originalMethod: Function = descriptor.value
             if (descriptor.value) {
-                descriptor.value = function(...args: object[]) {
-                    return PerformanceTester.measure.apply(self, [label, originalMethod as Function, { methodName: key.toString(), ...details }, args, this])
+                descriptor.value = function() {
+                    return PerformanceTester.measure.apply(self, [label, originalMethod as Function, { methodName: key.toString(), ...details }, arguments, this])
                 }
             }
         }
@@ -211,12 +208,13 @@ export default class PerformanceTester {
         const self = this
 
         details.worker = PerformanceTester.getProcessId()
-        details.testName = PerformanceTester.scenarioThatRan && PerformanceTester.scenarioThatRan[PerformanceTester.scenarioThatRan.length - 1]
+        details.testName = PerformanceTester.scenarioThatRan?.pop()
         details.platform = PerformanceTester.browser?.sessionId
 
-        return function (...args: (object|boolean|undefined|null|string)[]) {
+        return function (...args: any[]) {
+            const methodArgs = [name, fn, details, args]
 
-            return self.measure(name, fn, details, args)
+            return self.measure.apply(self, methodArgs as [string, Function, {}, IArguments?])
         }
 
     }
@@ -225,7 +223,7 @@ export default class PerformanceTester {
         return !(process.env.BROWSERSTACK_SDK_INSTRUMENTATION === 'false')
     }
 
-    static measure(label: string, fn: Function, details = {}, args?: (object|boolean|undefined|null|string)[], thisArg: object|null = null) {
+    static measure(label: string, fn: Function, details = {}, args?: IArguments, thisArg: any = null) {
         if (!this.started || !this.isEnabled()) {
             return fn.apply(thisArg, args)
         }
@@ -328,16 +326,11 @@ export default class PerformanceTester {
     static end(event: string, success = true, failure?: string | unknown, details = {}) {
         safeMark(event + '-end')
         safeMeasure(event, event + '-start', event + '-end')
-        // Clear the start-mark guard so a subsequent start(event) for the same
-        // event actually marks a new start. Without this, start() short-circuits
-        // and the next end() measures from the original start mark — inflated
-        // durations in telemetry on every call after the first.
-        delete this.eventsMap[event + '-start']
         this.details[event] = Object.assign({ success, failure: util.format(failure) }, Object.assign(Object.assign({
             clientWorkerId: PerformanceTester.getClientWorkerId(),
             worker: PerformanceTester.getProcessId(),
             platform: PerformanceTester.browser?.sessionId,
-            testName: PerformanceTester.scenarioThatRan && PerformanceTester.scenarioThatRan[PerformanceTester.scenarioThatRan.length - 1]
+            testName: PerformanceTester.scenarioThatRan?.pop()
         }, details), this.details[event] || {}))
     }
 
@@ -370,7 +363,7 @@ export default class PerformanceTester {
             this.start(EVENTS.SDK_KEY_METRICS_PREPARATION)
 
             // Collect all measures from performance report files and in-memory events
-            let measures: Record<string, unknown>[] = []
+            let measures: any[] = []
             if (await fsPromise.access(this.jsonReportDirPath).then(() => true).catch(() => false)) {
                 const files = (await fsPromise.readdir(this.jsonReportDirPath)).map(file => path.resolve(this.jsonReportDirPath, file))
                 measures = (await Promise.all(files.map((file) => fsPromise.readFile(file, 'utf-8')))).map(el => `[${el.slice(0, -1)}]`).map(el => JSON.parse(el)).flat()
@@ -379,17 +372,9 @@ export default class PerformanceTester {
 
             if (this._measuredEvents.length > 0) {
                 BStackLogger.debug(`[Performance Upload] Adding ${this._measuredEvents.length} in-memory events`)
-                measures = measures.concat(
-                    this._measuredEvents.map(e => {
-                        // Convert PerformanceEntry to plain object if it has toJSON
-                        if (typeof (e as PerformanceEntry).toJSON === 'function') {
-                            return (e as PerformanceEntry).toJSON() as Record<string, unknown>
-                        }
-                        return e as Record<string, unknown>
-                    })
-                )
+                measures = measures.concat(this._measuredEvents)
             }
-            const ensureEpochTimes = (arr: Record<string, unknown>[]) => {
+            const ensureEpochTimes = (arr: any[]) => {
                 const now = Date.now()
                 const cutoff = 1e12 // ~year 2001, ms epoch
                 const timeOrigin = (
@@ -429,7 +414,7 @@ export default class PerformanceTester {
             const payload = {
                 event_type: 'sdk_events',
                 data: {
-                    testhub_uuid: process.env.PERF_TESTHUB_UUID || process.env.SDK_RUN_ID,
+                    testhub_uuid: process.env.PERF_TESTHUB_UUID || process.env.PERF_SDK_RUN_ID,
                     created_day: formattedDate,
                     event_name: 'SDKFeaturePerformance',
                     user_data: process.env.PERF_USER_NAME,
@@ -440,22 +425,22 @@ export default class PerformanceTester {
                         version: version(),
                         arch: arch()
                     }),
-                    event_json: { measures: measures, sdkRunId: process.env.SDK_RUN_ID }
+                    event_json: { measures: measures, sdkRunId: process.env.PERF_SDK_RUN_ID }
                 }
             }
-            const result = await fetchWrap(`${APIUtils.EDS_URL}/send_sdk_events`, {
-                method: 'POST',
+            const result = await got.post(`${APIUtils.EDS_URL}/send_sdk_events`, {
                 headers: {
                     'content-type': 'application/json'
-                },
-                body: JSON.stringify(payload)
+                }, json: payload
             })
 
-            BStackLogger.debug(`[Performance Upload] Successfully uploaded to EDS: ${util.format(await result.text())}`)
+            BStackLogger.debug(`[Performance Upload] Successfully uploaded to EDS: ${util.format(result.body)}`)
 
+            this.end(EVENTS.SDK_KEY_METRICS_UPLOAD, true)
             this.end(EVENTS.SDK_SEND_KEY_METRICS, true)
         } catch (er) {
             BStackLogger.debug(`[Performance Upload] Failed to upload events: ${util.format(er)}`)
+            this.end(EVENTS.SDK_KEY_METRICS_UPLOAD, false, er)
             this.end(EVENTS.SDK_KEY_METRICS_PREPARATION, false, er)
             this.end(EVENTS.SDK_SEND_KEY_METRICS, false, er)
         }

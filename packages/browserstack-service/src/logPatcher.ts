@@ -5,7 +5,11 @@ const LOG_LEVELS = {
 }
 
 class logPatcher extends Transport {
-    logToTestOps = (level = LOG_LEVELS.INFO, message = [''] as unknown[]) => {
+    constructor(opts: any) {
+        super(opts)
+    }
+
+    logToTestOps = (level = LOG_LEVELS.INFO, message = ['']) => {
         (process.emit as Function)(`bs:addLog:${process.pid}`, {
             timestamp: new Date().toISOString(),
             level: level.toUpperCase(),
@@ -16,27 +20,27 @@ class logPatcher extends Transport {
     }
 
     /* Patching this would show user an extended trace on their cli */
-    trace = (...message: unknown[]) => {
+    trace = (...message: any) => {
         this.logToTestOps(LOG_LEVELS.TRACE, message)
     }
 
-    debug = (...message: unknown[]) => {
+    debug = (...message:any) => {
         this.logToTestOps(LOG_LEVELS.DEBUG, message)
     }
 
-    info = (...message: unknown[]) => {
+    info = (...message: any) => {
         this.logToTestOps(LOG_LEVELS.INFO, message)
     }
 
-    warn = (...message: unknown[]) => {
+    warn = (...message: any) => {
         this.logToTestOps(LOG_LEVELS.WARN, message)
     }
 
-    error = (...message: unknown[]) => {
+    error = (...message: any) => {
         this.logToTestOps(LOG_LEVELS.ERROR, message)
     }
 
-    log = (...message: unknown[]) => {
+    log = (...message:any) => {
         this.logToTestOps(LOG_LEVELS.INFO, message)
     }
 }

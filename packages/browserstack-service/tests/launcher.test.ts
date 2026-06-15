@@ -5,17 +5,17 @@ import path from 'node:path'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 // @ts-expect-error mock feature
 import { Local, mockStart } from 'browserstack-local'
+import got from 'got'
 import logger from '@wdio/logger'
-import { SevereServiceError } from 'webdriverio'
 import type { Capabilities, Options } from '@wdio/types'
 
 import BrowserstackLauncher from '../src/launcher.js'
 import type { BrowserstackConfig } from '../src/types.js'
 import * as utils from '../src/util.js'
-import * as bstackLogger from '../src/bstackLogger.js'
-import * as FunnelInstrumentation from '../src/instrumentation/funnelInstrumentation.js'
-import { RERUN_TESTS_ENV, BROWSERSTACK_TESTHUB_UUID, RERUN_ENV } from '../src/constants.js'
 import * as thUtils from '../src/testHub/utils.js'
+import * as bstackLogger from '../src/bstackLogger.js'
+import { RERUN_ENV, RERUN_TESTS_ENV, BROWSERSTACK_TESTHUB_UUID } from '../src/constants.js'
+import * as FunnelInstrumentation from '../src/instrumentation/funnelInstrumentation.js'
 import TestOpsConfig from '../src/testOps/testOpsConfig.js'
 
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
@@ -34,16 +34,18 @@ vi.mock('node:fs', () => ({
 }))
 
 vi.spyOn(utils, 'uploadLogs').mockImplementation((_user, _key, _uuid) => new Promise((resolve) => {
+    _user
+    _key
+    _uuid
     resolve('success')
 }))
 
 const bstackLoggerSpy = vi.spyOn(bstackLogger.BStackLogger, 'logToFile')
 bstackLoggerSpy.mockImplementation(() => {})
-vi.spyOn(FunnelInstrumentation, 'sendFinish').mockImplementation(async () => {})
-vi.spyOn(FunnelInstrumentation, 'sendStart').mockImplementation(async () => {})
 
 vi.spyOn(bstackLogger.BStackLogger, 'clearLogFile').mockImplementation(() => {})
-
+vi.spyOn(FunnelInstrumentation, 'sendFinish').mockImplementation(async () => {})
+vi.spyOn(FunnelInstrumentation, 'sendStart').mockImplementation(async () => {})
 const instance = TestOpsConfig.getInstance(true, false) // Passing arguments to ensure instance is created
 const buildHashedId = 'mocktesthubbuilduuid'
 instance.buildHashedId = buildHashedId
@@ -87,9 +89,9 @@ describe('onPrepare', () => {
     })
 
     it('should not call local if browserstackLocal is undefined', async () => {
-        const service = new BrowserstackLauncher({ testObservability: false, percy: false } as any, caps, {
+        const service = new BrowserstackLauncher({ testObservability: false,  percy: false  } as any, caps, {
             user: 'foobaruser',
-            key: '12345',
+            key: '12345678901234567890',
             capabilities: []
         })
         await service.onPrepare(config, caps)
@@ -118,7 +120,7 @@ describe('onPrepare', () => {
         const capabilities = { samsungGalaxy: { capabilities: {} } }
 
         await service.onPrepare(config, capabilities)
-        expect(capabilities.samsungGalaxy.capabilities).toEqual({ 'appium:app': 'bs://<app-id>', 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId } })
+        expect(capabilities.samsungGalaxy.capabilities).toEqual({ 'appium:app': 'bs://<app-id>', 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }  })
     })
 
     it('should add the "appium:app" property to a multiremote capability if "bstack:options" present', async () => {
@@ -127,7 +129,7 @@ describe('onPrepare', () => {
         const capabilities = { samsungGalaxy: { capabilities: { 'bstack:options': {} } } }
 
         await service.onPrepare(config, capabilities)
-        expect(capabilities.samsungGalaxy.capabilities).toEqual({ 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId }, 'appium:app': 'bs://<app-id>' })
+        expect(capabilities.samsungGalaxy.capabilities).toEqual({ 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' })
     })
 
     it('should add the "appium:app" property to a multiremote capability if any extension cap present', async () => {
@@ -136,7 +138,7 @@ describe('onPrepare', () => {
         const capabilities = { samsungGalaxy: { capabilities: { 'appium:chromeOptions': {} } } }
 
         await service.onPrepare(config, capabilities as any)
-        expect(capabilities.samsungGalaxy.capabilities).toEqual({ 'appium:app': 'bs://<app-id>', 'appium:chromeOptions': {}, 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId } })
+        expect(capabilities.samsungGalaxy.capabilities).toEqual({ 'appium:app': 'bs://<app-id>', 'appium:chromeOptions': {}, 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } })
     })
 
     it('should add the "app" property to an array of capabilities if no "bstack:options"', async () => {
@@ -146,9 +148,9 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities)
         expect(capabilities).toEqual([
-            { 'app': 'bs://<app-id>', 'browserstack.testhubBuildUuid': buildHashedId, 'browserstack.buildProductMap': productMap },
-            { 'app': 'bs://<app-id>', 'browserstack.testhubBuildUuid': buildHashedId, 'browserstack.buildProductMap': productMap },
-            { 'app': 'bs://<app-id>', 'browserstack.testhubBuildUuid': buildHashedId, 'browserstack.buildProductMap': productMap }
+            { 'app': 'bs://<app-id>', 'browserstack.buildProductMap': productMap, 'browserstack.testhubBuildUuid': buildHashedId },
+            { 'app': 'bs://<app-id>', 'browserstack.buildProductMap': productMap, 'browserstack.testhubBuildUuid': buildHashedId },
+            { 'app': 'bs://<app-id>', 'browserstack.buildProductMap': productMap, 'browserstack.testhubBuildUuid': buildHashedId }
         ])
     })
 
@@ -159,9 +161,9 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities)
         expect(capabilities).toEqual([
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId },  'appium:app': 'bs://<app-id>' },
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId },  'appium:app': 'bs://<app-id>' },
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId },  'appium:app': 'bs://<app-id>' }
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' }
         ])
     })
 
@@ -172,8 +174,8 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities as any)
         expect(capabilities).toEqual([
-            { 'appium:app': 'bs://<app-id>', 'appium:chromeOptions': {}, 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId } },
-            { 'appium:app': 'bs://<app-id>', 'appium:chromeOptions': {}, 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId } }
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>', 'appium:chromeOptions': {} },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>', 'appium:chromeOptions': {} }
         ])
     })
 
@@ -184,8 +186,8 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities as any)
         expect(capabilities).toEqual([
-            { 'appium:app': 'custom_id', 'appium:chromeOptions': {}, 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId } },
-            { 'appium:app': 'custom_id', 'appium:chromeOptions': {}, 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId } }
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'custom_id', 'appium:chromeOptions': {} },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'custom_id', 'appium:chromeOptions': {} }
         ])
     })
 
@@ -196,8 +198,8 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities as any)
         expect(capabilities).toEqual([
-            { 'appium:app': 'user/custom_id', 'appium:chromeOptions': {}, 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId } },
-            { 'appium:app': 'user/custom_id', 'appium:chromeOptions': {}, 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId } }
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'user/custom_id', 'appium:chromeOptions': {} },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'user/custom_id', 'appium:chromeOptions': {} }
         ])
     })
 
@@ -211,9 +213,9 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities)
         expect(capabilities).toEqual([
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId }, 'appium:app': 'bs://<app-id>' },
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId }, 'appium:app': 'bs://<app-id>' },
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId }, 'appium:app': 'bs://<app-id>' }
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' }
         ])
     })
 
@@ -227,9 +229,9 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities)
         expect(capabilities).toEqual([
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId }, 'appium:app': 'bs://<app-id>' },
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId }, 'appium:app': 'bs://<app-id>' },
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId }, 'appium:app': 'bs://<app-id>' }
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' }
         ])
     })
 
@@ -243,9 +245,9 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities)
         expect(capabilities).toEqual([
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId }, 'appium:app': 'bs://<app-id>' },
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId }, 'appium:app': 'bs://<app-id>' },
-            { 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId }, 'appium:app': 'bs://<app-id>' }
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' },
+            { 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'appium:app': 'bs://<app-id>' }
         ])
     })
 
@@ -313,7 +315,7 @@ describe('onPrepare', () => {
         const capabilities = { chromeBrowser: { capabilities: { 'bstack:options': {} } } }
 
         await service.onPrepare(config, capabilities)
-        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { local: true, testhubBuildUuid: buildHashedId, buildProductMap: productMap } })
+        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { local: true, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } })
     })
 
     it('should add the "localIdentifier" property to a multiremote capability inside "bstack:options" if "bstack:options" present', async () => {
@@ -328,7 +330,7 @@ describe('onPrepare', () => {
         const capabilities = { chromeBrowser: { capabilities: { 'bstack:options': {} } } }
 
         await service.onPrepare(config, capabilities)
-        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { local: true, localIdentifier: 'wdio1', testhubBuildUuid: buildHashedId, buildProductMap: productMap } })
+        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { local: true, localIdentifier: 'wdio1', 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } })
     })
 
     it('should add the "local" property to a multiremote capability inside "bstack:options" if any extension cap present', async () => {
@@ -336,7 +338,7 @@ describe('onPrepare', () => {
         const capabilities = { chromeBrowser: { capabilities: { 'goog:chromeOptions': {} } } }
 
         await service.onPrepare(config, capabilities)
-        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { local: true, testhubBuildUuid: buildHashedId, buildProductMap: productMap }, 'goog:chromeOptions': {} })
+        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { local: true, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'goog:chromeOptions': {} })
     })
 
     it('should add the "localIdentifier" property to a multiremote capability inside "bstack:options" if any extension cap present', async () => {
@@ -347,7 +349,7 @@ describe('onPrepare', () => {
         const capabilities = { chromeBrowser: { capabilities: { 'goog:chromeOptions': {} } } }
 
         await service.onPrepare(config, capabilities)
-        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { local: true, localIdentifier: 'wdio1', testhubBuildUuid: buildHashedId, buildProductMap: productMap }, 'goog:chromeOptions': {} })
+        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { local: true, localIdentifier: 'wdio1', 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'goog:chromeOptions': {} })
     })
 
     it('should add the "localIdentifier" property to an array of capabilities inside "bstack:options" if "bstack:options" present', async () => {
@@ -359,9 +361,9 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities)
         expect(capabilities).toEqual([
-            { 'bstack:options': { local: true, localIdentifier: 'wdio1', testhubBuildUuid: buildHashedId, buildProductMap: productMap } },
-            { 'bstack:options': { local: true, localIdentifier: 'wdio1', testhubBuildUuid: buildHashedId, buildProductMap: productMap } },
-            { 'bstack:options': { local: true, localIdentifier: 'wdio1', testhubBuildUuid: buildHashedId, buildProductMap: productMap } }
+            { 'bstack:options': { local: true, localIdentifier: 'wdio1', 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } },
+            { 'bstack:options': { local: true, localIdentifier: 'wdio1', 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } },
+            { 'bstack:options': { local: true, localIdentifier: 'wdio1', 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } }
         ])
     })
 
@@ -402,9 +404,9 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities)
         expect(capabilities).toEqual([
-            { 'bstack:options': { local: true, testhubBuildUuid: buildHashedId, buildProductMap: productMap } },
-            { 'bstack:options': { local: true, testhubBuildUuid: buildHashedId, buildProductMap: productMap } },
-            { 'bstack:options': { local: true, testhubBuildUuid: buildHashedId, buildProductMap: productMap } }
+            { 'bstack:options': { local: true, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } },
+            { 'bstack:options': { local: true, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } },
+            { 'bstack:options': { local: true, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } }
         ])
     })
 
@@ -414,9 +416,9 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities)
         expect(capabilities).toEqual([
-            { 'bstack:options': { local: true, testhubBuildUuid: buildHashedId, buildProductMap: productMap }, 'ms:edgeOptions': {} },
-            { 'bstack:options': { local: true, testhubBuildUuid: buildHashedId, buildProductMap: productMap }, 'goog:chromeOptions': {} },
-            { 'bstack:options': { local: true, testhubBuildUuid: buildHashedId, buildProductMap: productMap }, 'moz:firefoxOptions': {} }
+            { 'bstack:options': { local: true, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'ms:edgeOptions': {} },
+            { 'bstack:options': { local: true, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'goog:chromeOptions': {} },
+            { 'bstack:options': { local: true, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap }, 'moz:firefoxOptions': {} }
         ])
     })
 
@@ -429,7 +431,7 @@ describe('onPrepare', () => {
         vi.spyOn(service, '_getLocalBuildNumber').mockImplementation(() => { return '1' })
 
         await service.onPrepare(config, capabilities)
-        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { buildName: 'browserstack wdio build', buildIdentifier: '#1', testhubBuildUuid: buildHashedId, buildProductMap: productMap } })
+        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { buildName: 'browserstack wdio build', buildIdentifier: '#1', 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } })
     })
 
     it('should add the "buildIdentifier" property to an array of capabilities inside "bstack:options" if "bstack:options" present', async () => {
@@ -449,8 +451,8 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities)
         expect(capabilities).toEqual([
-            { 'bstack:options': { buildName: 'browserstack wdio build', buildIdentifier: '#1', local: true, testhubBuildUuid: buildHashedId, buildProductMap: productMap } },
-            { 'bstack:options': { buildName: 'browserstack wdio build', buildIdentifier: '#1', local: true, testhubBuildUuid: buildHashedId, buildProductMap: productMap } },
+            { 'bstack:options': { buildName: 'browserstack wdio build', buildIdentifier: '#1', local: true, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } },
+            { 'bstack:options': { buildName: 'browserstack wdio build', buildIdentifier: '#1', local: true, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } },
         ])
     })
 
@@ -465,7 +467,7 @@ describe('onPrepare', () => {
         vi.spyOn(service, '_getLocalBuildNumber').mockImplementation(() => { return '1' })
 
         await service.onPrepare(config, capabilities as any)
-        expect(capabilities[0]).toEqual({ 'bstack:options': { testhubBuildUuid: buildHashedId, buildProductMap: productMap } })
+        expect(capabilities[0]).toEqual({ 'bstack:options': { 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } })
     })
 
     it('should evaluate and set buildIdentifier from service options', async () => {
@@ -477,7 +479,7 @@ describe('onPrepare', () => {
         vi.spyOn(service, '_getLocalBuildNumber').mockImplementation(() => { return '1' })
 
         await service.onPrepare(config, capabilities)
-        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { buildName: 'browserstack wdio build', buildIdentifier: '#1', testhubBuildUuid: buildHashedId, buildProductMap: productMap } })
+        expect(capabilities.chromeBrowser.capabilities).toEqual({ 'bstack:options': { buildName: 'browserstack wdio build', buildIdentifier: '#1', 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap } })
     })
 
     it('should add "browserstack.buildIdentifier" property in capabilities if no "bstack:options" and buildIdentifier present in capabilities', async () => {
@@ -594,6 +596,7 @@ describe('onPrepare', () => {
         vi.spyOn(service, '_updateObjectTypeCaps').mockImplementation(() => {})
         await service.onPrepare(config, caps)
         expect(launchTestSessionSpy).toHaveBeenCalledOnce()
+
     })
 
     it('should add accessibility options after filtering not allowed caps', async () => {
@@ -609,20 +612,19 @@ describe('onPrepare', () => {
         const capabilities = [{ 'bstack:options': { buildName: 'browserstack wdio build' } }, { 'bstack:options': { buildName: 'browserstack wdio build' } }]
         await service.onPrepare(config, capabilities)
         expect(launchTestSessionSpy).toHaveBeenCalledOnce()
-        expect(capabilities[0]['bstack:options']).toEqual({ buildName: 'browserstack wdio build', accessibilityOptions: { wcagVersion: 'wcag2aa' }, testhubBuildUuid: buildHashedId, buildProductMap: productMap })
+        expect(capabilities[0]['bstack:options']).toEqual({ buildName: 'browserstack wdio build', accessibilityOptions: { wcagVersion: 'wcag2aa' }, 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap })
         vi.clearAllMocks()
     })
 })
 
 describe('onComplete', () => {
-    it('should do nothing if browserstack local is turned on, but not running', async () => {
+    it('should do nothing if browserstack local is turned on, but not running', () => {
         const service = new BrowserstackLauncher({} as any, [{}] as any, {} as any)
         service.browserstackLocal = new Local()
         const BrowserstackLocalIsRunningSpy = vi.spyOn(service.browserstackLocal, 'isRunning')
         BrowserstackLocalIsRunningSpy.mockImplementationOnce(() => false)
-        await service.onComplete()
+        service.onComplete()
         expect(service.browserstackLocal.stop).not.toHaveBeenCalled()
-        expect(BrowserstackLocalIsRunningSpy).toHaveBeenCalledOnce()
     })
 
     it('should kill the process if forcedStop is true', async () => {
@@ -639,11 +641,6 @@ describe('onComplete', () => {
     it('should reject with an error, if local.stop throws an error', () => {
         const service = new BrowserstackLauncher({} as any, [{ browserName: '' }] as any, {} as any)
         service.browserstackLocal = new Local()
-
-        // Ensure isRunning returns true for this instance
-        const BrowserstackLocalIsRunningSpy = vi.spyOn(service.browserstackLocal, 'isRunning')
-        BrowserstackLocalIsRunningSpy.mockImplementationOnce(() => true)
-
         const BrowserstackLocalStopSpy = vi.spyOn(service.browserstackLocal, 'stop')
         BrowserstackLocalStopSpy.mockImplementationOnce((cb) => cb(error))
         return expect(service.onComplete()).rejects.toThrow(error)
@@ -804,7 +801,7 @@ describe('_updateCaps', () => {
         const capabilities = 1
 
         expect(() => service._updateCaps(capabilities as any, 'local'))
-            .toThrow(new SevereServiceError('Capabilities should be an object or Array!'))
+            .toThrow(TypeError('Capabilities should be an object or Array!'))
     })
 
     it('should update the local cap in capabilities', () => {
@@ -1003,61 +1000,11 @@ describe('_updateObjectTypeCaps', () => {
     })
 })
 
-describe('_removeCliOnlyCapabilityOptions', () => {
-    const options: BrowserstackConfig = {}
-    const config = {
-        user: 'foobaruser',
-        key: '12345678901234567890',
-        capabilities: []
-    }
-
-    it('should remove testManagementOptions from bstack:options in caps array', () => {
-        const caps: any = [{ 'bstack:options': { testManagementOptions: { testPlanId: 'tp-1' }, buildName: 'my-build' } }]
-        const service = new BrowserstackLauncher(options as any, caps, config)
-
-        service['_removeCliOnlyCapabilityOptions'](caps)
-        expect(caps[0]['bstack:options'].testManagementOptions).toBeUndefined()
-        expect(caps[0]['bstack:options'].buildName).toBe('my-build')
-    })
-
-    it('should remove testManagementOptions from bstack:options in multiremote caps', () => {
-        const caps: any = { chromeBrowser: { capabilities: { 'bstack:options': { testManagementOptions: { testPlanId: 'tp-1' } } } } }
-        const service = new BrowserstackLauncher(options as any, caps, config)
-
-        service['_removeCliOnlyCapabilityOptions'](caps)
-        expect(caps.chromeBrowser.capabilities['bstack:options'].testManagementOptions).toBeUndefined()
-    })
-
-    it('should remove legacy browserstack.testManagementOptions from caps array', () => {
-        const caps: any = [{ 'browserstack.testManagementOptions': { testPlanId: 'tp-1' } }]
-        const service = new BrowserstackLauncher(options as any, caps, config)
-
-        service['_removeCliOnlyCapabilityOptions'](caps)
-        expect(caps[0]['browserstack.testManagementOptions']).toBeUndefined()
-    })
-
-    it('should handle caps array without testManagementOptions gracefully', () => {
-        const caps: any = [{ 'bstack:options': { buildName: 'my-build' } }]
-        const service = new BrowserstackLauncher(options as any, caps, config)
-
-        expect(() => service['_removeCliOnlyCapabilityOptions'](caps)).not.toThrow()
-        expect(caps[0]['bstack:options'].buildName).toBe('my-build')
-    })
-
-    it('should handle alwaysMatch caps', () => {
-        const caps: any = [{ alwaysMatch: { 'bstack:options': { testManagementOptions: { testPlanId: 'tp-1' } } } }]
-        const service = new BrowserstackLauncher(options as any, caps, config)
-
-        service['_removeCliOnlyCapabilityOptions'](caps)
-        expect(caps[0].alwaysMatch['bstack:options'].testManagementOptions).toBeUndefined()
-    })
-})
-
 describe('_validateApp', () => {
     const caps: any = [{}]
     const config = {
         user: 'foobaruser',
-        key: '12345',
+        key: '12345678901234567890',
         capabilities: []
     }
 
@@ -1124,25 +1071,29 @@ describe('_uploadApp', () => {
     const caps: any = [{}]
     const config = {
         user: 'foobaruser',
-        key: '12345',
+        key: '12345678901234567890',
         capabilities: []
     }
 
     it('should upload the app and return app_url', async() => {
-        vi.mocked(fetch).mockReturnValueOnce(Promise.resolve(Response.json({ app_url: 'bs://<app-id>' })))
+        got.post = vi.fn().mockReturnValue({
+            json: () => Promise.resolve({ app_url: 'bs://<app-id>' })
+        })
         const service = new BrowserstackLauncher(options as any, caps, config)
         const res = await service._uploadApp(options.app as any)
         expect(res).toEqual({ app_url: 'bs://<app-id>' })
     })
 
     it('throw SevereServiceError if upload fails', async() => {
-        vi.mocked(fetch).mockReturnValueOnce(Promise.resolve(Response.json({}, { status: 500 })))
+        got.post = vi.fn().mockReturnValue({
+            json: () => Promise.reject({})
+        })
         const service = new BrowserstackLauncher(options as BrowserstackConfig & Options.Testrunner, caps, config)
 
         try {
             await service._uploadApp(options.app as any)
         } catch (e: any) {
-            expect(vi.mocked(fetch).mock.calls[0][1]?.method).toEqual('POST')
+            expect(got.post).toHaveBeenCalled()
             expect(e.name).toEqual('SevereServiceError')
         }
     })
@@ -1290,7 +1241,7 @@ describe('_getLocalBuildNumber', () => {
     const options: BrowserstackConfig = { browserstackLocal: true }
     const config = {
         user: 'foobaruser',
-        key: '12345',
+        key: '12345678901234567890',
         capabilities: []
     }
     const caps: any = [{
@@ -1330,7 +1281,7 @@ describe('_updateLocalBuildCache', () => {
     const options: BrowserstackConfig = { browserstackLocal: true }
     const config = {
         user: 'foobaruser',
-        key: '12345',
+        key: '12345678901234567890',
         capabilities: []
     }
     const caps: any = [{
@@ -1370,7 +1321,7 @@ describe('_uploadServiceLogs', () => {
     const options: BrowserstackConfig = { }
     const config = {
         user: 'foobaruser',
-        key: '12345',
+        key: '12345678901234567890',
         capabilities: []
     }
     const caps: any = [{
@@ -1393,7 +1344,7 @@ describe('_getClientBuildUuid', () => {
     const options: BrowserstackConfig = { }
     const config = {
         user: 'foobaruser',
-        key: '12345',
+        key: '12345678901234567890',
         capabilities: []
     }
     const caps: any = [{

@@ -4,8 +4,6 @@ import { threadId } from 'node:worker_threads'
 
 export default class TrackedInstance {
     #context: TrackedContext
-    // We have a very generic type usage, unknown or {} is not working here
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     #data: Map<string, any>
 
     /**
@@ -46,16 +44,12 @@ export default class TrackedInstance {
    * @param {*} key
    * @param {*} value
    */
-    // We have a very generic type usage, unknown or {} is not working here
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     updateMultipleEntries(entries: Record<string, any>) {
         Object.keys(entries).forEach(key => {
             this.#data.set(key, entries[key])
         })
     }
 
-    // We have a very generic type usage, unknown or {} is not working here
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     updateData(key: string, value: any) {
         this.#data.set(key, value)
     }

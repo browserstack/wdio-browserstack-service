@@ -4,7 +4,6 @@ import fs from 'node:fs'
 import util from 'node:util'
 import { fireFunnelRequest } from './instrumentation/funnelInstrumentation.js'
 import { BROWSERSTACK_TESTHUB_UUID, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_OBSERVABILITY } from './constants.js'
-import type { FunnelData } from './types.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 
 export default class BStackCleanup {
@@ -12,14 +11,14 @@ export default class BStackCleanup {
         try {
             // Get funnel data object from saved file
             const funnelDataCleanup = process.argv.includes('--funnelData')
-            let funnelData: FunnelData | null = null
+            let funnelData = null
             if (funnelDataCleanup) {
                 const index = process.argv.indexOf('--funnelData')
                 const filePath = process.argv[index + 1]
-                funnelData = BStackCleanup.getFunnelDataFromFile(filePath)
+                funnelData = this.getFunnelDataFromFile(filePath)
             }
 
-            if (process.argv.includes('--observability') && funnelData) {
+            if (process.argv.includes('--observability')) {
                 await this.executeObservabilityCleanup(funnelData)
             }
 
@@ -39,14 +38,15 @@ export default class BStackCleanup {
             BStackLogger.debug(`Error in sending events data ${util.format(er)}`)
         }
     }
-    static async executeObservabilityCleanup(funnelData: FunnelData) {
+    static async executeObservabilityCleanup(funnelData: any) {
         if (!process.env[BROWSERSTACK_TESTHUB_JWT]) {
             return
         }
         BStackLogger.debug('Executing Test Reporting and Analytics cleanup')
         try {
-            const result = await stopBuildUpstream()
-            if ((process.env[BROWSERSTACK_OBSERVABILITY]) && process.env[BROWSERSTACK_TESTHUB_UUID]) {
+            const killSignal = funnelData?.event_properties?.finishedMetadata?.signal
+            const result = await stopBuildUpstream(killSignal)
+            if (process.env[BROWSERSTACK_OBSERVABILITY] && process.env[BROWSERSTACK_TESTHUB_UUID]) {
                 BStackLogger.info(`\nVisit https://automation.browserstack.com/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]} to view build report, insights, and many more debugging information all at one place!\n`)
             }
             const status = (result && result.status) || 'failed'
@@ -58,9 +58,9 @@ export default class BStackCleanup {
         }
     }
 
-    static updateO11yStopData(funnelData: FunnelData, status: string, error: unknown = undefined) {
+    static updateO11yStopData(funnelData: any, status: string, error: unknown = undefined) {
         const toData = funnelData?.event_properties?.productUsage?.testObservability
-        // Return if no Test Reporting and Analytics data in funnel data
+        // Return if no O11y data in funnel data
         if (!toData) {
             return
         }
@@ -76,7 +76,7 @@ export default class BStackCleanup {
         toData.events.buildEvents.finished = existingStopData
     }
 
-    static async sendFunnelData(funnelData: FunnelData) {
+    static async sendFunnelData(funnelData: any) {
         try {
             await fireFunnelRequest(funnelData)
             BStackLogger.debug('Funnel data sent successfully from cleanup')
@@ -105,4 +105,4 @@ export default class BStackCleanup {
     }
 }
 
-void BStackCleanup.startCleanup()
+await BStackCleanup.startCleanup()

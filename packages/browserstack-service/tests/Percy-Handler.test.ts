@@ -3,6 +3,7 @@
 import path from 'node:path'
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import got from 'got'
 import logger from '@wdio/logger'
 
 import PercyHandler from '../src/Percy/Percy-Handler.js'
@@ -28,12 +29,16 @@ PercyLoggerSpy.mockImplementation(() => {})
 
 beforeEach(() => {
     vi.mocked(log.info).mockClear()
-    vi.mocked(fetch).mockClear()
-    vi.mocked(fetch).mockResolvedValue(Response.json({ value: {
-        automation_session: {
-            browser_url: 'https://www.browserstack.com/automate/builds/1/sessions/2'
+    vi.mocked(got).mockClear()
+    vi.mocked(got.put).mockClear()
+    vi.mocked(got).mockResolvedValue({
+        body: {
+            automation_session: {
+                browser_url: 'https://www.browserstack.com/automate/builds/1/sessions/2'
+            }
         }
-    } }))
+    })
+    vi.mocked(got.put).mockResolvedValue({})
 
     browser = {
         sessionId: 'session123',
@@ -61,7 +66,7 @@ beforeEach(() => {
         executeAsync: async () => { 'done' },
         getUrl: () => { return 'https://www.google.com/'},
         on: vi.fn(),
-    } as unknown as WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
+    } as any as WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
     caps = {
         browserName: 'chrome',
         'bstack:options': {
@@ -97,7 +102,7 @@ describe('teardown', () => {
     it('resolves promise if _percyScreenshotCounter is 0', async () => {
         percyHandler.teardown().then(() => {
             expect(percyHandler['_percyScreenshotCounter']).toEqual(0)
-
+        /* eslint-disable @typescript-eslint/no-unused-vars */
         }).catch((err: any) => {
             expect(percyHandler['_percyScreenshotCounter']).not.equal(0)
         })
@@ -170,18 +175,18 @@ describe('percyAutoCapture', () => {
     })
 
     it('does not call Percy Selenium Screenshot', async () => {
-        await percyHandler.percyAutoCapture(null, null)
+        await percyHandler.percyAutoCapture(null)
         expect(percyScreenshotSpy).not.toBeCalled()
     })
 
     it('calls Percy Selenium Screenshot', async () => {
-        await percyHandler.percyAutoCapture('keys', null)
+        await percyHandler.percyAutoCapture('keys')
         expect(percyScreenshotSpy).toBeCalledTimes(1)
     })
 
     it('calls Percy Appium Screenshot', async () => {
         percyHandler = new PercyHandler('auto', browser, caps, true, 'framework')
-        await percyHandler.percyAutoCapture('keys', null)
+        await percyHandler.percyAutoCapture('keys')
         expect(percyScreenshotAppSpy).toBeCalledTimes(1)
     })
 
@@ -254,14 +259,14 @@ describe('percyCaptureMap', () => {
     })
 
     it('should call getName method of PercyCaptureMap', async () => {
-        await percyHandler.percyAutoCapture('keys', null)
-        await percyHandler.percyAutoCapture('keys', null)
+        await percyHandler.percyAutoCapture('keys')
+        await percyHandler.percyAutoCapture('keys')
         expect(percyAutoCaptureMapGetNameSpy).toBeCalledTimes(2)
     })
 
     it('should call getName method of PercyCaptureMap', async () => {
-        await percyHandler.percyAutoCapture('click', null)
-        await percyHandler.percyAutoCapture('click', null)
+        await percyHandler.percyAutoCapture('click')
+        await percyHandler.percyAutoCapture('click')
         expect(percyAutoCaptureMapIncrementSpy).toBeCalledTimes(2)
     })
 

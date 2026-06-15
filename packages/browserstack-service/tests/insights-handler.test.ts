@@ -2,19 +2,21 @@
 import path from 'node:path'
 
 import { describe, expect, it, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest'
+import got from 'got'
 import logger from '@wdio/logger'
 import type { StdLog } from '../src/index.js'
 
 import InsightsHandler from '../src/insights-handler.js'
 import * as utils from '../src/util.js'
 import * as bstackLogger from '../src/bstackLogger.js'
+import Listener from '../src/testOps/listener.js'
 import { TESTOPS_SCREENSHOT_ENV } from '../src/constants.js'
 
 const log = logger('test')
 let insightsHandler: InsightsHandler
 let browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
 
-vi.mock('fetch')
+vi.mock('got')
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
 vi.useFakeTimers().setSystemTime(new Date('2020-01-01'))
 vi.mock('uuid', () => ({ v4: () => '123456789' }))
@@ -24,10 +26,16 @@ bstackLoggerSpy.mockImplementation(() => {})
 
 beforeEach(() => {
     vi.mocked(log.info).mockClear()
-    vi.mocked(fetch).mockClear()
-    vi.mocked(fetch).mockReturnValue(Promise.resolve(Response.json({ automation_session: {
-        browser_url: 'https://www.browserstack.com/automate/builds/1/sessions/2'
-    } })))
+    vi.mocked(got).mockClear()
+    vi.mocked(got.put).mockClear()
+    vi.mocked(got).mockResolvedValue({
+        body: {
+            automation_session: {
+                browser_url: 'https://www.browserstack.com/automate/builds/1/sessions/2'
+            }
+        }
+    })
+    vi.mocked(got.put).mockResolvedValue({})
 
     browser = {
         sessionId: 'session123',
@@ -53,7 +61,7 @@ beforeEach(() => {
         browserB: {},
         execute: vi.fn(),
         on: vi.fn(),
-    } as unknown as WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
+    } as any as WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
     insightsHandler = new InsightsHandler(browser, 'framework')
 })
 
@@ -95,7 +103,7 @@ describe('beforeScenario', () => {
         insightsHandler['_tests'] = {}
     })
 
-    it('sendTestRunEventForCucumber called', () => {
+    it('getTestRunDataForCucumber called', () => {
         insightsHandler.beforeScenario({
             pickle: {
                 name: 'pickle-name',
@@ -122,7 +130,7 @@ describe('afterScenario', () => {
         insightsHandler['_tests'] = {}
     })
 
-    it('sendTestRunEventForCucumber called', () => {
+    it('getTestRunDataForCucumber called', () => {
         insightsHandler.afterScenario({
             pickle: {
                 name: 'pickle-name',
@@ -646,7 +654,7 @@ describe('browserCommand', () => {
         insightsHandler['_tests'] = { 'test title': { 'uuid': 'uuid' } }
         insightsHandler['_commands'] = { 's_m_e': {} as any }
 
-        uploadEventDataSpy = vi.spyOn(insightsHandler['listener'], 'onScreenshot').mockImplementation(() => { return [] as any })
+        uploadEventDataSpy = vi.spyOn(Listener.getInstance(), 'onScreenshot').mockImplementation(() => { return [] as any })
         commandSpy = vi.spyOn(utils, 'isScreenshotCommand')
     })
 
@@ -803,10 +811,10 @@ describe('appendTestItemLog', function () {
 
 describe('processCucumberHook', function () {
     let insightsHandler: InsightsHandler
-    let sendHookRunEventSpy, cucumberHookTypeSpy, cucumberHookUniqueIdSpy
+    let getHookRunDataForCucumberSpy, cucumberHookTypeSpy, cucumberHookUniqueIdSpy
     beforeEach(() => {
         insightsHandler = new InsightsHandler(browser, 'mocha')
-        sendHookRunEventSpy = vi.spyOn(insightsHandler, 'getHookRunDataForCucumber').mockImplementation(() => { return [] as any })
+        getHookRunDataForCucumberSpy = vi.spyOn(insightsHandler, 'getHookRunDataForCucumber').mockImplementation(() => { return [] as any })
         cucumberHookTypeSpy = vi.spyOn(insightsHandler, 'getCucumberHookType')
         cucumberHookTypeSpy.mockImplementation(() => { return 'hii' })
         cucumberHookUniqueIdSpy = vi.spyOn(insightsHandler, 'getCucumberHookUniqueId')
@@ -815,14 +823,14 @@ describe('processCucumberHook', function () {
     it('should not update if no hook type', function () {
         cucumberHookTypeSpy.mockReturnValue(null)
         insightsHandler['processCucumberHook'](undefined, { event: 'before' })
-        expect(sendHookRunEventSpy).toBeCalledTimes(0)
+        expect(getHookRunDataForCucumberSpy).toBeCalledTimes(0)
     })
 
     it ('should send data for before event', function () {
         cucumberHookTypeSpy.mockReturnValue('BEFORE_ALL')
         InsightsHandler['currentTest'].uuid = 'test_uuid'
         insightsHandler['processCucumberHook'](undefined, { event: 'before', hookUUID: 'hook_uuid' })
-        expect(sendHookRunEventSpy).toBeCalledWith(expect.objectContaining({
+        expect(getHookRunDataForCucumberSpy).toBeCalledWith(expect.objectContaining({
             uuid: 'hook_uuid',
             testRunId: 'test_uuid',
             hookType: 'BEFORE_ALL'
@@ -836,7 +844,7 @@ describe('processCucumberHook', function () {
         const resultObj = { passed: true }
         insightsHandler['_tests']['hook_unique_id'] = hookObj
         insightsHandler['processCucumberHook'](undefined, { event: 'after' }, resultObj as any)
-        expect(sendHookRunEventSpy).toBeCalledWith(hookObj, 'HookRunFinished', resultObj)
+        expect(getHookRunDataForCucumberSpy).toBeCalledWith(hookObj, 'HookRunFinished', resultObj)
     })
 })
 
@@ -845,13 +853,13 @@ describe('sendCBTInfo', () => {
         insightsHandler = new InsightsHandler(browser, 'framework')
     })
     it('should not call cbtSessionCreated', () => {
-        const cbtSessionCreatedSpy = vi.spyOn(insightsHandler['listener'], 'cbtSessionCreated').mockImplementation(() => { return [] as any })
+        const cbtSessionCreatedSpy = vi.spyOn(Listener.getInstance(), 'cbtSessionCreated').mockImplementation(() => { return [] as any })
         insightsHandler.sendCBTInfo()
         expect(cbtSessionCreatedSpy).toBeCalledTimes(0)
     })
     it('should call cbtSessionCreated', () => {
         insightsHandler.currentTestId = 'abc'
-        const cbtSessionCreatedSpy = vi.spyOn(insightsHandler['listener'], 'cbtSessionCreated').mockImplementation(() => { return [] as any })
+        const cbtSessionCreatedSpy = vi.spyOn(Listener.getInstance(), 'cbtSessionCreated').mockImplementation(() => { return [] as any })
         insightsHandler.sendCBTInfo()
         expect(cbtSessionCreatedSpy).toBeCalled()
     })
@@ -863,14 +871,14 @@ describe('flushCBTDataQueue', () => {
     })
     it('flushCBTDataQueue should not call cbtSessionCreated', () => {
         insightsHandler.cbtQueue = [{ uuid: 'abc', integrations: {} }]
-        const cbtSessionCreatedSpy = vi.spyOn(insightsHandler['listener'], 'cbtSessionCreated').mockImplementation(() => { return [] as any })
+        const cbtSessionCreatedSpy = vi.spyOn(Listener.getInstance(), 'cbtSessionCreated').mockImplementation(() => { return [] as any })
         insightsHandler.flushCBTDataQueue()
         expect(cbtSessionCreatedSpy).toBeCalledTimes(0)
     })
     it('flushCBTDataQueue should call cbtSessionCreated', () => {
         insightsHandler.currentTestId = 'abc'
         insightsHandler.cbtQueue = [{ uuid: 'abc', integrations: {} }]
-        const cbtSessionCreatedSpy = vi.spyOn(insightsHandler['listener'], 'cbtSessionCreated').mockImplementation(() => { return [] as any })
+        const cbtSessionCreatedSpy = vi.spyOn(Listener.getInstance(), 'cbtSessionCreated').mockImplementation(() => { return [] as any })
         insightsHandler.flushCBTDataQueue()
         expect(cbtSessionCreatedSpy).toBeCalled()
     })
@@ -1086,5 +1094,347 @@ describe('hasTestStepFailures and ignoreHooksStatus integration', () => {
 
         const testInsightsHandlerDefault = new InsightsHandler(browser, 'cucumber', {}, {})
         expect(testInsightsHandlerDefault['_options']?.testObservabilityOptions?.ignoreHooksStatus).toBeUndefined()
+    })
+})
+
+describe('ignoreHooksStatus comprehensive tests', () => {
+    it('should verify ignoreHooksStatus option is properly passed to InsightsHandler', () => {
+        // Test with ignoreHooksStatus enabled
+        const insightsHandlerEnabled = new InsightsHandler(browser, 'cucumber', {}, {
+            testObservabilityOptions: { ignoreHooksStatus: true }
+        })
+        expect(insightsHandlerEnabled['_options']?.testObservabilityOptions?.ignoreHooksStatus).toBe(true)
+
+        // Test with ignoreHooksStatus disabled
+        const insightsHandlerDisabled = new InsightsHandler(browser, 'cucumber', {}, {
+            testObservabilityOptions: { ignoreHooksStatus: false }
+        })
+        expect(insightsHandlerDisabled['_options']?.testObservabilityOptions?.ignoreHooksStatus).toBe(false)
+
+        // Test with no testObservabilityOptions (default behavior)
+        const insightsHandlerDefault = new InsightsHandler(browser, 'cucumber', {}, {})
+        expect(insightsHandlerDefault['_options']?.testObservabilityOptions?.ignoreHooksStatus).toBeUndefined()
+
+        // Test with empty testObservabilityOptions
+        const insightsHandlerEmpty = new InsightsHandler(browser, 'cucumber', {}, {
+            testObservabilityOptions: {}
+        })
+        expect(insightsHandlerEmpty['_options']?.testObservabilityOptions?.ignoreHooksStatus).toBeUndefined()
+    })
+
+    it('should test hasTestStepFailures method comprehensively for different step results', () => {
+        const insightsHandler = new InsightsHandler(browser, 'cucumber')
+
+        // Test world with no pickle
+        expect(insightsHandler.hasTestStepFailures(null)).toBe(false)
+
+        // Test world with pickle but no test data
+        const worldNoData = {
+            pickle: { name: 'Test scenario' }
+        } as any
+        expect(insightsHandler.hasTestStepFailures(worldNoData)).toBe(false)
+
+        // Test world with test data but no steps
+        const worldNoSteps = {
+            pickle: { name: 'Test scenario' }
+        } as any
+        const uniqueId = 'test-unique-id-no-steps'
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue(uniqueId)
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z'
+        }
+        expect(insightsHandler.hasTestStepFailures(worldNoSteps)).toBe(false)
+
+        // Test world with empty steps array
+        const worldEmptySteps = {
+            pickle: { name: 'Test scenario' }
+        } as any
+        const uniqueId2 = 'test-unique-id-empty-steps'
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue(uniqueId2)
+        insightsHandler['_tests'][uniqueId2] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: []
+        }
+        expect(insightsHandler.hasTestStepFailures(worldEmptySteps)).toBe(false)
+
+        // Test world with all passed steps
+        const worldPassedSteps = {
+            pickle: { name: 'Test scenario' }
+        } as any
+        const uniqueId3 = 'test-unique-id-passed-steps'
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue(uniqueId3)
+        insightsHandler['_tests'][uniqueId3] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: 'PASSED' },
+                { id: 'step2', text: 'Step 2', result: 'PASSED' },
+                { id: 'step3', text: 'Step 3', result: 'SKIPPED' }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(worldPassedSteps)).toBe(false)
+
+        // Test world with one failed step
+        const worldFailedStep = {
+            pickle: { name: 'Test scenario' }
+        } as any
+        const uniqueId4 = 'test-unique-id-failed-step'
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue(uniqueId4)
+        insightsHandler['_tests'][uniqueId4] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: 'PASSED' },
+                { id: 'step2', text: 'Step 2', result: 'FAILED' },
+                { id: 'step3', text: 'Step 3', result: 'PASSED' }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(worldFailedStep)).toBe(true)
+
+        // Test world with multiple failed steps
+        const worldMultipleFailures = {
+            pickle: { name: 'Test scenario' }
+        } as any
+        const uniqueId5 = 'test-unique-id-multiple-failures'
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue(uniqueId5)
+        insightsHandler['_tests'][uniqueId5] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: 'FAILED' },
+                { id: 'step2', text: 'Step 2', result: 'PASSED' },
+                { id: 'step3', text: 'Step 3', result: 'FAILED' }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(worldMultipleFailures)).toBe(true)
+
+        // Test world with mixed results including failure
+        const worldMixedWithFailure = {
+            pickle: { name: 'Test scenario' }
+        } as any
+        const uniqueId6 = 'test-unique-id-mixed-with-failure'
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue(uniqueId6)
+        insightsHandler['_tests'][uniqueId6] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: 'PASSED' },
+                { id: 'step2', text: 'Step 2', result: 'SKIPPED' },
+                { id: 'step3', text: 'Step 3', result: 'FAILED' },
+                { id: 'step4', text: 'Step 4', result: 'PASSED' }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(worldMixedWithFailure)).toBe(true)
+    })
+
+    it('should verify that ignoreHooksStatus logic is implemented in the correct location', () => {
+        // This test verifies that the ignoreHooksStatus logic exists and is accessible
+        // We can test this by checking if the method exists and works correctly
+
+        const insightsHandler = new InsightsHandler(browser, 'cucumber', {}, {
+            testObservabilityOptions: { ignoreHooksStatus: true }
+        })
+
+        // Verify hasTestStepFailures method exists and works
+        expect(typeof insightsHandler.hasTestStepFailures).toBe('function')
+
+        // Verify the configuration is stored correctly
+        expect(insightsHandler['_options']?.testObservabilityOptions?.ignoreHooksStatus).toBe(true)
+
+        // Test the logic with a simple case
+        const world = {
+            pickle: { name: 'Test scenario' }
+        } as any
+
+        // Mock the scenario where no test data exists (should return false)
+        expect(insightsHandler.hasTestStepFailures(world)).toBe(false)
+
+        // Mock the scenario where test data exists with no failed steps
+        const uniqueId = 'test-unique-id'
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue(uniqueId)
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: 'PASSED' }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(world)).toBe(false)
+
+        // Mock the scenario where test data exists with failed steps
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: 'FAILED' }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(world)).toBe(true)
+    })
+
+    it('should verify edge cases and error handling for hasTestStepFailures', () => {
+        const insightsHandler = new InsightsHandler(browser, 'cucumber')
+
+        // Test with null/undefined world
+        expect(insightsHandler.hasTestStepFailures(null as any)).toBe(false)
+        expect(insightsHandler.hasTestStepFailures(undefined as any)).toBe(false)
+
+        // Test with world that has no pickle
+        const worldNoPickle = {} as any
+        expect(insightsHandler.hasTestStepFailures(worldNoPickle)).toBe(false)
+
+        // Test with world that has empty pickle
+        const worldEmptyPickle = {
+            pickle: {}
+        } as any
+        expect(insightsHandler.hasTestStepFailures(worldEmptyPickle)).toBe(false)
+
+        // Test with world that has pickle with null name
+        const worldNullName = {
+            pickle: { name: null }
+        } as any
+        expect(insightsHandler.hasTestStepFailures(worldNullName)).toBe(false)
+
+        // Test with valid world but test data has undefined steps
+        const worldValidWithUndefinedSteps = {
+            pickle: { name: 'Test scenario' }
+        } as any
+        const uniqueId = 'test-unique-id-undefined-steps'
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue(uniqueId)
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: undefined
+        }
+        expect(insightsHandler.hasTestStepFailures(worldValidWithUndefinedSteps)).toBe(false)
+
+        // Test with valid world but test data has null steps (as any to bypass TypeScript)
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: null as any
+        }
+        expect(insightsHandler.hasTestStepFailures(worldValidWithUndefinedSteps)).toBe(false)
+    })
+
+    it('should verify feature flag configuration with different option combinations', () => {
+        // Test various combinations of configuration options
+
+        // Test with only ignoreHooksStatus set to true
+        const handler1 = new InsightsHandler(browser, 'cucumber', {}, {
+            testObservabilityOptions: { ignoreHooksStatus: true }
+        })
+        expect(handler1['_options']?.testObservabilityOptions?.ignoreHooksStatus).toBe(true)
+
+        // Test with ignoreHooksStatus set to false and other options
+        const handler2 = new InsightsHandler(browser, 'cucumber', {}, {
+            testObservabilityOptions: {
+                ignoreHooksStatus: false,
+                projectName: 'Test Project',
+                buildName: 'Test Build'
+            }
+        })
+        expect(handler2['_options']?.testObservabilityOptions?.ignoreHooksStatus).toBe(false)
+        expect(handler2['_options']?.testObservabilityOptions?.projectName).toBe('Test Project')
+
+        // Test with no testObservabilityOptions at all
+        const handler3 = new InsightsHandler(browser, 'cucumber', {}, {})
+        expect(handler3['_options']?.testObservabilityOptions).toBeUndefined()
+
+        // Test with empty options object
+        const handler4 = new InsightsHandler(browser, 'cucumber', {}, undefined)
+        expect(handler4['_options']).toBeUndefined()
+
+        // Test with null options (using any to bypass TypeScript)
+        const handler5 = new InsightsHandler(browser, 'cucumber', {}, null as any)
+        expect(handler5['_options']).toBeNull()
+    })
+
+    it('should test step result matching logic comprehensively', () => {
+        const insightsHandler = new InsightsHandler(browser, 'cucumber')
+        const uniqueId = 'test-step-results'
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue(uniqueId)
+
+        const world = {
+            pickle: { name: 'Test scenario' }
+        } as any
+
+        // Test with all possible step results that should be considered passed/skipped
+        const passedResults = ['PASSED', 'SKIPPED', 'PENDING', 'UNDEFINED', 'AMBIGUOUS']
+        for (const result of passedResults) {
+            insightsHandler['_tests'][uniqueId] = {
+                uuid: 'test-uuid',
+                startedAt: '2020-01-01T00:00:00.000Z',
+                steps: [
+                    { id: 'step1', text: 'Step 1', result: result }
+                ]
+            }
+            expect(insightsHandler.hasTestStepFailures(world)).toBe(false)
+        }
+
+        // Test with failed result
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: 'FAILED' }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(world)).toBe(true)
+
+        // Test with mixed results where at least one is failed
+        const mixedResults = ['PASSED', 'SKIPPED', 'FAILED', 'PENDING']
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: mixedResults.map((result, index) => ({
+                id: `step${index + 1}`,
+                text: `Step ${index + 1}`,
+                result: result
+            }))
+        }
+        expect(insightsHandler.hasTestStepFailures(world)).toBe(true)
+
+        // Test with unknown/custom result status (should be treated as not failed)
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: 'CUSTOM_STATUS' }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(world)).toBe(false)
+
+        // Test with empty string result
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: '' }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(world)).toBe(false)
+
+        // Test with null result (using any to bypass TypeScript)
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: null as any }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(world)).toBe(false)
+
+        // Test with undefined result
+        insightsHandler['_tests'][uniqueId] = {
+            uuid: 'test-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            steps: [
+                { id: 'step1', text: 'Step 1', result: undefined }
+            ]
+        }
+        expect(insightsHandler.hasTestStepFailures(world)).toBe(false)
     })
 })

@@ -27,60 +27,6 @@ describe('TrackedContext', () => {
         })
     })
 
-    describe('getId', () => {
-        it('should return the correct id', () => {
-            expect(trackedContext.getId()).toBe(mockId)
-        })
-
-        it('should return different ids for different instances', () => {
-            const context1 = new TrackedContext('id-1', 111, 222, 'type-1')
-            const context2 = new TrackedContext('id-2', 111, 222, 'type-1')
-
-            expect(context1.getId()).toBe('id-1')
-            expect(context2.getId()).toBe('id-2')
-            expect(context1.getId()).not.toBe(context2.getId())
-        })
-    })
-
-    describe('getThreadId', () => {
-        it('should return the correct thread id', () => {
-            expect(trackedContext.getThreadId()).toBe(mockThreadId)
-        })
-
-        it('should handle zero and negative thread ids', () => {
-            const context1 = new TrackedContext('id', 0, 222, 'type')
-            const context2 = new TrackedContext('id', -1, 222, 'type')
-
-            expect(context1.getThreadId()).toBe(0)
-            expect(context2.getThreadId()).toBe(-1)
-        })
-    })
-
-    describe('getProcessId', () => {
-        it('should return the correct process id', () => {
-            expect(trackedContext.getProcessId()).toBe(mockProcessId)
-        })
-
-        it('should handle zero and negative process ids', () => {
-            const context1 = new TrackedContext('id', 111, 0, 'type')
-            const context2 = new TrackedContext('id', 111, -1, 'type')
-
-            expect(context1.getProcessId()).toBe(0)
-            expect(context2.getProcessId()).toBe(-1)
-        })
-    })
-
-    describe('getType', () => {
-        it('should return the correct type', () => {
-            expect(trackedContext.getType()).toBe(mockType)
-        })
-
-        it('should handle empty string type', () => {
-            const context = new TrackedContext('id', 111, 222, '')
-            expect(context.getType()).toBe('')
-        })
-    })
-
     describe('property immutability', () => {
         it('should not allow external modification of private properties', () => {
             // Verify that private properties are not directly accessible

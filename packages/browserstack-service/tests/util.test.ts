@@ -1,7 +1,8 @@
 import path from 'node:path'
 import type { LaunchResponse } from '../src/types.js'
 
-import { describe, expect, it, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach, beforeAll } from 'vitest'
+import got from 'got'
 import gitRepoInfo from 'git-repo-info'
 import CrashReporter from '../src/crash-reporter.js'
 import logger from '@wdio/logger'
@@ -52,99 +53,88 @@ import {
     _getParamsForAppAccessibility,
     performA11yScan,
     getAppA11yResults,
-    isMultiRemoteCaps,
-    getTestPlanId,
+    getAppA11yResultsSummary,
+    mergeDeep,
+    mergeChromeOptions,
+    isMultiRemoteCaps
 } from '../src/util.js'
 import * as bstackLogger from '../src/bstackLogger.js'
-import PerformanceTester from '../src/instrumentation/performance/performance-tester.js'
-import * as PERFORMANCE_SDK_EVENTS from '../src/instrumentation/performance/constants.js'
-import { BROWSERSTACK_OBSERVABILITY, TESTOPS_BUILD_COMPLETED_ENV, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_ACCESSIBILITY, BROWSERSTACK_TEST_PLAN_ID } from '../src/constants.js'
+import { BROWSERSTACK_OBSERVABILITY, TESTOPS_BUILD_COMPLETED_ENV, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_ACCESSIBILITY } from '../src/constants.js'
 import * as testHubUtils from '../src/testHub/utils.js'
-import * as fs from 'node:fs/promises'
-import * as os from 'node:os'
 import type { Options } from '@wdio/types'
 
 const log = logger('test')
 
-vi.mock('fetch')
+vi.mock('got')
 vi.mock('git-repo-info')
-// Fake only Date (not `performance`): these tests need a deterministic system
-// clock but never advance timers. Faking `performance` too makes performance.now()
-// negative under the 2020 system time, which Node 18's perf_hooks rejects with
-// ERR_PERFORMANCE_INVALID_TIMESTAMP (Node 20+ tolerates it). Mirrors reporter.test.ts.
-vi.useFakeTimers({ toFake: ['Date'] }).setSystemTime(new Date('2020-01-01'))
+vi.useFakeTimers().setSystemTime(new Date('2020-01-01'))
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
-
-// Mock testHub utilities
-vi.mock('../src/testHub/utils.js', () => ({
-    handleErrorForObservability: vi.fn(),
-    handleErrorForAccessibility: vi.fn(),
-    logBuildError: vi.fn(),
-    getProductMapForBuildStartCall: vi.fn(),
-    getProductMap: vi.fn(),
-    shouldProcessEventForTesthub: vi.fn()
-}))
 
 vi.mock('fs', () => ({
     default: {
-        createReadStream: vi.fn().mockImplementation(() => {return { pipe: vi.fn().mockReturnThis() }}),
-        createWriteStream: vi.fn().mockReturnValue({ pipe: vi.fn() }),
+        createReadStream: vi.fn().mockReturnValue({
+            pipe: vi.fn().mockReturnValue({
+                pipe: vi.fn().mockReturnValue({
+                    on: vi.fn((event, callback) => {
+                        if (event === 'finish') {
+                            process.nextTick(callback)
+                        }
+                        return this
+                    })
+                })
+            })
+        }),
+        createWriteStream: vi.fn().mockReturnValue({
+            pipe: vi.fn(),
+            on: vi.fn((event, callback) => {
+                if (event === 'finish') {
+                    process.nextTick(callback)
+                }
+                return this
+            })
+        }),
         stat: vi.fn().mockReturnValue(Promise.resolve({ size: 123 })),
-        existsSync: vi.fn(),
+        existsSync: vi.fn().mockReturnValue(true),
         mkdirSync: vi.fn(),
         writeFileSync: vi.fn(),
+        copyFileSync: vi.fn(),
+        unlinkSync: vi.fn()
+    }
+}))
+
+vi.mock('tar', () => ({
+    default: {
+        create: vi.fn().mockResolvedValue(undefined)
+    }
+}))
+
+vi.mock('formdata-node/file-from-path', () => ({
+    fileFromPath: vi.fn().mockResolvedValue({
+        name: 'logs.tar.gz',
+        type: 'application/gzip',
+        size: 123
+    })
+}))
+
+vi.mock('zlib', () => ({
+    default: {
+        createGzip: vi.fn().mockReturnValue({
+            pipe: vi.fn().mockReturnValue({
+                on: vi.fn((event, callback) => {
+                    if (event === 'finish') {
+                        process.nextTick(callback)
+                    }
+                    return this
+                })
+            })
+        })
     }
 }))
 
 vi.mock('./fileStream')
 
-// Mock AccessibilityScripts completely to avoid readonly property issues
-vi.mock('./scripts/accessibility-scripts', () => ({
-    default: {
-        checkAndGetInstance: vi.fn(() => ({
-            performScan: null,
-            getResults: null,
-            getResultsSummary: null,
-            saveTestResults: null,
-            commandsToWrap: null,
-            ChromeExtension: {},
-            browserstackFolderPath: '',
-            commandsPath: '',
-            update: vi.fn(),
-            store: vi.fn(),
-            readFromExistingFile: vi.fn(),
-            getWritableDir: vi.fn(() => '/tmp')
-        })),
-        update: vi.fn(),
-        store: vi.fn(),
-        performScan: null,
-        getResults: null,
-        getResultsSummary: null,
-        saveTestResults: null
-    }
-}))
-
-vi.mock('fs', async (importOriginal) => {
-    const actual = await importOriginal()
-    return {
-        ...actual,
-        promises: {
-            readFile: vi.fn().mockImplementation((path) =>
-                fs.readFile(path))
-        }
-    }
-})
-
 const bstackLoggerSpy = vi.spyOn(bstackLogger.BStackLogger, 'logToFile')
 bstackLoggerSpy.mockImplementation(() => {})
-
-function assertMethodCalls(mock: { mock: { calls: any[] } }, expectedMethod: any, expectedCallCount: any) {
-    const matchingCalls = mock.mock.calls.filter(
-        ([, options]) => options.method === expectedMethod
-    )
-
-    expect(matchingCalls.length).toBe(expectedCallCount)
-}
 
 describe('getBrowserCapabilities', () => {
     it('should get default browser capabilities', () => {
@@ -166,7 +156,7 @@ describe('getBrowserCapabilities', () => {
                     browser: 'browser'
                 }
             }
-        } as unknown as WebdriverIO.MultiRemoteBrowser
+        } as any as WebdriverIO.MultiRemoteBrowser
         expect(getBrowserCapabilities(browser, {}, 'browserA'))
             .toEqual(browser.browserA.capabilities as any)
     })
@@ -176,7 +166,7 @@ describe('getBrowserCapabilities', () => {
             isMultiremote: true,
             getInstance: vi.fn().mockImplementation((browserName: string) => browser[browserName]),
             browserA: {}
-        } as unknown as WebdriverIO.MultiRemoteBrowser
+        } as any as WebdriverIO.MultiRemoteBrowser
         expect(getBrowserCapabilities(browser, {}, 'browserB')).toEqual({})
     })
 
@@ -186,7 +176,7 @@ describe('getBrowserCapabilities', () => {
                 browser: 'browser',
                 os: 'OS X',
             }
-        } as unknown as WebdriverIO.Browser
+        } as any as WebdriverIO.Browser
         expect(getBrowserCapabilities(browser, { os: 'Windows' }))
             .toEqual({ os:'Windows', browser: 'browser' } as any)
     })
@@ -201,7 +191,7 @@ describe('getBrowserCapabilities', () => {
                     os: 'OS X',
                 }
             }
-        } as unknown as WebdriverIO.MultiRemoteBrowser
+        } as any as WebdriverIO.MultiRemoteBrowser
         expect(getBrowserCapabilities(browser, {
             browserA: { capabilities: { os: 'Windows' } } }, 'browserA'))
             .toEqual({ os:'Windows', browser: 'browser' } as any)
@@ -212,7 +202,7 @@ describe('getBrowserCapabilities', () => {
             isMultiremote: true,
             getInstance: vi.fn().mockImplementation((browserName: string) => browser[browserName]),
             browserA: {}
-        } as unknown as WebdriverIO.MultiRemoteBrowser
+        } as any as WebdriverIO.MultiRemoteBrowser
         expect(getBrowserCapabilities(browser, {}, 'browserB'))
             .toEqual({})
     })
@@ -222,7 +212,7 @@ describe('getBrowserCapabilities', () => {
             isMultiremote: true,
             getInstance: vi.fn().mockImplementation((browserName: string) => browser[browserName]),
             browserA: {}
-        } as unknown as WebdriverIO.MultiRemoteBrowser
+        } as any as WebdriverIO.MultiRemoteBrowser
         expect(getBrowserCapabilities(browser, { browserB: {} } as any, 'browserB'))
             .toEqual({})
     })
@@ -281,99 +271,6 @@ describe('isBrowserstackCapability', () => {
 
     it('should detect browserstack W3C capabilities', () => {
         expect(isBrowserstackCapability({ 'bstack:options': { os: 'some os' } })).toBe(true)
-    })
-})
-
-describe('isMultiRemoteCaps', () => {
-    it('should return true for regular multiremote capabilities (object)', () => {
-        const multiremoteCaps = {
-            browserA: {
-                capabilities: {
-                    browserName: 'chrome'
-                }
-            },
-            browserB: {
-                capabilities: {
-                    browserName: 'firefox'
-                }
-            }
-        }
-        expect(isMultiRemoteCaps(multiremoteCaps as any)).toBe(true)
-    })
-
-    it('should return true for parallel multiremote capabilities (array with nested structure)', () => {
-        const parallelMultiremoteCaps = [
-            {
-                browserA: {
-                    capabilities: {
-                        browserName: 'chrome'
-                    }
-                },
-                browserB: {
-                    capabilities: {
-                        browserName: 'firefox'
-                    }
-                }
-            }
-        ]
-        expect(isMultiRemoteCaps(parallelMultiremoteCaps as any)).toBe(true)
-    })
-
-    it('should return false for regular capabilities array', () => {
-        const regularCaps = [
-            {
-                browserName: 'chrome',
-                'bstack:options': {
-                    os: 'Windows'
-                }
-            }
-        ]
-        expect(isMultiRemoteCaps(regularCaps as any)).toBe(false)
-    })
-
-    it('should return true for empty array', () => {
-        expect(isMultiRemoteCaps([] as any)).toBe(false)
-    })
-
-    it('should return false for array with mixed structure', () => {
-        const mixedCaps = [
-            {
-                browserA: {
-                    capabilities: {
-                        browserName: 'chrome'
-                    }
-                }
-            },
-            {
-                browserName: 'firefox' // This is not multiremote structure
-            }
-        ]
-        expect(isMultiRemoteCaps(mixedCaps as any)).toBe(false)
-    })
-
-    it('should return false for array with empty objects', () => {
-        const emptyCaps = [{}]
-        expect(isMultiRemoteCaps(emptyCaps as any)).toBe(false)
-    })
-
-    it('should handle array with objects containing non-capabilities properties', () => {
-        const invalidCaps = [
-            {
-                browserA: {
-                    somethingElse: 'value' // Missing capabilities property
-                }
-            }
-        ]
-        expect(isMultiRemoteCaps(invalidCaps as any)).toBe(false)
-    })
-
-    it('should return false for array with null values in nested structure', () => {
-        const capsWithNull = [
-            {
-                browserA: null
-            }
-        ]
-        expect(isMultiRemoteCaps(capsWithNull as any)).toBe(false)
     })
 })
 
@@ -485,7 +382,6 @@ describe('getCiInfo', () => {
             process.env.bamboo_buildNumber = '123'
             expect(getCiInfo()).toBeInstanceOf(Object)
             delete process.env.APviwPVEYOR
-            delete process.env.bamboo_buildNumber
         })
 
         it('should return object if any CI being used - Wercker', () => {
@@ -549,7 +445,7 @@ describe('getCiInfo', () => {
     })
 
     it('should return null if no CI being used', () => {
-        expect(getCiInfo()).toBeNull()
+        expect(getCiInfo()).toBeNull
     })
 })
 
@@ -832,6 +728,8 @@ describe('getScenarioExamples', () => {
 })
 
 describe('stopBuildUpstream', () => {
+    const mockedGot = vi.mocked(got)
+
     it('return error if completed but jwt token not present', async () => {
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         delete process.env[BROWSERSTACK_TESTHUB_JWT]
@@ -847,10 +745,12 @@ describe('stopBuildUpstream', () => {
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
 
-        vi.mocked(fetch).mockReturnValueOnce(Promise.resolve(Response.json({})))
+        mockedGot.put = vi.fn().mockReturnValue({
+            json: () => Promise.resolve({}),
+        } as any)
 
         const result: any = await stopBuildUpstream()
-        expect(vi.mocked(fetch).mock.calls[0][1]?.method).toEqual('PUT')
+        expect(got.put).toHaveBeenCalled()
         expect(result.status).toEqual('success')
     })
 
@@ -858,84 +758,39 @@ describe('stopBuildUpstream', () => {
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
 
-        vi.mocked(fetch).mockReturnValueOnce(Promise.reject(Response.json({})))
+        mockedGot.put = vi.fn().mockReturnValue({
+            json: () => Promise.reject({}),
+        } as any)
 
         const result: any = await stopBuildUpstream()
-        expect(vi.mocked(fetch).mock.calls[0][1]?.method).toEqual('PUT')
+        expect(got.put).toHaveBeenCalled()
         expect(result.status).toEqual('error')
     })
 
     afterEach(() => {
-        vi.mocked(fetch).mockClear()
+        (got.put as vi.Mock).mockClear()
     })
 })
 
 describe('launchTestSession', () => {
+    const mockedGot = vi.mocked(got)
     vi.mocked(gitRepoInfo).mockReturnValue({} as any)
-    vi.spyOn(testHubUtils, 'getProductMap').mockReturnValue({} as any)
+    vi.spyOn(testHubUtils, 'getProductMapForBuildStartCall').mockReturnValue({
+        key1: false,
+        key2: true
+    })
 
-    it('returns launch response when build is started successfully', async () => {
+    it('return undefined if completed', async () => {
         const mockResponse = { build_hashed_id: 'build_id', jwt: 'jwt' }
-        const fetchMock = vi.fn().mockResolvedValue({
-            json: vi.fn().mockResolvedValue(mockResponse)
-        })
-        vi.mocked(fetch).mockImplementation(fetchMock)
+        mockedGot.post = vi.fn().mockReturnValue({
+            json: () => Promise.resolve(mockResponse),
+        } as any)
 
-        vi.spyOn(testHubUtils, 'getProductMapForBuildStartCall').mockReturnValue({
-            key1: false,
-            key2: true
-        })
-
-        const result: any = await launchTestSession({ framework: 'framework' } as any, {}, {}, {})
-        expect(fetchMock).toHaveBeenCalledTimes(1)
-        const [url, options] = fetchMock.mock.calls[0]
-        expect(options.method).toBe('POST')
+        const result: any = await launchTestSession( { framework: 'framework' } as any, { }, {}, {})
+        expect(got.post).toBeCalledTimes(1)
         expect(result).toEqual(mockResponse)
     })
 
-    it('includes test_management with testPlanId from options in build start payload', async () => {
-        const mockResponse = { build_hashed_id: 'build_id', jwt: 'jwt' }
-        const fetchMock = vi.fn().mockResolvedValue({
-            json: vi.fn().mockResolvedValue(mockResponse)
-        })
-        vi.mocked(fetch).mockImplementation(fetchMock)
-        vi.spyOn(testHubUtils, 'getProductMapForBuildStartCall').mockReturnValue({})
-
-        await launchTestSession({ framework: 'framework', testManagementOptions: { testPlanId: 'tp-123' } } as any, {}, {}, {})
-        const [, reqOptions] = fetchMock.mock.calls[0]
-        const body = JSON.parse(reqOptions.body)
-        expect(body.test_management).toEqual({ test_plan_id: 'tp-123' })
-    })
-
-    it('includes test_management with testPlanId from env var in build start payload', async () => {
-        process.env[BROWSERSTACK_TEST_PLAN_ID] = 'tp-env-456'
-        const mockResponse = { build_hashed_id: 'build_id', jwt: 'jwt' }
-        const fetchMock = vi.fn().mockResolvedValue({
-            json: vi.fn().mockResolvedValue(mockResponse)
-        })
-        vi.mocked(fetch).mockImplementation(fetchMock)
-        vi.spyOn(testHubUtils, 'getProductMapForBuildStartCall').mockReturnValue({})
-
-        await launchTestSession({ framework: 'framework' } as any, {}, {}, {})
-        const [, reqOptions] = fetchMock.mock.calls[0]
-        const body = JSON.parse(reqOptions.body)
-        expect(body.test_management).toEqual({ test_plan_id: 'tp-env-456' })
-        delete process.env[BROWSERSTACK_TEST_PLAN_ID]
-    })
-
-    it('includes test_management with undefined testPlanId when not set', async () => {
-        const mockResponse = { build_hashed_id: 'build_id', jwt: 'jwt' }
-        const fetchMock = vi.fn().mockResolvedValue({
-            json: vi.fn().mockResolvedValue(mockResponse)
-        })
-        vi.mocked(fetch).mockImplementation(fetchMock)
-        vi.spyOn(testHubUtils, 'getProductMapForBuildStartCall').mockReturnValue({})
-
-        await launchTestSession({ framework: 'framework' } as any, {}, {}, {})
-        const [, reqOptions] = fetchMock.mock.calls[0]
-        const body = JSON.parse(reqOptions.body)
-        expect(body.test_management).toEqual({ test_plan_id: undefined })
-    })
 })
 
 describe('getLogTag', () => {
@@ -1099,62 +954,6 @@ describe('getObservabilityBuildTags', () => {
     it('get empty array', () => {
         delete process.env.TEST_OBSERVABILITY_BUILD_TAG
         expect(getObservabilityBuildTags({})).toEqual([])
-    })
-})
-
-describe('getTestPlanId', () => {
-    const CLI_ARG = '--browserstack.testManagementOptions.testPlanId'
-
-    afterEach(() => {
-        delete process.env[BROWSERSTACK_TEST_PLAN_ID]
-        // restore argv to original state
-        process.argv = process.argv.filter((arg) => !arg.startsWith(CLI_ARG))
-    })
-
-    it('returns testPlanId from env var', () => {
-        process.env[BROWSERSTACK_TEST_PLAN_ID] = 'tp-env-123'
-        expect(getTestPlanId({} as any)).toEqual('tp-env-123')
-    })
-
-    it('env var takes priority over CLI arg and options', () => {
-        process.env[BROWSERSTACK_TEST_PLAN_ID] = 'tp-env-123'
-        process.argv.push(CLI_ARG, 'tp-cli-789')
-        expect(getTestPlanId({ testManagementOptions: { testPlanId: 'tp-opts-456' } } as any)).toEqual('tp-env-123')
-    })
-
-    it('returns testPlanId from CLI arg (space-separated)', () => {
-        process.argv.push(CLI_ARG, 'tp-cli-789')
-        expect(getTestPlanId({} as any)).toEqual('tp-cli-789')
-    })
-
-    it('returns testPlanId from CLI arg (equals-separated)', () => {
-        process.argv.push(`${CLI_ARG}=tp-cli-equals`)
-        expect(getTestPlanId({} as any)).toEqual('tp-cli-equals')
-    })
-
-    it('CLI arg takes priority over options', () => {
-        process.argv.push(CLI_ARG, 'tp-cli-789')
-        expect(getTestPlanId({ testManagementOptions: { testPlanId: 'tp-opts-456' } } as any)).toEqual('tp-cli-789')
-    })
-
-    it('returns testPlanId from testManagementOptions when env var and CLI arg are not set', () => {
-        expect(getTestPlanId({ testManagementOptions: { testPlanId: 'tp-opts-456' } } as any)).toEqual('tp-opts-456')
-    })
-
-    it('trims whitespace from testManagementOptions testPlanId', () => {
-        expect(getTestPlanId({ testManagementOptions: { testPlanId: '  tp-opts-456  ' } } as any)).toEqual('tp-opts-456')
-    })
-
-    it('returns undefined when testPlanId is empty string', () => {
-        expect(getTestPlanId({ testManagementOptions: { testPlanId: '   ' } } as any)).toBeUndefined()
-    })
-
-    it('returns undefined when testManagementOptions is not set', () => {
-        expect(getTestPlanId({} as any)).toBeUndefined()
-    })
-
-    it('returns undefined when testManagementOptions.testPlanId is not a string', () => {
-        expect(getTestPlanId({ testManagementOptions: { testPlanId: 123 } } as any)).toBeUndefined()
     })
 })
 
@@ -1418,7 +1217,7 @@ describe('getA11yResults', () => {
         execute: vi.fn(),
         executeAsync: vi.fn(),
         on: vi.fn(),
-    } as unknown as WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
+    } as any as WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
 
     it('return success object if ally token defined and no error in response data', async () => {
         vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(false)
@@ -1426,17 +1225,13 @@ describe('getA11yResults', () => {
         expect(result).toEqual([])
     })
 
-    it('should call executeAccessibilityScript if bstack and accessibility session are enabled', async () => {
+    it('return results object if bstack as well as accessibility session', async () => {
         process.env.BSTACK_A11Y_JWT = 'abc'
+
         vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
-        const executeAccessibilityScriptSpy = vi
-            .spyOn(utils, 'executeAccessibilityScript')
-            .mockResolvedValue(undefined)
-        vi.spyOn(AccessibilityScripts, 'getResults', 'get').mockReturnValue('mocked_results_script')
-        const results = await utils.getA11yResults(false, browser as WebdriverIO.Browser, true, true)
-        expect(results).toEqual(undefined)
-        executeAccessibilityScriptSpy.mockRestore()
+        await utils.getA11yResults(false, browser as WebdriverIO.Browser, true, true)
         delete process.env.BSTACK_A11Y_JWT
+        expect(browser.executeAsync).toBeCalledTimes(2)
     })
 })
 
@@ -1466,7 +1261,7 @@ describe('getA11yResultsSummary', () => {
         execute: vi.fn(),
         executeAsync: vi.fn(),
         on: vi.fn(),
-    } as unknown as WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
+    } as any as WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
 
     it('return success object if ally token defined and no error in response data', async () => {
         vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(false)
@@ -1474,16 +1269,17 @@ describe('getA11yResultsSummary', () => {
         expect(result).toEqual({})
     })
 
-    it('returns results object for an accessibility session', async () => {
+    it('return results object if bstack as well as accessibility session', async () => {
         process.env.BSTACK_A11Y_JWT = 'abc'
-        AccessibilityScripts.getResultsSummary = 'mockScript'
+
         vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
-        const mockExecuteAccessibilityScript = vi
-            .spyOn(utils, 'executeAccessibilityScript')
-            .mockResolvedValue({ })
-        const result = await utils.getA11yResultsSummary(false, {} as WebdriverIO.Browser, true, true)
+        browser.executeAsync = vi.fn()
+            .mockResolvedValueOnce({ total: 5, critical: 2 })  // First call result
+            .mockResolvedValueOnce({ summary: { total: 5, critical: 2 } })  // Second call result
+
+        await utils.getA11yResultsSummary(false, browser as WebdriverIO.Browser, true, true)
         delete process.env.BSTACK_A11Y_JWT
-        expect(result).toEqual({ })
+        expect(browser.executeAsync).toBeCalledTimes(2)
     })
 })
 
@@ -1502,10 +1298,6 @@ describe('isTrue', () => {
 })
 
 describe('getBrowserStackUser', function () {
-    afterEach(() => {
-        delete process.env.BROWSERSTACK_USERNAME
-    })
-
     it('should return userName from config if not present as env variable', function () {
         expect(utils.getBrowserStackUser({
             user: 'config_user_name',
@@ -1526,10 +1318,6 @@ describe('getBrowserStackUser', function () {
 })
 
 describe('getBrowserStackKey', function () {
-    afterEach(() => {
-        delete process.env.BROWSERSTACK_ACCESS_KEY
-    })
-
     it('should return accessKey from config if not present as env variable', function () {
         expect(utils.getBrowserStackKey({
             user: 'config_user_name',
@@ -1567,113 +1355,24 @@ describe('frameworkSupportsHook', function () {
 })
 
 describe('uploadLogs', function () {
-    let tempLogFile: string
-    let originalLogFilePath: string
-    let endSpy: ReturnType<typeof vi.spyOn>
-
+    let mockedGot: any
     beforeAll(() => {
-        tempLogFile = path.join(os.tmpdir(), 'test-logs.txt')
-        // Store original log file path
-        originalLogFilePath = bstackLogger.BStackLogger.logFilePath
-        bstackLogger.BStackLogger.logFilePath = tempLogFile
+        mockedGot = vi.mocked(got).mockImplementation(() => ({
+            json: () => Promise.resolve({ status: 'success', message: 'Logs uploaded Successfully' }),
+        } as any))
     })
-
-    beforeEach(async () => {
-        // uploadLogs's cleanup unlinks the copied file from tmpdir; that path
-        // is the same as tempLogFile, so re-create it before every test.
-        await fs.writeFile(tempLogFile, 'mock log content')
-        vi.mocked(fetch).mockClear()
-        vi.mocked(fetch).mockResolvedValue(Response.json({ status: 'success', message: 'Logs uploaded Successfully' }))
-        endSpy = vi.spyOn(PerformanceTester, 'end')
-    })
-
-    afterEach(() => {
-        endSpy.mockRestore()
-    })
-
     it('should return if user is undefined', async function () {
         await uploadLogs(undefined, 'some_key', 'some_uuid')
-        expect(fetch).not.toHaveBeenCalled()
-        expect(endSpy).toHaveBeenCalledWith(
-            PERFORMANCE_SDK_EVENTS.EVENTS.SDK_UPLOAD_LOGS,
-            false,
-            'skipped: missing_credentials'
-        )
+        expect(mockedGot).not.toHaveBeenCalled()
+        vi.mocked(got).mockClear()
     })
-
     it('should return if key is undefined', async function () {
         await uploadLogs('some_user', undefined, 'some_uuid')
-        expect(fetch).not.toHaveBeenCalled()
-        expect(endSpy).toHaveBeenCalledWith(
-            PERFORMANCE_SDK_EVENTS.EVENTS.SDK_UPLOAD_LOGS,
-            false,
-            'skipped: missing_credentials'
-        )
+        expect(mockedGot).not.toHaveBeenCalled()
+        vi.mocked(got).mockClear()
     })
-
     it('should upload the logs', async function () {
-        await uploadLogs('some_user', 'some_key', 'some_uuid')
-        expect(fetch).toHaveBeenCalled()
-        expect(endSpy).toHaveBeenCalledWith(
-            PERFORMANCE_SDK_EVENTS.EVENTS.SDK_UPLOAD_LOGS,
-            true,
-            undefined
-        )
-    })
-
-    it('should send FormData with a Blob (native, not formdata-node)', async function () {
-        await uploadLogs('some_user', 'some_key', 'some_uuid')
-        expect(fetch).toHaveBeenCalled()
-        // The body passed to fetch should be a FormData with a `data` field containing
-        // a Blob/File so undici (native fetch) recognizes it as a file part. Sending
-        // formdata-node's FormData here causes undici to serialize the file as a
-        // string field and the server returns "File not attached".
-        const fetchCall = vi.mocked(fetch).mock.calls[0]
-        const opts: any = fetchCall[1]
-        expect(opts.body).toBeInstanceOf(FormData)
-        const dataField = (opts.body as FormData).get('data')
-        // In Node 18+, FormData.get for a file-like part returns a File/Blob.
-        // Either type is acceptable as long as it's a Blob (File extends Blob).
-        expect(dataField).toBeInstanceOf(Blob)
-        expect((opts.body as FormData).get('clientBuildUuid')).toBe('some_uuid')
-    })
-
-    it('should record upload_status when server rejects with non-success response', async function () {
-        vi.mocked(fetch).mockResolvedValueOnce(
-            Response.json({ status: 'failed', message: 'File not attached.' })
-        )
-        await uploadLogs('some_user', 'some_key', 'some_uuid')
-        expect(endSpy).toHaveBeenCalledWith(
-            PERFORMANCE_SDK_EVENTS.EVENTS.SDK_UPLOAD_LOGS,
-            false,
-            expect.stringContaining('upload_status: failed')
-        )
-        // The failure string should also surface the server message for diagnostics
-        expect(endSpy.mock.calls[0][2]).toContain('File not attached.')
-    })
-
-    it('should record upload_no_response when nodeRequest swallows the error and returns undefined', async function () {
-        // nodeRequest returns undefined for the log-upload path on AbortError / network failure;
-        // simulate that via a fetch reject — the inner catch in nodeRequest swallows it and returns undefined.
-        vi.mocked(fetch).mockRejectedValueOnce(new Error('socket hang up'))
-        await uploadLogs('some_user', 'some_key', 'some_uuid')
-        expect(endSpy).toHaveBeenCalledWith(
-            PERFORMANCE_SDK_EVENTS.EVENTS.SDK_UPLOAD_LOGS,
-            false,
-            'upload_no_response'
-        )
-    })
-
-    afterAll(async () => {
-        try {
-            await fs.unlink(tempLogFile)
-        } catch (err) {
-            // Ignore if file doesn't exist
-        }
-        // Restore original log file path
-        bstackLogger.BStackLogger.logFilePath = originalLogFilePath
-        vi.mocked(fetch).mockClear()
-        vi.restoreAllMocks()
+        await expect(uploadLogs('some_user', 'some_key', 'some_uuid')).resolves.not.toThrow()
     })
 })
 
@@ -1715,7 +1414,7 @@ describe('isUndefined', () => {
     })
 })
 
-describe('processTestReportingResponse (and legacy processTestObservabilityResponse)', () => {
+describe('processTestObservabilityResponse', () => {
     let response: LaunchResponse, handleErrorForObservabilitySpy
     beforeAll(() => {
         response = {
@@ -1747,20 +1446,18 @@ describe('processTestReportingResponse (and legacy processTestObservabilityRespo
             }
         }
     })
-
-    // Legacy tests for backward compatibility
-    it ('processTestObservabilityResponse should not log an error (legacy)', function () {
+    it ('processTestObservabilityResponse should not log an error', function () {
         processTestObservabilityResponse(response)
         expect(process.env[BROWSERSTACK_OBSERVABILITY]).toEqual('true')
     })
-    it ('processTestObservabilityResponse should log error if observability success is false (legacy)', function () {
+    it ('processTestObservabilityResponse should log error if observability success is false', function () {
         handleErrorForObservabilitySpy = vi.spyOn(testHubUtils, 'handleErrorForObservability').mockReturnValue({} as any)
         const res = response
         res.observability!.success = false
         processTestObservabilityResponse(res)
         expect(handleErrorForObservabilitySpy).toBeCalled()
     })
-    it ('processTestObservabilityResponse should log error if observability field not found (legacy)', function () {
+    it ('processTestObservabilityResponse should log error if observability field not found', function () {
         handleErrorForObservabilitySpy = vi.spyOn(testHubUtils, 'handleErrorForObservability').mockReturnValue({} as any)
         const res = response
         res.observability = undefined
@@ -1911,22 +1608,16 @@ describe('jsonifyAccessibilityArray', () => {
 })
 
 describe('logPatcher', () => {
-    let emitSpy: jest.SpyInstance
-    beforeEach(() => {
-        emitSpy = vi.spyOn(process, 'emit') as unknown as vi.SpyInstance
-    })
-    afterEach(() => {
-        emitSpy.mockRestore()
-    })
+    const BSTestOpsPatcher = new logPatcher({})
+    const emitSpy = vi.spyOn(process, 'emit')
     it('logPatcher methods should emit data', () => {
-        const BSTestOpsPatcher = new logPatcher({})
         BSTestOpsPatcher.info('abc')
         BSTestOpsPatcher.error('abc')
         BSTestOpsPatcher.warn('abc')
         BSTestOpsPatcher.trace('abc')
         BSTestOpsPatcher.debug('abc')
         BSTestOpsPatcher.log('abc')
-        expect(emitSpy).toHaveBeenCalled()
+        expect(emitSpy).toBeCalledTimes(6)
     })
 })
 
@@ -2107,6 +1798,9 @@ describe('performA11yScan', () => {
     it('should perform web accessibility scan when isAppAutomate is false', async () => {
         const mockResults = { success: true }
 
+        const mockScanScript = 'scan script for web: %s'
+        vi.spyOn(AccessibilityScripts, 'performScan', 'get').mockReturnValue(mockScanScript)
+
         const browser = {
             execute: vi.fn().mockResolvedValue(mockResults),
             executeAsync: vi.fn().mockResolvedValue(mockResults),
@@ -2119,15 +1813,16 @@ describe('performA11yScan', () => {
         process.env.BSTACK_A11Y_JWT = 'auth-abc'
 
         vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
-        vi.spyOn(utils, 'isAppAccessibilityAutomationSession').mockReturnValue(false)
-        vi.spyOn(AccessibilityScripts, 'performScan', 'get').mockReturnValue('scan_script_for_web')
+        vi.spyOn(utils, 'isAppAccessibilityAutomationSession').mockReturnValue(false) // Set to false for this test
 
         const result = await performA11yScan(false, browser, true, true, 'clickElement')
 
         expect(result).toEqual(mockResults)
-        expect(browser.execute).toHaveBeenCalledWith(
-            expect.stringContaining('scan_script_for_web'),
+        expect(browser.executeAsync).toHaveBeenCalledWith(
+            expect.stringContaining('scan script for web:'),
+            { method: 'clickElement' }
         )
+
         delete process.env.TEST_ANALYTICS_ID
         delete process.env.BROWSERSTACK_TESTHUB_UUID
         delete process.env.BROWSERSTACK_TESTHUB_JWT
@@ -2140,20 +1835,18 @@ describe('getAppA11yResults', () => {
     let logInfoMock: any
 
     beforeEach(() => {
-        logInfoMock = vi.spyOn(log, 'warn')
         const result = {
             data: {
-                issues: [{ 'issueName': 'Readable Text Spacing' }],
-            },
+                issues: [{ 'issueName': 'Readable Text Spacing' }]
+            }
         }
-        vi.mocked(fetch).mockClear()
-        vi.mocked(fetch).mockResolvedValue({
-            json: async () => (result),
-            headers: new Headers(),
-            ok: true,
-            status: 200,
-        } as Response)
         logInfoMock = vi.spyOn(log, 'warn')
+        vi.mocked(got).mockResolvedValue({
+            body: JSON.stringify(result),
+            headers: {
+                next_poll_time: '10'
+            }
+        })
     })
 
     it('should return empty array if not a BrowserStack session', async () => {
@@ -2163,7 +1856,7 @@ describe('getAppA11yResults', () => {
             capabilities: {}
         } as unknown as WebdriverIO.Browser
 
-        const result = await getAppA11yResults(true, browser, 'testName', false, true)
+        const result = await getAppA11yResults(true, browser, false, true)
         expect(result).toEqual([])
     })
 
@@ -2174,7 +1867,7 @@ describe('getAppA11yResults', () => {
             capabilities: {}
         } as unknown as WebdriverIO.Browser
 
-        const result = await getAppA11yResults(true, browser, 'testName', true, false)
+        const result = await getAppA11yResults(true, browser, true, false)
         expect(result).toEqual([])
         expect(logInfoMock.mock.calls[0][0])
             .toContain('Not an Accessibility Automation session, cannot retrieve Accessibility results summary.')
@@ -2196,7 +1889,7 @@ describe('getAppA11yResults', () => {
         vi.spyOn(utils, 'isAppAccessibilityAutomationSession').mockReturnValue(true)
         vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
 
-        const result = await getAppA11yResults(true, browser, 'testName', true, true, 'session123')
+        const result = await getAppA11yResults(true, browser, true, true, 'session123')
 
         expect(result).toEqual(mockResults)
 
@@ -2212,54 +1905,255 @@ describe('getAppA11yResults', () => {
             capabilities: {}
         } as unknown as WebdriverIO.Browser
 
-        const result = await getAppA11yResults(true, browser, 'testName', true, true, 'session123')
+        const result = await getAppA11yResults(true, browser, true, true, 'session123')
         expect(result).toEqual([])
     })
 })
 
 describe('getAppA11yResultsSummary', () => {
-    const browser = {
-        sessionId: 'session123',
-        config: {},
-        capabilities: {
-            device: '',
-            os: 'OS X',
-            os_version: 'Catalina',
-            browserName: 'chrome'
-        },
-        instances: ['browserA', 'browserB'],
-        isMultiremote: false,
-        browserA: {
-            sessionId: 'session456',
-            capabilities: { 'bstack:options': {
-                device: '',
-                os: 'Windows',
-                osVersion: 10,
-                browserName: 'chrome'
-            } }
-        },
-        getInstance: vi.fn().mockImplementation((browserName: string) => browser[browserName]),
-        browserB: {},
-        execute: vi.fn(),
-        executeAsync: vi.fn(),
-        on: vi.fn(),
-    } as unknown as WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
+    let browser: WebdriverIO.Browser
+    let logInfoMock: any
+    let pollApiMock: any
 
-    it('return success object if ally token defined and no error in response data', async () => {
-        vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(false)
-        const result: any = await utils.getA11yResultsSummary((browser as WebdriverIO.Browser), true, false)
+    beforeEach(() => {
+        logInfoMock = vi.spyOn(log, 'warn')
+        pollApiMock = vi.spyOn(utils, 'pollApi').mockResolvedValue({
+            data: {
+                data: {
+                    summary: {}
+                }
+            }
+        } as any)
+        const result = {
+            data: {
+                summary: {
+                    'totalIssueCount' : 64,
+                    'totalBySeverity': {
+                        'minor':0,
+                        'serious':0,
+                        'critical': 6,
+                        'moderate': 58
+                    }
+                }
+            }
+        }
+        logInfoMock = vi.spyOn(log, 'warn')
+        vi.mocked(got).mockResolvedValue({
+            body: JSON.stringify(result),
+            headers: {
+                next_poll_time: '10'
+            }
+        })
+    })
+
+    it('should return empty object if not a BrowserStack session', async () => {
+        browser = {
+            execute: async () => ({ success: true }),
+            executeAsync: async () => ({ success: true }),
+            capabilities: {}
+        } as unknown as WebdriverIO.Browser
+
+        const result = await getAppA11yResultsSummary(true, browser, false, true)
         expect(result).toEqual({})
     })
 
-    it('returns results object for an accessibility session', async () => {
+    it('should return empty object if not an App Accessibility Automation session', async () => {
+        browser = {
+            execute: async () => ({ success: true }),
+            executeAsync: async () => ({ success: true }),
+            capabilities: {}
+        } as unknown as WebdriverIO.Browser
+
+        const result = await getAppA11yResultsSummary(true, browser, true, false)
+        expect(result).toEqual({})
+        expect(logInfoMock.mock.calls[0][0])
+            .toContain('Not an Accessibility Automation session, cannot retrieve Accessibility results summary.')
+    })
+
+    it('should return results summary for valid app accessibility session', async () => {
+        const mockResults = { 'totalIssueCount' : 64, 'totalBySeverity': { 'minor':0, 'serious':0, 'critical': 6, 'moderate': 58 } }
+
+        const browser = {
+            execute: vi.fn().mockResolvedValue(mockResults),
+            executeAsync: vi.fn().mockResolvedValue(mockResults),
+            capabilities: {},
+        } as unknown as WebdriverIO.Browser
+
+        process.env.BSTACK_A11Y_POLLING_TIMEOUT = '30'
+        process.env.TEST_ANALYTICS_ID = 'test-123'
         process.env.BSTACK_A11Y_JWT = 'abc'
-        AccessibilityScripts.getResultsSummary = 'mockScript'
-        vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
-        const mockExecuteAccessibilityScript = vi
-            .spyOn(utils, 'executeAccessibilityScript')
-            .mockResolvedValue({ })
-        const result = await utils.getA11yResultsSummary(false, {} as WebdriverIO.Browser, true, true)
+
+        vi.spyOn(utils, 'isAppAccessibilityAutomationSession').mockReturnValue(true)
+        vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+
+        const result = await getAppA11yResultsSummary(true, browser, true, true, 'session123')
+
+        expect(result).toEqual(mockResults)
+
+        delete process.env.BSTACK_A11Y_POLLING_TIMEOUT
+        delete process.env.TEST_ANALYTICS_ID
         delete process.env.BSTACK_A11Y_JWT
-        expect(result).toEqual({ })
+    })
+
+    it('should return empty object if error occurs during fetch', async () => {
+        browser = {
+            execute: async () => { throw new Error('Test error') },
+            executeAsync: async () => ({ success: true }),
+            capabilities: {}
+        } as unknown as WebdriverIO.Browser
+
+        pollApiMock.mockRejectedValueOnce(new Error('API Error'))
+
+        const result = await getAppA11yResultsSummary(true, browser, true, true, 'session123')
+        expect(result).toEqual({})
+    })
+
+    afterEach(() => {
+        delete process.env.TEST_ANALYTICS_ID
+        delete process.env.BSTACK_A11Y_JWT
+        vi.clearAllMocks()
+    })
+})
+
+describe('mergeDeep', () => {
+    it('should deeply merge two objects', () => {
+        const target = { a: 1, b: { c: 2 } }
+        const source = { b: { d: 3 }, e: 4 }
+        const result = mergeDeep(target, source)
+
+        expect(result).toEqual({
+            a: 1,
+            b: { c: 2, d: 3 },
+            e: 4
+        })
+    })
+
+    it('should handle empty sources', () => {
+        const target = { a: 1 }
+        const result = mergeDeep(target)
+
+        expect(result).toEqual({ a: 1 })
+    })
+})
+
+describe('mergeChromeOptions', () => {
+    it('should merge ChromeOptions args and extensions correctly', () => {
+        const base = {
+            args: ['--disable-gpu'],
+            extensions: ['ext1'],
+            prefs: {
+                homepage: 'https://example.com'
+            }
+        }
+
+        const override = {
+            args: ['--headless'],
+            extensions: ['ext2'],
+            prefs: {
+                newtab: 'https://newtab.com'
+            }
+        }
+
+        const result = mergeChromeOptions(base, override)
+
+        expect(result.args).toEqual(['--disable-gpu', '--headless'])
+        expect(result.extensions).toEqual(['ext1', 'ext2'])
+        expect(result.prefs).toEqual({
+            homepage: 'https://example.com',
+            newtab: 'https://newtab.com'
+        })
+    })
+})
+
+describe('isMultiRemoteCaps', () => {
+    it('should return true for regular multiremote capabilities (object)', () => {
+        const multiremoteCaps = {
+            browserA: {
+                capabilities: {
+                    browserName: 'chrome'
+                }
+            },
+            browserB: {
+                capabilities: {
+                    browserName: 'firefox'
+                }
+            }
+        }
+        expect(isMultiRemoteCaps(multiremoteCaps as any)).toBe(true)
+    })
+
+    it('should return true for parallel multiremote capabilities (array with nested structure)', () => {
+        const parallelMultiremoteCaps = [
+            {
+                browserA: {
+                    capabilities: {
+                        browserName: 'chrome'
+                    }
+                },
+                browserB: {
+                    capabilities: {
+                        browserName: 'firefox'
+                    }
+                }
+            }
+        ]
+        expect(isMultiRemoteCaps(parallelMultiremoteCaps as any)).toBe(true)
+    })
+
+    it('should return false for regular capabilities array', () => {
+        const regularCaps = [
+            {
+                browserName: 'chrome',
+                'bstack:options': {
+                    os: 'Windows'
+                }
+            }
+        ]
+        expect(isMultiRemoteCaps(regularCaps as any)).toBe(false)
+    })
+
+    it('should return true for empty array', () => {
+        expect(isMultiRemoteCaps([] as any)).toBe(false)
+    })
+
+    it('should return false for array with mixed structure', () => {
+        const mixedCaps = [
+            {
+                browserA: {
+                    capabilities: {
+                        browserName: 'chrome'
+                    }
+                }
+            },
+            {
+                browserName: 'firefox' // This is not multiremote structure
+            }
+        ]
+        expect(isMultiRemoteCaps(mixedCaps as any)).toBe(false)
+    })
+
+    it('should return false for array with empty objects', () => {
+        const emptyCaps = [{}]
+        expect(isMultiRemoteCaps(emptyCaps as any)).toBe(false)
+    })
+
+    it('should handle array with objects containing non-capabilities properties', () => {
+        const invalidCaps = [
+            {
+                browserA: {
+                    somethingElse: 'value' // Missing capabilities property
+                }
+            }
+        ]
+        expect(isMultiRemoteCaps(invalidCaps as any)).toBe(false)
+    })
+
+    it('should return false for array with null values in nested structure', () => {
+        const capsWithNull = [
+            {
+                browserA: null
+            }
+        ]
+        expect(isMultiRemoteCaps(capsWithNull as any)).toBe(false)
     })
 })

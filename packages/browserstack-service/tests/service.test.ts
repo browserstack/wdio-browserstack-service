@@ -1,116 +1,53 @@
 import path from 'node:path'
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import got from 'got'
 import logger from '@wdio/logger'
 
 import BrowserstackService from '../src/service.js'
 import * as utils from '../src/util.js'
 import InsightsHandler from '../src/insights-handler.js'
 import * as bstackLogger from '../src/bstackLogger.js'
-import { BrowserstackCLI } from '../src/cli/index.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
 const sessionId = 'session123'
 const sessionIdA = 'session456'
 
-vi.mock('fetch')
+vi.mock('got')
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
 vi.useFakeTimers().setSystemTime(new Date('2020-01-01'))
 vi.mock('uuid', () => ({ v4: () => '123456789' }))
+vi.mock('../src/instrumentation/performance/performance-tester.js', async (importOriginal) => {
+    const actual: any = await importOriginal()
+    actual.default.stopAndGenerate = vi.fn().mockResolvedValue({})
+    return {
+        ...actual
+    }
+})
 
 const bstackLoggerSpy = vi.spyOn(bstackLogger.BStackLogger, 'logToFile')
 bstackLoggerSpy.mockImplementation(() => {})
-
-// Mock Listener to prevent hanging in after method
-vi.mock('../src/listener.js', () => ({
-    Listener: {
-        getInstance: () => ({
-            onWorkerEnd: vi.fn().mockResolvedValue(undefined)
-        })
-    }
-}))
-
-// Mock PerformanceTester to prevent hanging in after method
-vi.mock('../src/performance-testing/index.js', () => ({
-    PerformanceTester: {
-        start: vi.fn(),
-        end: vi.fn(),
-        measureWrapper: vi.fn().mockImplementation((_name, fn) => fn()),
-        stopAndGenerate: vi.fn().mockResolvedValue(undefined),
-        calculateTimes: vi.fn(),
-        Measure: vi.fn().mockImplementation(() => (_target: any, _propertyKey: string, descriptor: PropertyDescriptor) => {
-            // Return the original method unchanged
-            return descriptor
-        })
-    }
-}))
-
-vi.mock('../src/instrumentation/performance/performance-tester.js', () => ({
-    default: {
-        start: vi.fn(),
-        end: vi.fn(),
-        startMonitoring: vi.fn(),
-        measureWrapper: vi.fn().mockImplementation((_name: string, fn: Function) => fn),
-        Measure: vi.fn().mockImplementation(() => (_target: any, _propertyKey: string, descriptor: PropertyDescriptor) => descriptor),
-        browser: undefined,
-        scenarioThatRan: [],
-    }
-}))
-
-// Mock data-store to prevent file I/O operations
-vi.mock('../src/data-store.js', () => ({
-    saveWorkerData: vi.fn()
-}))
-
-// Mock UsageStats to prevent hanging in saveWorkerData
-vi.mock('../src/usage-stats.js', () => ({
-    UsageStats: {
-        getInstance: () => ({
-            getDataToSave: vi.fn().mockReturnValue({})
-        })
-    }
-}))
-
-// Mock BrowserstackCLI to prevent it from being considered as "running"
-vi.mock('../src/cli/index.js', () => ({
-    BrowserstackCLI: {
-        getInstance: () => ({
-            isRunning: () => false,
-            getTestFramework: () => null,
-            getAutomationFramework: () => ({
-                trackEvent: vi.fn().mockResolvedValue(undefined)
-            })
-        })
-    }
-}))
 
 const log = logger('test')
 let service: BrowserstackService
 let browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
 
-const user = 'foo'
-const key = 'bar'
-const encodedAuth = Buffer.from(`${user}:${key}`, 'utf8').toString('base64')
-const headers: any = {
-    'Content-Type': 'application/json; charset=utf-8',
-    Authorization: `Basic ${encodedAuth}`,
-}
-
 beforeEach(() => {
-    // Clear any performance measurement env variables that might cause hanging
-    delete process.env.PERF_MEASUREMENT_ENV
-    delete process.env.ENABLE_CDP
-
     vi.mocked(log.info).mockClear()
-    vi.mocked(fetch).mockClear()
-    vi.mocked(fetch).mockReturnValue(Promise.resolve(Response.json({ automation_session: {
-        browser_url: 'https://www.browserstack.com/automate/builds/1/sessions/2'
-    } })))
+    vi.mocked(got).mockClear()
+    vi.mocked(got.put).mockClear()
+    vi.mocked(got).mockResolvedValue({
+        body: {
+            automation_session: {
+                browser_url: 'https://www.browserstack.com/automate/builds/1/sessions/2'
+            }
+        }
+    })
+    vi.mocked(got.put).mockResolvedValue({})
 
     browser = {
         execute: vi.fn(),
-        executeScript: vi.fn(),
         on: vi.fn(),
         sessionId: sessionId,
         config: {},
@@ -139,14 +76,6 @@ beforeEach(() => {
     service = new BrowserstackService({ testObservability: false } as any, [] as any, { user: 'foo', key: 'bar' } as any)
 })
 
-function assertMethodCalls(mock: { mock: { calls: any[] } }, expectedMethod: any, expectedCallCount: any) {
-    const matchingCalls = mock.mock.calls.filter(
-        ([, options]) => options.method === expectedMethod
-    )
-
-    expect(matchingCalls.length).toBe(expectedCallCount)
-}
-
 it('should initialize correctly', () => {
     service = new BrowserstackService({} as any, [] as any, {} as any)
     expect(service['_failReasons']).toEqual([])
@@ -159,7 +88,8 @@ describe('onReload()', () => {
         service['_browser'] = browser
         await service.onReload('1', '2')
         expect(updateSpy).toHaveBeenCalled()
-        expect(vi.mocked(fetch).mock.calls[0][1]?.method).toEqual('PUT')
+        expect(got.put).toHaveBeenCalled()
+        expect(got).toHaveBeenCalled()
         expect(isBrowserstackSessionSpy).toHaveBeenCalled()
     })
 
@@ -170,7 +100,8 @@ describe('onReload()', () => {
         const updateSpy = vi.spyOn(service, '_update')
         await service.onReload('1', '2')
         expect(updateSpy).toHaveBeenCalled()
-        expect(vi.mocked(fetch).mock.calls[0][1]?.method).toEqual('PUT')
+        expect(got.put).toHaveBeenCalled()
+        expect(got).toHaveBeenCalled()
         expect(isBrowserstackSessionSpy).toHaveBeenCalled()
     })
 
@@ -209,7 +140,7 @@ describe('onReload()', () => {
 })
 
 describe('beforeSession', () => {
-    describe('testObservabilityOpts not passed (legacy)', () => {
+    describe('testObservabilityOpts not passed', () => {
         it('should set some default to make missing user and key parameter apparent', () => {
             service.beforeSession({} as any)
             expect(service['_config']).toEqual({ user: 'NotSetUser', key: 'NotSetKey' })
@@ -224,10 +155,9 @@ describe('beforeSession', () => {
             service.beforeSession({ key: 'bar' } as any)
             expect(service['_config']).toEqual({ user: 'NotSetUser', key: 'bar' })
         })
-
     })
 
-    describe('testObservabilityOpts passed (legacy)', () => {
+    describe('testObservabilityOpts passed', () => {
         it('should not set some default value if user and key in observability options', () => {
             const observabilityService = new BrowserstackService(
                 {
@@ -257,47 +187,11 @@ describe('beforeSession', () => {
             expect(observabilityService['_config']).toEqual({ user: 'NotSetUser', key: 'NotSetKey' })
         })
     })
-
-    describe('testReportingOpts - new configuration', () => {
-        it('should set default values if user and key are not in test reporting options', () => {
-            const testReportingService = new BrowserstackService(
-                {
-                    testReporting: true,
-                    testReportingOptions: {}
-                } as any,
-                [] as any,
-                { user: 'foo', key: 'bar' } as any
-            )
-            testReportingService.beforeSession({} as any)
-            expect(testReportingService['_config']).toEqual({ user: 'NotSetUser', key: 'NotSetKey' })
-        })
-
-        it('testReporting should take precedence over legacy testObservability', () => {
-            const mixedService = new BrowserstackService(
-                {
-                    testReporting: true,
-                    testReportingOptions: {
-                        user: 'new_user',
-                        key: 'new_key',
-                    },
-                    testObservability: true,
-                    testObservabilityOptions: {
-                        user: 'old_user',
-                        key: 'old_key',
-                    }
-                } as any,
-                [] as any,
-                { user: 'foo', key: 'bar' } as any
-            )
-            mixedService.beforeSession({} as any)
-            expect(mixedService['_config']).toEqual({ user: undefined, key: undefined })
-        })
-    })
 })
 
 describe('_multiRemoteAction', () => {
     it('resolve if no browser object', () => {
-        const tmpService = new BrowserstackService({ testReporting: false }, [] as any,
+        const tmpService = new BrowserstackService({ testObservability: false }, [] as any,
             { user: 'foo', key: 'bar', cucumberOpts: { strict: false } } as any)
         tmpService['_browser'] = undefined
         expect(tmpService._multiRemoteAction({} as any)).toEqual(Promise.resolve())
@@ -305,17 +199,19 @@ describe('_multiRemoteAction', () => {
 })
 
 describe('_update', () => {
-    describe('should call fetch with put method', () => {
+    describe('should call got.put', () => {
         const getCloudProviderSpy = vi.spyOn(utils, 'getCloudProvider').mockReturnValue('browserstack')
 
         beforeEach(() => {
+            vi.mocked(got.put).mockClear()
+            vi.mocked(got).mockClear()
             getCloudProviderSpy.mockClear()
         })
 
         it('should resolve if not a browserstack session', () => {
             service['_browser'] = browser
             service._update('sessionId', {})
-            expect(vi.mocked(fetch).mock.calls[0][1]?.method).toEqual('PUT')
+            expect(got.put).toBeCalledTimes(1)
         })
 
         afterEach(() => {
@@ -331,9 +227,9 @@ describe('_printSessionURL', () => {
         const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
         const isBrowserstackSessionSpy = vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
         await service._printSessionURL()
-        expect(fetch).toHaveBeenCalledWith(
+        expect(got).toHaveBeenCalledWith(
             `${sessionBaseUrl}/${sessionId}.json`,
-            { method: 'GET', headers })
+            { username: 'foo', password: 'bar', responseType: 'json' })
         expect(logInfoSpy).toHaveBeenCalled()
         expect(logInfoSpy).toHaveBeenCalledWith(
             'OS X Sierra chrome session: https://www.browserstack.com/automate/builds/1/sessions/2'
@@ -347,7 +243,9 @@ describe('_printSessionURL', () => {
         const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
         const isBrowserstackSessionSpy = vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
         await service._printSessionURL()
-        expect(fetch).toHaveBeenCalledWith(`${sessionBaseUrl}/${sessionIdA}.json`, { method: 'GET', headers })
+        expect(got).toHaveBeenCalledWith(
+            `${sessionBaseUrl}/${sessionIdA}.json`,
+            { username: 'foo', password: 'bar', responseType: 'json' })
         expect(logInfoSpy).toHaveBeenCalled()
         expect(logInfoSpy).toHaveBeenCalledWith(
             'Windows 10 chrome session: https://www.browserstack.com/automate/builds/1/sessions/2'
@@ -382,18 +280,22 @@ describe('_printSessionURL', () => {
 
 describe('_printSessionURL Appium', () => {
     beforeEach(() => {
-        vi.mocked(fetch).mockReturnValueOnce(Promise.resolve(Response.json({ automation_session: {
-            name: 'Smoke Test',
-            duration: 65,
-            os: 'ios',
-            os_version: '12.1',
-            browser_version: 'app',
-            browser: null,
-            device: 'iPhone XS',
-            status: 'failed',
-            reason: 'CLIENT_STOPPED_SESSION',
-            browser_url: 'https://app-automate.browserstack.com/builds/1/sessions/2'
-        } })))
+        vi.mocked(got).mockResolvedValue({
+            body: {
+                automation_session: {
+                    name: 'Smoke Test',
+                    duration: 65,
+                    os: 'ios',
+                    os_version: '12.1',
+                    browser_version: 'app',
+                    browser: null,
+                    device: 'iPhone XS',
+                    status: 'failed',
+                    reason: 'CLIENT_STOPPED_SESSION',
+                    browser_url: 'https://app-automate.browserstack.com/builds/1/sessions/2'
+                }
+            }
+        })
 
         browser.capabilities = {
             device: 'iPhone XS',
@@ -415,16 +317,17 @@ describe('_printSessionURL Appium', () => {
 
 describe('_printSessionURL TurboScale', () => {
     beforeEach(() => {
-
-        vi.mocked(fetch).mockReturnValueOnce(Promise.resolve(Response.json({
-            name: 'Smoke Test',
-            duration: 65,
-            browser_version: '116',
-            browser: 'chrome',
-            status: 'failed',
-            reason: 'CLIENT_STOPPED_SESSION',
-            url: 'https://grid.browserstack.com/dashboard/builds/1/sessions/2'
-        })))
+        vi.mocked(got).mockResolvedValue({
+            body: {
+                name: 'Smoke Test',
+                duration: 65,
+                browser_version: '116',
+                browser: 'chrome',
+                status: 'failed',
+                reason: 'CLIENT_STOPPED_SESSION',
+                url: 'https://grid.browserstack.com/dashboard/builds/1/sessions/2'
+            }
+        })
 
         browser.capabilities = {
             browserName: 'chrome',
@@ -446,7 +349,7 @@ describe('before', () => {
     it('should set auth to default values if not provided', async () => {
         let service = new BrowserstackService({} as any, [{}] as any, { capabilities: {} })
 
-        await service.beforeSession({} as unknown as any)
+        await service.beforeSession({} as any as any)
         await service.before(service['_config'] as any, [], browser)
 
         expect(service['_failReasons']).toEqual([])
@@ -454,7 +357,7 @@ describe('before', () => {
         expect(service['_config'].key).toEqual('NotSetKey')
 
         service = new BrowserstackService({} as any, [{}] as any, { capabilities: {} })
-        service.beforeSession({ user: 'blah' } as unknown as any)
+        service.beforeSession({ user: 'blah' } as any as any)
         await service.before(service['_config'] as any, [], browser)
 
         expect(service['_failReasons']).toEqual([])
@@ -462,7 +365,7 @@ describe('before', () => {
         expect(service['_config'].user).toEqual('blah')
         expect(service['_config'].key).toEqual('NotSetKey')
         service = new BrowserstackService({} as any, [{}] as any, { capabilities: {} })
-        service.beforeSession({ key: 'blah' } as unknown as any)
+        service.beforeSession({ key: 'blah' } as any as any)
         await service.before(service['_config'] as any, [], browser)
 
         expect(service['_failReasons']).toEqual([])
@@ -504,7 +407,7 @@ describe('before', () => {
             [{ app: 'test-app' }] as any,
             {
                 user: 'foo',
-                key: 'bar',
+                key: '12345678901234567890',
                 capabilities: {
                     app: 'test-app'
                 } as any
@@ -528,7 +431,7 @@ describe('before', () => {
             'appium:app': 'bs://BrowserStackMobileAppId'
         }, {
             user: 'foo',
-            key: 'bar',
+            key: '12345678901234567890',
             capabilities: {
                 app: 'test-app' as any
             }
@@ -544,7 +447,7 @@ describe('before', () => {
             'appium:app': 'bs://BrowserStackMobileAppId'
         }, {
             user: 'foo',
-            key: 'bar',
+            key: '12345678901234567890',
             capabilities: {
                 ['appium:app']: 'test-app'
             } as any
@@ -569,7 +472,7 @@ describe('before', () => {
             turboScale: true
         } as any, {}, {
             user: 'foo',
-            key: 'bar',
+            key: '12345678901234567890',
             capabilities: {}
         })
         service.before(service['_config'] as any, [], browser)
@@ -582,7 +485,7 @@ describe('before', () => {
         process.env.BROWSERSTACK_TURBOSCALE = 'true'
         const service = new BrowserstackService({} as any, {}, {
             user: 'foo',
-            key: 'bar',
+            key: '12345678901234567890',
             capabilities: {}
         })
         service.before(service['_config'] as any, [], browser)
@@ -601,7 +504,7 @@ describe('beforeHook', () => {
         service['_insightsHandler'] = new InsightsHandler(browser)
         const methodSpy = vi.spyOn(service['_insightsHandler'], 'beforeHook')
         service.beforeHook({ title: 'foo2', parent: 'bar2' } as any,
-            {} as any)
+        {} as any)
 
         expect(methodSpy).toBeCalled()
     })
@@ -615,7 +518,7 @@ describe('afterHook', () => {
         service['_insightsHandler'] = new InsightsHandler(browser)
         const methodSpy = vi.spyOn(service['_insightsHandler'], 'afterHook')
         service.afterHook({ title: 'foo2', parent: 'bar2' } as any,
-            undefined as never, {} as any)
+        undefined as never, {} as any)
 
         expect(methodSpy).toBeCalled()
     })
@@ -630,7 +533,7 @@ describe('beforeStep', () => {
         service['_insightsHandler'] = new InsightsHandler(browser)
         const methodSpy = vi.spyOn(service['_insightsHandler'], 'beforeStep')
         service.beforeStep({ keyword: 'Given', text: 'this is a test' } as any,
-            undefined as never)
+        undefined as never)
 
         expect(methodSpy).toBeCalled()
     })
@@ -645,7 +548,7 @@ describe('afterStep', () => {
         service['_insightsHandler'] = new InsightsHandler(browser)
         const methodSpy = vi.spyOn(service['_insightsHandler'], 'afterStep')
         service.afterStep({ title: 'foo2', parent: 'bar2' } as any,
-            undefined as never, {} as any)
+        undefined as never, {} as any)
 
         expect(methodSpy).toBeCalled()
     })
@@ -672,12 +575,12 @@ describe('beforeSuite', () => {
         await service.beforeSuite({ title: 'foobar' } as any)
         expect(service['_suiteTitle']).toBe('foobar')
         expect(service['_fullTitle']).toBe('foobar')
-        expect(fetch).toBeCalledWith(
+        expect(got.put).toBeCalledWith(
             `${sessionBaseUrl}/${sessionId}.json`,
             {
-                method: 'PUT',
-                body: JSON.stringify({ name: 'foobar' }),
-                headers
+                json: { name: 'foobar' },
+                username: 'foo',
+                password: 'bar'
             }
         )
     })
@@ -689,15 +592,13 @@ describe('beforeSuite', () => {
         await service.beforeSuite({ title: jasmineSuiteTitle } as any)
         expect(service['_suiteTitle']).toBe(jasmineSuiteTitle)
         expect(service['_fullTitle']).toBeUndefined()
-        expect(fetch).not.toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-            method: 'POST',
-        }))
+        expect(got.put).not.toBeCalled()
     })
 
     it('should not send request to set the session name if option setSessionName is false', async () => {
         const service = new BrowserstackService({ setSessionName: false } as any, [] as any, { user: 'foo', key: 'bar' } as any)
         await service.beforeSuite({ title: 'Project Title' } as any)
-        expect(fetch).not.toBeCalled()
+        expect(got.put).not.toBeCalled()
     })
 })
 
@@ -706,36 +607,32 @@ describe('beforeTest', () => {
         const service = new BrowserstackService({ setSessionName: false } as any, [] as any, { user: 'foo', key: 'bar' } as any)
         await service.beforeSuite({ title: 'Project Title' } as any)
         await service.beforeTest({ title: 'Test Title', parent: 'Suite Title' } as any)
-        expect(fetch).not.toBeCalled()
+        expect(got.put).not.toBeCalled()
     })
 
     describe('sessionNamePrependTopLevelSuiteTitle is true', () => {
         it('should set title for Mocha tests using concatenation of top level suite name, innermost suite name, and test title', async () => {
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
             const service = new BrowserstackService({ sessionNamePrependTopLevelSuiteTitle: true } as any, [] as any, { user: 'foo', key: 'bar' } as any)
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeSuite({ title: 'Project Title' } as any)
             expect(service['_fullTitle']).toBe('Project Title')
             await service.beforeTest({ title: 'Test Title', parent: 'Suite Title' } as any)
             expect(service['_fullTitle']).toBe('Project Title - Suite Title - Test Title')
-            assertMethodCalls(vi.mocked(fetch), 'PUT', 2)
-            expect(fetch).toBeCalledWith(
+            expect(got.put).toBeCalledTimes(2)
+            expect(got.put).toBeCalledWith(
                 `${sessionBaseUrl}/${sessionId}.json`,
                 {
-                    method: 'PUT',
-                    body: JSON.stringify({ name: 'Project Title' }),
-                    headers
+                    json: { name: 'Project Title' },
+                    username: 'foo',
+                    password: 'bar'
                 }
             )
-            expect(fetch).toBeCalledWith(
+            expect(got.put).toBeCalledWith(
                 `${sessionBaseUrl}/${sessionId}.json`,
                 {
-                    method: 'PUT',
-                    body: JSON.stringify({ name: 'Project Title - Suite Title - Test Title' }),
-                    headers
+                    json: { name: 'Project Title - Suite Title - Test Title' },
+                    username: 'foo',
+                    password: 'bar'
                 }
             )
         })
@@ -746,24 +643,20 @@ describe('beforeTest', () => {
             service = new BrowserstackService({ sessionNameOmitTestTitle: true } as any, [] as any, { user: 'foo', key: 'bar' } as any)
         })
         it('should not set title for Mocha tests', async () => {
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeSuite({ title: 'Suite Title' } as any)
             expect(service['_fullTitle']).toBe('Suite Title')
             await service.beforeTest({ title: 'bar', parent: 'Suite Title' } as any)
             expect(service['_fullTitle']).toBe('Suite Title')
             await service.afterTest({ title: 'bar', parent: 'Suite Title' } as any, undefined as never, {} as any)
             expect(service['_fullTitle']).toBe('Suite Title')
-            assertMethodCalls(vi.mocked(fetch), 'PUT', 1)
-            expect(fetch).toBeCalledWith(
+            expect(got.put).toBeCalledTimes(1)
+            expect(got.put).toBeCalledWith(
                 `${sessionBaseUrl}/${sessionId}.json`,
                 {
-                    method: 'PUT',
-                    body: JSON.stringify({ name: 'Suite Title' }),
-                    headers
+                    json: { name: 'Suite Title' },
+                    username: 'foo',
+                    password: 'bar'
                 }
             )
         })
@@ -774,30 +667,26 @@ describe('beforeTest', () => {
             service = new BrowserstackService({ sessionNameOmitTestTitle: true, sessionNamePrependTopLevelSuiteTitle: true } as any, [] as any, { user: 'foo', key: 'bar' } as any)
         })
         it('should set title for Mocha tests using concatenation of top level suite name and innermost suite name', async () => {
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeSuite({ title: 'Project Title' } as any)
             expect(service['_fullTitle']).toBe('Project Title')
             await service.beforeTest({ title: 'Test Title', parent: 'Suite Title' } as any)
             expect(service['_fullTitle']).toBe('Project Title - Suite Title')
-            assertMethodCalls(vi.mocked(fetch), 'PUT', 2)
-            expect(fetch).toBeCalledWith(
+            expect(got.put).toBeCalledTimes(2)
+            expect(got.put).toBeCalledWith(
                 `${sessionBaseUrl}/${sessionId}.json`,
                 {
-                    method: 'PUT',
-                    body: JSON.stringify({ name: 'Project Title' }),
-                    headers
+                    json: { name: 'Project Title' },
+                    username: 'foo',
+                    password: 'bar'
                 }
             )
-            expect(fetch).toBeCalledWith(
+            expect(got.put).toBeCalledWith(
                 `${sessionBaseUrl}/${sessionId}.json`,
                 {
-                    method: 'PUT',
-                    body: JSON.stringify({ name: 'Project Title - Suite Title' }),
-                    headers
+                    json: { name: 'Project Title - Suite Title' },
+                    username: 'foo',
+                    password: 'bar'
                 }
             )
         })
@@ -821,32 +710,28 @@ describe('beforeTest', () => {
             } as any)
         })
         it('should set title via sessionNameFormat method', async () => {
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
-            service['_browser'] = browserWithExecuteScript
+            await service.before(service['_config'] as any, [], browser)
+            service['_browser'] = browser
             service['_suiteTitle'] = 'Suite Title'
             await service.beforeSuite({ title: 'Suite Title' } as any)
             expect(service['_fullTitle']).toBe('barfoo - foobar - Suite Title')
             await service.beforeTest({ title: 'Test Title', parent: 'Suite Title' } as any)
             expect(service['_fullTitle']).toBe('barfoo - foobar - Suite Title - Test Title')
-            assertMethodCalls(vi.mocked(fetch), 'PUT', 2)
-            expect(fetch).toBeCalledWith(
+            expect(got.put).toBeCalledTimes(2)
+            expect(got.put).toBeCalledWith(
                 `${sessionBaseUrl}/${sessionId}.json`,
                 {
-                    method: 'PUT',
-                    body: JSON.stringify({ name: 'barfoo - foobar - Suite Title' }),
-                    headers
+                    json: { name: 'barfoo - foobar - Suite Title' },
+                    username: 'foo',
+                    password: 'bar'
                 }
             )
-            expect(fetch).toBeCalledWith(
+            expect(got.put).toBeCalledWith(
                 `${sessionBaseUrl}/${sessionId}.json`,
                 {
-                    method: 'PUT',
-                    body: JSON.stringify({ name: 'barfoo - foobar - Suite Title - Test Title' }),
-                    headers
+                    json: { name: 'barfoo - foobar - Suite Title - Test Title' },
+                    username: 'foo',
+                    password: 'bar'
                 }
             )
         })
@@ -854,43 +739,35 @@ describe('beforeTest', () => {
 
     describe('Jasmine only', () => {
         it('should set suite name of first test as title', async () => {
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeSuite({ title: jasmineSuiteTitle } as any)
             await service.beforeTest({ fullName: 'foo bar baz', description: 'baz' } as any)
             service.afterTest({ fullName: 'foo bar baz', description: 'baz' } as any, undefined as never, {} as any)
             expect(service['_fullTitle']).toBe('foo bar')
-            expect(fetch).toBeCalledWith(
+            expect(got.put).toBeCalledWith(
                 `${sessionBaseUrl}/${sessionId}.json`,
                 {
-                    method: 'PUT',
-                    body: JSON.stringify({ name: 'foo bar' }),
-                    headers
+                    json: { name: 'foo bar' },
+                    username: 'foo',
+                    password: 'bar'
                 }
             )
         })
 
         it('should set parent suite name as title', async () => {
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeSuite({ title: jasmineSuiteTitle } as any)
             await service.beforeTest({ fullName: 'foo bar baz', description: 'baz' } as any)
             await service.beforeTest({ fullName: 'foo xyz', description: 'xyz' } as any)
             service.afterTest({ fullName: 'foo bar baz', description: 'baz' } as any, undefined as never, {} as any)
             service.afterTest({ fullName: 'foo xyz', description: 'xyz' } as any, undefined as never, {} as any)
             expect(service['_fullTitle']).toBe('foo')
-            expect(fetch).toBeCalledWith(
+            expect(got.put).toBeCalledWith(
                 `${sessionBaseUrl}/${sessionId}.json`,
                 {
-                    method: 'PUT',
-                    body: JSON.stringify({ name: 'foo' }),
-                    headers
+                    json: { name: 'foo' },
+                    username: 'foo',
+                    password: 'bar'
                 }
             )
         })
@@ -899,21 +776,18 @@ describe('beforeTest', () => {
 
 describe('afterTest', () => {
     it('should increment failure reasons on fails', async () => {
-        // Mock _updateJob to avoid async timing issues
-        const updateJobSpy = vi.spyOn(service, '_updateJob' as any).mockResolvedValue(undefined)
-
         service.before(service['_config'] as any, [], browser)
-        // service['_fullTitle'] = ''  // Comment this out to see if it's the issue
-        service.beforeSuite({ title: 'foo' } as any)
+        service['_fullTitle'] = ''
+        await service.beforeSuite({ title: 'foo' } as any)
         await service.beforeTest({ title: 'foo', parent: 'bar' } as any)
-        await service.afterTest(
+        service.afterTest(
             { title: 'foo', parent: 'bar' } as any,
             undefined as never,
             { error: { message: 'cool reason' }, result: 1, duration: 5, passed: false } as any)
         expect(service['_failReasons']).toContain('cool reason')
 
         await service.beforeTest({ title: 'foo2', parent: 'bar2' } as any)
-        await service.afterTest(
+        service.afterTest(
             { title: 'foo2', parent: 'bar2' } as any,
             undefined as never,
             { error: { message: 'not so cool reason' }, result: 1, duration: 7, passed: false } as any)
@@ -923,7 +797,7 @@ describe('afterTest', () => {
         expect(service['_failReasons']).toContain('not so cool reason')
 
         await service.beforeTest({ title: 'foo3', parent: 'bar3' } as any)
-        await service.afterTest(
+        service.afterTest(
             { title: 'foo3', parent: 'bar3' } as any,
             undefined as never,
             { error: undefined, result: 1, duration: 7, passed: false } as any)
@@ -936,20 +810,17 @@ describe('afterTest', () => {
     })
 
     it('should not increment failure reasons on passes', async () => {
-        // Mock _updateJob to avoid async timing issues
-        const updateJobSpy = vi.spyOn(service, '_updateJob' as any).mockResolvedValue(undefined)
-
         service.before(service['_config'] as any, [], browser)
-        service.beforeSuite({ title: 'foo' } as any)
+        await service.beforeSuite({ title: 'foo' } as any)
         await service.beforeTest({ title: 'foo', parent: 'bar' } as any)
-        await service.afterTest(
+        service.afterTest(
             { title: 'foo', parent: 'bar' } as any,
             undefined as never,
             { error: { message: 'cool reason' }, result: 1, duration: 5, passed: true } as any)
         expect(service['_failReasons']).toEqual([])
 
         await service.beforeTest({ title: 'foo2', parent: 'bar2' } as any)
-        await service.afterTest(
+        service.afterTest(
             { title: 'foo2', parent: 'bar2' } as any,
             undefined as never,
             { error: { message: 'not so cool reason' }, result: 1, duration: 5, passed: true } as any)
@@ -1050,84 +921,8 @@ describe('afterScenario', () => {
 })
 
 describe('after', () => {
-    beforeEach(() => {
-        // Mock the after method to prevent infinite hangs while preserving core test logic
-        BrowserstackService.prototype.after = vi.fn(async function (this: any, result: number) {
-            // Execute core session status logic that tests expect
-            const { preferScenarioName, setSessionName, setSessionStatus } = this._options
-
-            // For Cucumber: Checks scenarios that ran (i.e. not skipped) on the session
-            // Only 1 Scenario ran and option enabled => Redefine session name to Scenario's name
-            if (preferScenarioName && this._scenariosRanCount === 1 && this._lastScenarioName){
-                this._fullTitle = this._lastScenarioName
-            }
-
-            if (setSessionStatus) {
-                const ignoreHooksStatus = this._options.testObservabilityOptions?.ignoreHooksStatus === true
-                let sessionStatus: string
-                let failureReason: string | undefined
-
-                if (result === 0 && this._specsRan) {
-                    // Test runner reported success and tests ran
-                    if (ignoreHooksStatus) {
-                        // Only consider pure test failures, ignore hook failures
-                        const hasPureTestFailures = this._pureTestFailReasons.length > 0
-                        sessionStatus = hasPureTestFailures ? 'failed' : 'passed'
-                        failureReason = hasPureTestFailures ? this._pureTestFailReasons.join('\n') : undefined
-                    } else {
-                        // Default behavior: consider all failures including hooks
-                        const hasReasons = this._failReasons.length > 0
-                        sessionStatus = hasReasons ? 'failed' : 'passed'
-                        failureReason = hasReasons ? this._failReasons.join('\n') : undefined
-                    }
-                } else if (ignoreHooksStatus && this._specsRan) {
-                    // Test runner reported failure but ignoreHooksStatus is enabled
-                    // Check if we only have hook failures and no pure test failures
-                    const hasPureTestFailures = this._pureTestFailReasons.length > 0
-                    const hasOnlyHookFailures = this._failReasons.length === 0 && this._hookFailReasons.length > 0
-
-                    if (hasOnlyHookFailures && !hasPureTestFailures) {
-                        // Only hook failures exist - mark as passed when ignoreHooksStatus is true
-                        sessionStatus = 'passed'
-                        failureReason = undefined
-                    } else {
-                        // Pure test failures exist - mark as failed
-                        sessionStatus = 'failed'
-                        failureReason = hasPureTestFailures ? this._pureTestFailReasons.join('\n') : undefined
-                    }
-                } else {
-                    // Default behavior: mark as failed (test runner reported failure or no tests ran)
-                    sessionStatus = 'failed'
-                    if (ignoreHooksStatus && this._pureTestFailReasons.length > 0) {
-                        failureReason = this._pureTestFailReasons.join('\n')
-                    } else if (this._failReasons.length > 0) {
-                        failureReason = this._failReasons.join('\n')
-                    } else {
-                        failureReason = undefined
-                    }
-                }
-
-                // Call _updateJob directly to ensure tests that expect it get called
-                const payload: any = { status: sessionStatus }
-                if (setSessionName && this._fullTitle) {
-                    payload.name = this._fullTitle
-                    // Only include reason: '' when name is present and no specs ran AND no failure reasons
-                    if (!this._specsRan && !failureReason) {
-                        payload.reason = ''
-                    } else if (failureReason !== undefined) {
-                        payload.reason = failureReason
-                    }
-                } else if (failureReason !== undefined) {
-                    payload.reason = failureReason
-                }
-                await this._updateJob(payload)
-            }
-        })
-    })
-
-    it('should call _update when session has no errors (exit code 0)', { timeout: 10000 }, async () => {
+    it('should call _update when session has no errors (exit code 0)', async () => {
         const updateSpy = vi.spyOn(service, '_update')
-
         await service.before(service['_config'] as any, [], browser)
 
         service['_failReasons'] = []
@@ -1141,12 +936,12 @@ describe('after', () => {
                 status: 'passed',
                 name: 'foo - bar'
             })
-        expect(fetch).toHaveBeenCalledWith(
+        expect(got.put).toHaveBeenCalledWith(
             `${sessionBaseUrl}/${sessionId}.json`,
-            { method: 'PUT', body: JSON.stringify({
+            { json: {
                 status: 'passed',
                 name: 'foo - bar'
-            }), headers })
+            }, username: 'foo', password: 'bar' })
     })
 
     it('should call _update when session has errors (exit code 1)', async () => {
@@ -1163,13 +958,13 @@ describe('after', () => {
                 name: 'foo - bar',
                 reason: 'I am failure'
             })
-        expect(fetch).toHaveBeenCalledWith(
+        expect(got.put).toHaveBeenCalledWith(
             `${sessionBaseUrl}/${sessionId}.json`,
-            { method: 'PUT', body: JSON.stringify({
+            { json: {
                 status: 'failed',
                 name: 'foo - bar',
                 reason: 'I am failure'
-            }), headers })
+            }, username: 'foo', password: 'bar' })
     })
 
     it('should call _update with failed when session has no errors (exit code 0) but no tests ran', async () => {
@@ -1184,16 +979,14 @@ describe('after', () => {
         expect(updateSpy).toHaveBeenCalledWith(service['_browser']?.sessionId,
             {
                 status: 'failed',
-                name: 'foo - bar',
-                reason: ''
+                name: 'foo - bar'
             })
-        expect(fetch).toHaveBeenCalledWith(
+        expect(got.put).toHaveBeenCalledWith(
             `${sessionBaseUrl}/${sessionId}.json`,
-            { method: 'PUT', body: JSON.stringify({
+            { json: {
                 status: 'failed',
-                name: 'foo - bar',
-                reason: ''
-            }), headers })
+                name: 'foo - bar'
+            }, username: 'foo', password: 'bar' })
     })
 
     it('should not set session status if option setSessionStatus is false', async () => {
@@ -1206,9 +999,7 @@ describe('after', () => {
         await service.after(1)
 
         expect(updateSpy).not.toHaveBeenCalled()
-        expect(fetch).not.toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-            method: 'POST',
-        }))
+        expect(got.put).not.toHaveBeenCalled()
     })
 
     it('should not set session name if option setSessionName is false', async () => {
@@ -1223,9 +1014,9 @@ describe('after', () => {
         await service.after(0)
 
         expect(updateSpy).toHaveBeenCalledWith(service['_browser']?.sessionId, { status: 'passed' })
-        expect(fetch).toHaveBeenCalledWith(
+        expect(got.put).toHaveBeenCalledWith(
             `${sessionBaseUrl}/${sessionId}.json`,
-            { method: 'PUT', body: JSON.stringify({ status: 'passed' }), headers })
+            { json: { status: 'passed' }, username: 'foo', password: 'bar' })
     })
 
     describe('Cucumber only', function () {
@@ -1234,11 +1025,8 @@ describe('after', () => {
                 { user: 'foo', key: 'bar', cucumberOpts: { strict: true } } as any)
 
             const updateSpy = vi.spyOn(service, '_update')
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeFeature(null, { name: 'Feature1' })
 
             await service.afterScenario({ pickle: { name: 'Can do something but pending 1' },  result: { status: 'PENDING' } as any })
@@ -1262,11 +1050,8 @@ describe('after', () => {
                 { user: 'foo', key: 'bar', cucumberOpts: { strict: false } } as any)
 
             const updateSpy = vi.spyOn(service, '_update')
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeFeature(null, { name: 'Feature1' })
 
             await service.afterScenario({ pickle: { name: 'Can do something' },  result: { status: 'PASSED' } as any })
@@ -1287,11 +1072,8 @@ describe('after', () => {
                 { user: 'foo', key: 'bar', cucumberOpts: { strict: true } } as any)
 
             const updateSpy = vi.spyOn(service, '_update')
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeFeature(null, { name: 'Feature1' })
 
             await service.afterScenario({ pickle: { name: 'Can do something 1' },  result: { status: 'PASSED' } as any })
@@ -1310,11 +1092,8 @@ describe('after', () => {
 
         it('should call _update with status "passed" when all tests are skipped', async () => {
             const updateSpy = vi.spyOn(service, '_update')
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeFeature(null, { name: 'Feature1' })
 
             await service.afterScenario({ pickle: { name: 'Can do something skipped 1' },  result: { status: 'SKIPPED' } as any })
@@ -1335,12 +1114,9 @@ describe('after', () => {
 
             const updateSpy = vi.spyOn(service, '_update')
             const afterSpy = vi.spyOn(service, 'after')
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
+
             await service.beforeSession(service['_config'] as any)
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeFeature(null, { name: 'Feature1' })
 
             expect(updateSpy).toHaveBeenCalledWith(service['_browser']?.sessionId, {
@@ -1368,12 +1144,9 @@ describe('after', () => {
 
         it('should call _update with status "failed" when strict mode is "off" and only failed and pending tests ran', async () => {
             const updateSpy = vi.spyOn(service, '_update')
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
+
             await service.beforeSession(service['_config'] as any)
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeFeature(null, { name: 'Feature1' })
 
             expect(updateSpy).toHaveBeenCalledWith(service['_browser']?.sessionId, {
@@ -1407,13 +1180,9 @@ describe('after', () => {
                     /*, 5, 4, 0*/
                 ].map(({ status, body }) =>
                     it(`should call _update /w status failed and name of Scenario when single "${status}" Scenario ran`, async () => {
-                        service = new BrowserstackService({ testObservability: false, preferScenarioName : true, setSessionName: true, setSessionStatus: true } as any, [] as any,
+                        service = new BrowserstackService({ testObservability: false, preferScenarioName : true } as any, [] as any,
                             { user: 'foo', key: 'bar', cucumberOpts: { strict: false } } as any)
-                        const browserWithExecuteScript = {
-                            ...browser,
-                            executeScript: browser.execute
-                        } as WebdriverIO.Browser
-                        await service.before({}, [], browserWithExecuteScript)
+                        service.before({}, [], browser)
 
                         const updateSpy = vi.spyOn(service, '_update')
 
@@ -1426,13 +1195,9 @@ describe('after', () => {
                 )
 
                 it('should call _update /w status passed and name of Scenario when single "passed" Scenario ran', async () => {
-                    service = new BrowserstackService({ testObservability: false, preferScenarioName : true, setSessionName: true, setSessionStatus: true } as any, [] as any,
+                    service = new BrowserstackService({ testObservability: false, preferScenarioName : true } as any, [] as any,
                         { user: 'foo', key: 'bar', cucumberOpts: { strict: false } } as any)
-                    const browserWithExecuteScript = {
-                        ...browser,
-                        executeScript: browser.execute
-                    } as WebdriverIO.Browser
-                    await service.before({}, [], browserWithExecuteScript)
+                    service.before({}, [], browser)
 
                     const updateSpy = vi.spyOn(service, '_update')
 
@@ -1457,11 +1222,7 @@ describe('after', () => {
                     it(`should call _update /w status failed and name of Feature when single "${status}" Scenario ran`, async () => {
                         service = new BrowserstackService({ testObservability: false, preferScenarioName : false } as any, [] as any,
                             { user: 'foo', key: 'bar', cucumberOpts: { strict: false } } as any)
-                        const browserWithExecuteScript = {
-                            ...browser,
-                            executeScript: browser.execute
-                        } as WebdriverIO.Browser
-                        service.before({}, [], browserWithExecuteScript)
+                        service.before({}, [], browser)
 
                         const updateSpy = vi.spyOn(service, '_update')
 
@@ -1482,11 +1243,7 @@ describe('after', () => {
                 it('should call _update /w status passed and name of Feature when single "passed" Scenario ran', async () => {
                     service = new BrowserstackService({ testObservability: false, preferScenarioName : false } as any, [] as any,
                         { user: 'foo', key: 'bar', cucumberOpts: { strict: false } } as any)
-                    const browserWithExecuteScript = {
-                        ...browser,
-                        executeScript: browser.execute
-                    } as WebdriverIO.Browser
-                    service.before({}, [], browserWithExecuteScript)
+                    service.before({}, [], browser)
 
                     const updateSpy = vi.spyOn(service, '_update')
 
@@ -1539,12 +1296,7 @@ describe('_updateCaps', () => {
 describe('setAnnotation', () => {
     describe('Cucumber', () => {
         it('should correctly annotate Features, Scenarios, and Steps', async () => {
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            const service = new BrowserstackService({ sessionNamePrependTopLevelSuiteTitle: true } as any, [] as any, { user: 'foo', key: 'bar' } as any)
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeFeature(null, { name: 'Feature1' })
             await service.beforeScenario({ pickle: { name: 'foobar' } })
             const step = {
@@ -1555,37 +1307,29 @@ describe('setAnnotation', () => {
             }
             await service.beforeStep(step)
             expect(browser.execute).toBeCalledTimes(3)
-            expect(browserWithExecuteScript.executeScript).toHaveBeenNthCalledWith(1, 'browserstack_executor: {"action":"annotate","arguments":{"data":"Feature: Feature1","level":"info"}}', [])
-            expect(browserWithExecuteScript.executeScript).toHaveBeenNthCalledWith(2, 'browserstack_executor: {"action":"annotate","arguments":{"data":"Scenario: foobar","level":"info"}}', [])
-            expect(browserWithExecuteScript.executeScript).toHaveBeenNthCalledWith(3, 'browserstack_executor: {"action":"annotate","arguments":{"data":"Step: Given I am a step","level":"info"}}', [])
+            expect(browser.execute).toBeCalledWith('browserstack_executor: {"action":"annotate","arguments":{"data":"Feature: Feature1","level":"info"}}')
+            expect(browser.execute).toBeCalledWith('browserstack_executor: {"action":"annotate","arguments":{"data":"Scenario: foobar","level":"info"}}')
+            expect(browser.execute).toBeCalledWith('browserstack_executor: {"action":"annotate","arguments":{"data":"Step: Given I am a step","level":"info"}}')
         })
     })
 
     describe('Jasmine', () => {
         it('should correctly annotate Tests', async () => {
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeSuite({ title: jasmineSuiteTitle } as any)
             await service.beforeTest({ fullName: 'foo bar baz', description: 'baz' } as any)
             expect(browser.execute).toBeCalledTimes(1)
-            expect(browser.execute).toBeCalledWith('browserstack_executor: {"action":"annotate","arguments":{"data":"Test: foo bar baz","level":"info"}}', [])
+            expect(browser.execute).toBeCalledWith('browserstack_executor: {"action":"annotate","arguments":{"data":"Test: foo bar baz","level":"info"}}')
         })
     })
 
     describe('Mocha', () => {
         it('should correctly annotate Tests', async () => {
-            const browserWithExecuteScript = {
-                ...browser,
-                executeScript: browser.execute
-            } as WebdriverIO.Browser
-            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.before(service['_config'] as any, [], browser)
             await service.beforeSuite({ title: 'My Feature' } as any)
             await service.beforeTest({ title: 'Test Title', parent: 'Suite Title' } as any)
             expect(browser.execute).toBeCalledTimes(1)
-            expect(browser.execute).toBeCalledWith('browserstack_executor: {"action":"annotate","arguments":{"data":"Test: Test Title","level":"info"}}', [])
+            expect(browser.execute).toBeCalledWith('browserstack_executor: {"action":"annotate","arguments":{"data":"Test: Test Title","level":"info"}}')
         })
     })
 })
@@ -2158,178 +1902,6 @@ describe('ignoreHooksStatus feature', () => {
                 expect(service['_pureTestFailReasons']).toHaveLength(50)
             })
 
-        })
-
-        describe('Cucumber afterScenario with ignoreHooksStatus', () => {
-            beforeEach(() => {
-                service = new BrowserstackService({
-                    testObservability: false,
-                    testObservabilityOptions: { ignoreHooksStatus: true },
-                    setSessionStatus: true
-                } as any, [] as any, { user: 'foo', key: 'bar' } as any)
-                service['_browser'] = browser
-                service['_insightsHandler'] = new InsightsHandler(browser)
-            })
-
-            it('should not add failure when scenario fails due to hooks only', async () => {
-                const world = {
-                    pickle: { name: 'Test scenario' },
-                    result: { status: 'FAILED', message: 'Hook failed' }
-                } as any
-
-                // Mock hasTestStepFailures to return false (no test step failures)
-                vi.spyOn(service['_insightsHandler'], 'hasTestStepFailures').mockReturnValue(false)
-
-                await service.afterScenario(world)
-
-                expect(service['_failReasons']).toEqual([])
-                expect(service['_pureTestFailReasons']).toEqual([])
-                expect(service['_scenariosThatRan']).toEqual(['Test scenario'])
-            })
-
-            it('should add failure when scenario fails due to test steps', async () => {
-                const world = {
-                    pickle: { name: 'Test scenario' },
-                    result: { status: 'FAILED', message: 'Test step failed' }
-                } as any
-
-                // Mock hasTestStepFailures to return true (test step failures exist)
-                vi.spyOn(service['_insightsHandler'], 'hasTestStepFailures').mockReturnValue(true)
-
-                await service.afterScenario(world)
-
-                expect(service['_failReasons']).toEqual(['Test step failed'])
-                expect(service['_pureTestFailReasons']).toEqual(['Test step failed'])
-                expect(service['_scenariosThatRan']).toEqual(['Test scenario'])
-            })
-
-            it('should add failure when ignoreHooksStatus is false regardless of step failures', async () => {
-                service = new BrowserstackService({
-                    testObservability: false,
-                    testObservabilityOptions: { ignoreHooksStatus: false },
-                    setSessionStatus: true
-                } as any, [] as any, { user: 'foo', key: 'bar' } as any)
-                service['_browser'] = browser
-                service['_insightsHandler'] = new InsightsHandler(browser)
-
-                const world = {
-                    pickle: { name: 'Test scenario' },
-                    result: { status: 'FAILED', message: 'Hook failed' }
-                } as any
-
-                // Mock hasTestStepFailures to return false (no test step failures)
-                vi.spyOn(service['_insightsHandler'], 'hasTestStepFailures').mockReturnValue(false)
-
-                await service.afterScenario(world)
-
-                expect(service['_failReasons']).toEqual(['Hook failed'])
-                expect(service['_pureTestFailReasons']).toEqual(['Hook failed'])
-            })
-
-            it('should handle pending scenarios with ignoreHooksStatus', async () => {
-                const world = {
-                    pickle: { name: 'Pending scenario' },
-                    result: { status: 'PENDING' }
-                } as any
-
-                // Mock hasTestStepFailures to return false
-                vi.spyOn(service['_insightsHandler'], 'hasTestStepFailures').mockReturnValue(false)
-
-                await service.afterScenario(world)
-
-                expect(service['_failReasons']).toEqual([])
-                expect(service['_pureTestFailReasons']).toEqual([])
-            })
-        })
-
-        describe('Process exit override functionality', () => {
-            beforeEach(() => {
-                service = new BrowserstackService({
-                    testObservability: false,
-                    testObservabilityOptions: { ignoreHooksStatus: true },
-                    setSessionStatus: true
-                } as any, [] as any, { user: 'foo', key: 'bar' } as any)
-                service['_browser'] = browser
-                vi.spyOn(service, '_updateJob').mockResolvedValue({} as any)
-            })
-
-            it('should override process exit when only hooks fail and ignoreHooksStatus=true', async () => {
-                service['_specsRan'] = true
-                service['_hookFailReasons'] = ['Hook failed']
-                service['_failReasons'] = [] // Empty because hooks ignored
-                service['_pureTestFailReasons'] = []
-
-                // after method should return early, preventing normal exit code handling
-                const result = await service.after(1) // Exit code 1 (failure)
-
-                expect(result).toBeUndefined() // Method returns early
-                expect(service['_updateJob']).toHaveBeenCalledWith({
-                    status: 'passed'
-                })
-            })
-
-            it('should not override process exit when tests actually failed', async () => {
-                service['_specsRan'] = true
-                service['_hookFailReasons'] = ['Hook failed']
-                service['_failReasons'] = ['Test failed']
-                service['_pureTestFailReasons'] = ['Test failed']
-
-                const result = await service.after(1) // Exit code 1 (failure)
-
-                expect(result).toBeUndefined() // Normal flow, no early return
-                expect(service['_updateJob']).toHaveBeenCalledWith({
-                    status: 'failed',
-                    reason: 'Test failed'
-                })
-            })
-
-            it('should not override process exit when ignoreHooksStatus=false', async () => {
-                service = new BrowserstackService({
-                    testObservability: false,
-                    testObservabilityOptions: { ignoreHooksStatus: false },
-                    setSessionStatus: true
-                } as any, [] as any, { user: 'foo', key: 'bar' } as any)
-                service['_browser'] = browser
-                vi.spyOn(service, '_updateJob').mockResolvedValue({} as any)
-
-                service['_specsRan'] = true
-                service['_hookFailReasons'] = ['Hook failed']
-                service['_failReasons'] = ['Hook failed']
-
-                const result = await service.after(1) // Exit code 1 (failure)
-
-                expect(result).toBeUndefined() // Normal flow, no early return
-                expect(service['_updateJob']).toHaveBeenCalledWith({
-                    status: 'failed',
-                    reason: 'Hook failed'
-                })
-            })
-
-            it('should not override process exit when specs did not run', async () => {
-                service['_specsRan'] = false
-                service['_hookFailReasons'] = ['Hook failed']
-                service['_failReasons'] = []
-
-                const result = await service.after(1) // Exit code 1 (failure)
-
-                expect(result).toBeUndefined() // Normal flow, no early return
-                expect(service['_updateJob']).toHaveBeenCalledWith({
-                    status: 'failed'
-                })
-            })
-
-            it('should not override process exit when exit code is 0', async () => {
-                service['_specsRan'] = true
-                service['_hookFailReasons'] = ['Hook failed']
-                service['_failReasons'] = []
-
-                const result = await service.after(0) // Exit code 0 (success)
-
-                expect(result).toBeUndefined() // Normal flow, no early return
-                expect(service['_updateJob']).toHaveBeenCalledWith({
-                    status: 'passed'
-                })
-            })
         })
     })
 })

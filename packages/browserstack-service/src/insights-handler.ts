@@ -1,20 +1,19 @@
 import path from 'node:path'
 
-import type { Frameworks } from '@wdio/types'
+import type { Frameworks, Options } from '@wdio/types'
 import type { BeforeCommandArgs, AfterCommandArgs } from '@wdio/reporter'
 
 import { v4 as uuidv4 } from 'uuid'
 import type { CucumberStore, Feature, Scenario, Step, FeatureChild, CucumberHook, CucumberHookParams, Pickle, ITestCaseHookParameter } from './cucumber-types.js'
 import TestReporter from './reporter.js'
 
-import type { BrowserstackConfig, BrowserstackOptions } from './types.js'
+import type { BrowserstackConfig } from './types.js'
 
 import {
     frameworkSupportsHook,
     getCloudProvider, getFailureObject,
     getGitMetaData,
     getHookType, getPlatformVersion,
-    getResolvedDeviceName,
     getScenarioExamples,
     getUniqueIdentifier,
     getUniqueIdentifierForCucumber,
@@ -23,8 +22,7 @@ import {
     isUndefined,
     o11yClassErrorHandler,
     removeAnsiColors,
-    getObservabilityProduct,
-    generateHashCodeFromFields
+    getObservabilityProduct
 } from './util.js'
 import type {
     TestData,
@@ -32,8 +30,7 @@ import type {
     PlatformMeta,
     CurrentRunInfo,
     StdLog,
-    CBTData,
-    IntegrationObject
+    CBTData
 } from './types.js'
 import { BStackLogger } from './bstackLogger.js'
 import type { Capabilities } from '@wdio/types'
@@ -59,13 +56,13 @@ class _InsightsHandler {
         scenariosStarted: false,
         steps: []
     }
-    private _userCaps?: Capabilities.ResolvedTestrunnerCapabilities = {}
-    private _options?: BrowserstackConfig & BrowserstackOptions
+    private _userCaps?: Capabilities.RemoteCapability = {}
+    private _options?: BrowserstackConfig & Options.Testrunner
     private listener = Listener.getInstance()
     public currentTestId: string | undefined
     public cbtQueue: Array<CBTData> = []
 
-    constructor (private _browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, private _framework?: string, _userCaps?: Capabilities.ResolvedTestrunnerCapabilities, _options?: BrowserstackConfig & BrowserstackOptions) {
+    constructor (private _browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, private _framework?: string, _userCaps?: Capabilities.RemoteCapability, _options?: BrowserstackConfig & Options.Testrunner) {
         const caps = (this._browser as WebdriverIO.Browser).capabilities as WebdriverIO.Capabilities
         const sessionId = (this._browser as WebdriverIO.Browser).sessionId
 
@@ -85,9 +82,9 @@ class _InsightsHandler {
     }
 
     _isAppAutomate(): boolean {
-        const browserDesiredCapabilities = (this._browser?.capabilities ?? {})
-        const desiredCapabilities = (this._userCaps ?? {}) as WebdriverIO.Capabilities
-        return !!browserDesiredCapabilities['appium:app'] || !!desiredCapabilities['appium:app'] || !!(desiredCapabilities['appium:options']?.app)
+        const browserDesiredCapabilities = (this._browser?.capabilities ?? {}) as Capabilities.DesiredCapabilities
+        const desiredCapabilities = (this._userCaps ?? {})  as Capabilities.DesiredCapabilities
+        return !!browserDesiredCapabilities['appium:app'] || !!desiredCapabilities['appium:app'] || !!(( desiredCapabilities as any)['appium:options']?.app)
     }
 
     registerListeners() {
@@ -102,17 +99,24 @@ class _InsightsHandler {
         this._suiteFile = filename
     }
 
-    async before() {
+    public async setGitConfigPath() {
+        const gitMeta = await getGitMetaData()
+        if (gitMeta) {
+            this._gitConfigPath = gitMeta.root
+        }
+    }
+
+    async before () {
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.CONFIG_EVENTS.OBSERVABILITY)
 
         if (isBrowserstackSession(this._browser)) {
-            await (this._browser as WebdriverIO.Browser).executeScript(`browserstack_executor: ${JSON.stringify({
+            await (this._browser as WebdriverIO.Browser).execute(`browserstack_executor: ${JSON.stringify({
                 action: 'annotate',
                 arguments: {
-                    data: `TestReportingSync:${Date.now()}`,
+                    data: `ObservabilitySync:${Date.now()}`,
                     level: 'debug'
                 }
-            })}`, [])
+            })}`)
         }
 
         const gitMeta = await getGitMetaData()
@@ -252,7 +256,7 @@ class _InsightsHandler {
         }
     }
 
-    async beforeHook (test: Frameworks.Test|CucumberHook|undefined, context: unknown) {
+    async beforeHook (test: Frameworks.Test|CucumberHook|undefined, context: any) {
         if (!frameworkSupportsHook('before', this._framework)) {
             return
         }
@@ -305,7 +309,6 @@ class _InsightsHandler {
             This won't be needed for `afterAll`, as even if `afterAll` fails all the tests that we need are already run by then, so we don't need to send the stats for them separately
          */
         if (!result.passed && (hookType === 'BEFORE_EACH' || hookType === 'BEFORE_ALL' || hookType === 'AFTER_EACH')) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const sendTestSkip = async (skippedTest: any) => {
 
                 // We only need to send the tests that whose state is not determined yet. The state of tests which is determined will already be sent.
@@ -323,12 +326,11 @@ class _InsightsHandler {
             /*
                 Recursively send the tests as skipped for all suites below the hook. This is to handle nested describe blocks
              */
-            const sendSuiteSkipped = async (suite: { tests: unknown[], suites: unknown[] }) => {
+            const sendSuiteSkipped = async (suite: any) => {
                 for (const skippedTest of suite.tests) {
                     await sendTestSkip(skippedTest)
                 }
                 for (const skippedSuite of suite.suites) {
-                    // @ts-expect-error fix types here
                     await sendSuiteSkipped(skippedSuite)
                 }
             }
@@ -337,7 +339,7 @@ class _InsightsHandler {
         }
     }
 
-    public getHookRunDataForCucumber(hookData: TestMeta, eventType: string, result?: Frameworks.TestResult) {
+    public getHookRunDataForCucumber (hookData: TestMeta, eventType: string, result?: Frameworks.TestResult) {
         const { uri, feature } = this._cucumberData
 
         const testData: TestData = {
@@ -382,6 +384,20 @@ class _InsightsHandler {
         return testData
     }
 
+    public setTestData (test: Frameworks.Test, uuid: string) {
+        InsightsHandler.currentTest = {
+            test, uuid
+        }
+        if (this._framework !== 'mocha') {
+            return
+        }
+        const fullTitle = getUniqueIdentifier(test, this._framework)
+        this._tests[fullTitle] = {
+            uuid,
+            startedAt: (new Date()).toISOString()
+        }
+    }
+
     async beforeTest (test: Frameworks.Test) {
         const uuid = uuidv4()
         InsightsHandler.currentTest = {
@@ -395,6 +411,7 @@ class _InsightsHandler {
             uuid,
             startedAt: (new Date()).toISOString()
         }
+
         this.listener.testStarted(this.getRunData(test, 'TestRunStarted'))
     }
 
@@ -407,22 +424,9 @@ class _InsightsHandler {
             ...(this._tests[fullTitle] || {}),
             finishedAt: (new Date()).toISOString()
         }
+        BStackLogger.debug('calling testFinished')
         this.flushCBTDataQueue()
-        const testData = this.getRunData(test, 'TestRunFinished', result)
-        this.listener.testFinished(testData)
-        const testFinishHashCode = generateHashCodeFromFields(
-            [
-                testData.integrations?.browserstack?.browser ?? '',
-                testData.integrations?.browserstack?.browser_version ?? '',
-                testData.integrations?.browserstack?.platform ?? '',
-                testData.integrations?.browserstack?.session_id ?? '',
-                testData.integrations?.capabilities ?? {},
-                testData.file_name ?? '',
-                testData.scopes ?? [],
-                testData.name ?? ''
-            ]
-        )
-        TestReporter.hashCodeToHandleTestSkip[testFinishHashCode] = testData.uuid ?? ''
+        this.listener.testFinished(this.getRunData(test, 'TestRunFinished', result))
     }
 
     /**
@@ -534,6 +538,7 @@ class _InsightsHandler {
                 await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry: stdLog })
                 return
             }
+
             if (this._currentHook.uuid && !this._currentHook.finished && (this._framework === 'mocha' || this._framework === 'cucumber')) {
                 stdLog.hook_run_uuid = this._currentHook.uuid
             } else if (InsightsHandler.currentTest.uuid && (this._framework === 'mocha' || this._framework === 'cucumber')) {
@@ -566,7 +571,7 @@ class _InsightsHandler {
 
         // log screenshot
         const body = 'body' in args ? args.body : undefined
-        const result = 'result' in args ? args.result as { value: string } : undefined
+        const result = 'result' in args ? args.result : undefined
         if (Boolean(process.env[TESTOPS_SCREENSHOT_ENV]) && isScreenshotCommand(args) && result?.value) {
             await this.listener.onScreenshot([{
                 test_run_uuid: testMeta.uuid,
@@ -592,8 +597,7 @@ class _InsightsHandler {
                 body,
                 response: result
             }
-        }]
-        )
+        }])
     }
 
     /*
@@ -620,7 +624,6 @@ class _InsightsHandler {
         return testMetaData.steps.some(step => step.result === 'FAILED')
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private attachHookData (context: any, hookId: string): void {
         if (context.currentTest && context.currentTest.parent) {
             const parentTest = `${context.currentTest.parent.title} - ${context.currentTest.title}`
@@ -635,7 +638,6 @@ class _InsightsHandler {
         }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private setHooksFromSuite(parent: any, hookId: string): boolean {
         if (!parent) {
             return false
@@ -679,7 +681,7 @@ class _InsightsHandler {
         return value.reverse()
     }
 
-    private getRunData (test: Frameworks.Test, eventType: string, results?: Frameworks.TestResult) {
+    private getRunData (test: Frameworks.Test, eventType: string, results?: Frameworks.TestResult): TestData {
         const fullTitle = getUniqueIdentifier(test, this._framework)
         const testMetaData = this._tests[fullTitle]
 
@@ -711,11 +713,6 @@ class _InsightsHandler {
         }
 
         if ((eventType === 'TestRunFinished' || eventType === 'HookRunFinished') && results) {
-            testData.integrations = {}
-            if (this._browser && this._platformMeta) {
-                const provider = getCloudProvider(this._browser)
-                testData.integrations[provider] = this.getIntegrationsObject()
-            }
             const { error, passed } = results
             if (!passed) {
                 testData.result = (error && error.message && error.message.includes('sync skip; aborting execution')) ? 'ignore' : 'failed'
@@ -758,10 +755,8 @@ class _InsightsHandler {
         }
 
         return testData
-
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private getTestRunId(context: any): string|undefined {
         if (!context) {
             return
@@ -778,7 +773,6 @@ class _InsightsHandler {
         return this.getTestRunIdFromSuite(context.test.parent)
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private getTestRunIdFromSuite(parent: any): string|undefined {
         if (!parent) {
             return
@@ -813,6 +807,7 @@ class _InsightsHandler {
         } else {
             fullNameWithExamples = scenario?.name || ''
         }
+
         this.currentTestId = uuid
 
         if (eventType === 'TestRunStarted') {
@@ -896,6 +891,7 @@ class _InsightsHandler {
 
         if (eventType === 'TestRunSkipped') {
             testData.result = 'skipped'
+            eventType = 'TestRunFinished'
         }
 
         return testData
@@ -912,10 +908,10 @@ class _InsightsHandler {
     }
 
     async sendCBTInfo() {
-        const integrationsData: Record<string, IntegrationObject> = {}
+        const integrationsData: any = {}
 
         if (this._browser && this._platformMeta) {
-            const provider = getCloudProvider(this._browser) as keyof IntegrationObject
+            const provider = getCloudProvider(this._browser)
             integrationsData[provider] = this.getIntegrationsObject()
         }
 
@@ -937,9 +933,6 @@ class _InsightsHandler {
         const caps = (this._browser as WebdriverIO.Browser)?.capabilities as WebdriverIO.Capabilities
         const sessionId = (this._browser as WebdriverIO.Browser)?.sessionId
 
-        BStackLogger.debug(`Driver capabilities used for integration object: ${JSON.stringify(caps)}`)
-        BStackLogger.debug(`User capabilities used for integration object: ${JSON.stringify(this._userCaps)}`)
-
         return {
             capabilities: caps,
             session_id: sessionId,
@@ -947,8 +940,7 @@ class _InsightsHandler {
             browser_version: caps?.browserVersion,
             platform: caps?.platformName,
             product: this._platformMeta?.product,
-            platform_version: getPlatformVersion(caps, this._userCaps as WebdriverIO.Capabilities),
-            device: getResolvedDeviceName(caps, this._userCaps as WebdriverIO.Capabilities)
+            platform_version: getPlatformVersion(caps, this._userCaps as WebdriverIO.Capabilities)
         }
     }
 
@@ -957,27 +949,6 @@ class _InsightsHandler {
             return getUniqueIdentifierForCucumber(test)
         }
         return getUniqueIdentifier(test, this._framework)
-    }
-
-    public async setGitConfigPath() {
-        const gitMeta = await getGitMetaData()
-        if (gitMeta) {
-            this._gitConfigPath = gitMeta.root
-        }
-    }
-
-    public setTestData (test: Frameworks.Test, uuid: string) {
-        InsightsHandler.currentTest = {
-            test, uuid
-        }
-        if (this._framework !== 'mocha') {
-            return
-        }
-        const fullTitle = getUniqueIdentifier(test, this._framework)
-        this._tests[fullTitle] = {
-            uuid,
-            startedAt: (new Date()).toISOString()
-        }
     }
 }
 

@@ -1,25 +1,60 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { eventDispatcher } from '../../src/cli/eventDispatcher.js'
+
+vi.mock('../../src/cli/eventDispatcher.js', () => {
+    class EventDispatcher {
+        static #instance: EventDispatcher | null = null
+        observers: Record<string, Function[]>
+
+        constructor() {
+            this.observers = {}
+        }
+
+        static getInstance() {
+            if (!EventDispatcher.#instance) {
+                EventDispatcher.#instance = new EventDispatcher()
+            }
+            return EventDispatcher.#instance
+        }
+
+        registerObserver(hookRegistryKey: string, callback: Function) {
+            if (!this.observers[hookRegistryKey]) {
+                this.observers[hookRegistryKey] = []
+            }
+            this.observers[hookRegistryKey].push(callback)
+        }
+
+        async notifyObserver(event: string, args: unknown) {
+            if (this.observers[event]) {
+                for (const callback of this.observers[event]) {
+                    await callback(args)
+                }
+                return
+            }
+        }
+    }
+
+    const mockEventDispatcher = EventDispatcher.getInstance()
+    return {
+        eventDispatcher: mockEventDispatcher,
+        EventDispatcher
+    }
+})
+
+// Import after mocking
+const { eventDispatcher } = await import('../../src/cli/eventDispatcher.js')
 
 describe('EventDispatcher', () => {
     beforeEach(() => {
         vi.resetAllMocks()
         // Clear all observers before each test
-        // Since the instance is frozen, we clear the observers object contents rather than replacing it
-        const observers = (eventDispatcher as any).observers
-        if (observers) {
-            Object.keys(observers).forEach(key => delete observers[key])
-        }
+        eventDispatcher.observers = {}
     })
 
     afterEach(() => {
         vi.resetAllMocks()
         vi.restoreAllMocks()
         // Clear all observers after each test
-        const observers = (eventDispatcher as any).observers
-        if (observers) {
-            Object.keys(observers).forEach(key => delete observers[key])
-        }
+        eventDispatcher.observers = {}
     })
 
     describe('getInstance()', () => {

@@ -17,20 +17,10 @@ vi.mock('../../../src/util.js', () => ({
     performO11ySync: vi.fn()
 }))
 
-vi.mock('../../../src/cli/cliLogger.js', () => ({
-    BStackLogger: {
-        info: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn()
-    }
-}))
-
 import ObservabilityModule from '../../../src/cli/modules/observabilityModule.js'
 import AutomationFramework from '../../../src/cli/frameworks/automationFramework.js'
 import PerformanceTester from '../../../src/instrumentation/performance/performance-tester.js'
 import { performO11ySync } from '../../../src/util.js'
-import { BStackLogger } from '../../../src/cli/cliLogger.js'
-import { O11Y_EVENTS } from '../../../src/instrumentation/performance/constants.js'
 import { AutomationFrameworkState } from '../../../src/cli/states/automationFrameworkState.js'
 import { HookState } from '../../../src/cli/states/hookState.js'
 
@@ -81,36 +71,9 @@ describe('ObservabilityModule', () => {
 
             await observabilityModule.onBeforeTest({ browser: mockBrowser })
 
-            expect(PerformanceTester.start).toHaveBeenCalledWith(O11Y_EVENTS.SYNC)
+            expect(PerformanceTester.start).toHaveBeenCalledWith(expect.any(String))
             expect(performO11ySync).toHaveBeenCalledWith(mockBrowser)
-            expect(PerformanceTester.end).toHaveBeenCalledWith(O11Y_EVENTS.SYNC)
-            expect(BStackLogger.info).toHaveBeenCalledWith('onBeforeTest: Observability sync done')
-        })
-
-        it('should maintain correct order of performance measurement and sync', async () => {
-            const mockBrowser = {
-                sessionId: 'test-session-id'
-            } as any
-
-            const callOrder: string[] = []
-            vi.mocked(PerformanceTester.start).mockImplementation(() => {
-                callOrder.push('start')
-            })
-            // Note: performO11ySync is called without await in implementation
-            vi.mocked(performO11ySync).mockImplementation(() => {
-                callOrder.push('sync')
-                return Promise.resolve()
-            })
-            vi.mocked(PerformanceTester.end).mockImplementation(() => {
-                callOrder.push('end')
-            })
-            vi.mocked(BStackLogger.info).mockImplementation(() => {
-                callOrder.push('info')
-            })
-
-            await observabilityModule.onBeforeTest({ browser: mockBrowser })
-
-            expect(callOrder).toEqual(['start', 'sync', 'end', 'info'])
+            expect(PerformanceTester.end).toHaveBeenCalledWith(expect.any(String))
         })
 
         it('should log error when browser is not defined', async () => {
@@ -119,7 +82,6 @@ describe('ObservabilityModule', () => {
             expect(PerformanceTester.start).not.toHaveBeenCalled()
             expect(performO11ySync).not.toHaveBeenCalled()
             expect(PerformanceTester.end).not.toHaveBeenCalled()
-            expect(BStackLogger.error).toHaveBeenCalledWith('onBeforeTest: page is not defined')
         })
 
         it('should handle null browser gracefully', async () => {
@@ -128,7 +90,6 @@ describe('ObservabilityModule', () => {
             expect(PerformanceTester.start).not.toHaveBeenCalled()
             expect(performO11ySync).not.toHaveBeenCalled()
             expect(PerformanceTester.end).not.toHaveBeenCalled()
-            expect(BStackLogger.error).toHaveBeenCalledWith('onBeforeTest: page is not defined')
         })
 
         it('should handle undefined browser gracefully', async () => {
@@ -137,7 +98,6 @@ describe('ObservabilityModule', () => {
             expect(PerformanceTester.start).not.toHaveBeenCalled()
             expect(performO11ySync).not.toHaveBeenCalled()
             expect(PerformanceTester.end).not.toHaveBeenCalled()
-            expect(BStackLogger.error).toHaveBeenCalledWith('onBeforeTest: page is not defined')
         })
     })
 })

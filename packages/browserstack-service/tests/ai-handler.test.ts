@@ -169,7 +169,7 @@ describe('AiHandler', () => {
                     'moz:firefoxOptions': { extensions: [mockFirefoxExtension] }
                 })
 
-            const updatedCapsArray = await AiHandler.updateCaps(authResult, config, capsArray) as Array<Capabilities.ResolvedTestrunnerCapabilities>
+            const updatedCapsArray = await AiHandler.updateCaps(authResult, config, capsArray) as Array<Capabilities.RemoteCapability>
             const updatedCapsObject = await AiHandler.updateCaps(authResult, config, capsObject)
 
             expect(initializeCapabilitiesSpy).toHaveBeenCalledTimes(2)
@@ -411,7 +411,7 @@ describe('AiHandler', () => {
 
     describe('selfHeal', () => {
         it('should set token, install extension for Firefox', async () => {
-            const caps = { browserName: 'firefox' } as Capabilities.ResolvedTestrunnerCapabilities
+            const caps = { browserName: 'firefox' } as Capabilities.RemoteCapability
             AiHandler['authResult'] = {
                 isAuthenticated: true,
                 sessionToken: 'mock-session-token',
@@ -432,7 +432,7 @@ describe('AiHandler', () => {
         })
 
         it('should set token for Chrome', async () => {
-            const caps = { browserName: 'chrome' } as Capabilities.ResolvedTestrunnerCapabilities
+            const caps = { browserName: 'chrome' } as Capabilities.RemoteCapability
             AiHandler['authResult'] = {
                 isAuthenticated: true,
                 sessionToken: 'mock-session-token',
@@ -450,7 +450,7 @@ describe('AiHandler', () => {
         })
 
         it('should skip self-healing if authResult is empty', async () => {
-            const caps = { browserName: 'chrome' } as Capabilities.ResolvedTestrunnerCapabilities
+            const caps = { browserName: 'chrome' } as Capabilities.RemoteCapability
             AiHandler['authResult'] = {} as any
 
             const setTokenSpy = vi.spyOn(AiHandler, 'setToken')
@@ -461,7 +461,7 @@ describe('AiHandler', () => {
         })
 
         it('should call overwriteCommand for Chrome', async () => {
-            const caps = { browserName: 'chrome' } as Capabilities.ResolvedTestrunnerCapabilities
+            const caps = { browserName: 'chrome' } as Capabilities.RemoteCapability
             AiHandler['authResult'] = {
                 isAuthenticated: true,
                 sessionToken: 'mock-session-token',
@@ -485,7 +485,7 @@ describe('AiHandler', () => {
         })
 
         it('should call overwriteCommand for Edge', async () => {
-            const caps = { browserName: 'microsoftedge' } as Capabilities.ResolvedTestrunnerCapabilities
+            const caps = { browserName: 'microsoftedge' } as Capabilities.RemoteCapability
             AiHandler['authResult'] = {
                 isAuthenticated: true,
                 sessionToken: 'mock-session-token',
@@ -509,7 +509,7 @@ describe('AiHandler', () => {
         })
 
         it('should skip selfHeal for unsupported browser', async () => {
-            const caps = { browserName: 'safari' } as Capabilities.ResolvedTestrunnerCapabilities
+            const caps = { browserName: 'safari' } as Capabilities.RemoteCapability
 
             const setTokenSpy = vi.spyOn(AiHandler, 'setToken')
             const installFirefoxExtensionSpy = vi.spyOn(AiHandler, 'installFirefoxExtension')
@@ -524,7 +524,7 @@ describe('AiHandler', () => {
         })
 
         it('should handle error in selfHeal function', async () => {
-            const caps = { browserName: 'chrome' } as Capabilities.ResolvedTestrunnerCapabilities
+            const caps = { browserName: 'chrome' } as Capabilities.RemoteCapability
             AiHandler['authResult'] = {
                 isAuthenticated: true,
                 sessionToken: 'mock-session-token',
@@ -546,7 +546,7 @@ describe('AiHandler', () => {
         })
 
         it('should not set token if isAuthenticated is false', async () => {
-            const caps = { browserName: 'chrome' } as Capabilities.ResolvedTestrunnerCapabilities
+            const caps = { browserName: 'chrome' } as Capabilities.RemoteCapability
             AiHandler['authResult'] = {
                 isAuthenticated: false,
                 sessionToken: 'mock-session-token',
@@ -561,7 +561,7 @@ describe('AiHandler', () => {
         })
 
         it('should not overwrite findElement command if defaultLogDataEnabled and selfHeal are false', async () => {
-            const caps = { browserName: 'chrome' } as Capabilities.ResolvedTestrunnerCapabilities
+            const caps = { browserName: 'chrome' } as Capabilities.RemoteCapability
             config.selfHeal = false
             AiHandler['authResult'] = {
                 isAuthenticated: true,

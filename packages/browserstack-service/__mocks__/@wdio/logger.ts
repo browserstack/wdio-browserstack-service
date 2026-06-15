@@ -1,7 +1,5 @@
 import { vi } from 'vitest'
 
-export const SENSITIVE_DATA_REPLACER = '**MASKED**'
-
 export const logMock = {
     error: vi.fn(),
     debug: vi.fn(),
@@ -13,8 +11,6 @@ export const logMock = {
 const mock = () => logMock
 mock.setLevel = vi.fn()
 mock.setLogLevelsConfig = vi.fn()
-mock.setMaskingPatterns = vi.fn()
 mock.waitForBuffer = vi.fn()
 mock.clearLogger = vi.fn()
-
 export default mock

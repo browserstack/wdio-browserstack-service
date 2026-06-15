@@ -1,17 +1,16 @@
 import os from 'node:os'
-import util, { format } from 'node:util'
+import util from 'node:util'
 import path from 'node:path'
 import fs from 'node:fs'
-import UsageStats, { type UsageStat } from '../testOps/usageStats.js'
+import got from 'got'
+import UsageStats from '../testOps/usageStats.js'
+import TestOpsConfig from '../testOps/testOpsConfig.js'
 import { BStackLogger } from '../bstackLogger.js'
 import type BrowserStackConfig from '../config.js'
-import { BSTACK_SERVICE_VERSION, WDIO_NAMING_PREFIX } from '../constants.js'
-import { getDataFromWorkers } from '../data-store.js'
+import { BSTACK_A11Y_POLLING_TIMEOUT, BSTACK_SERVICE_VERSION, WDIO_NAMING_PREFIX } from '../constants.js'
+import { getDataFromWorkers, removeWorkersDataDir } from '../data-store.js'
 import { getProductMap } from '../testHub/utils.js'
-import fetchWrap from '../fetchWrapper.js'
 import type { BrowserstackHealing } from '@browserstack/ai-sdk-node'
-import type { FunnelData, EventProperties } from '../types.js'
-import TestOpsConfig from '../testOps/testOpsConfig.js'
 import APIUtils from '../cli/apiUtils.js'
 import PerformanceTester from './performance/performance-tester.js'
 import { EVENTS } from './performance/constants.js'
@@ -26,13 +25,17 @@ async function fireFunnelTestEvent(eventType: string, config: BrowserStackConfig
         const data = buildEventData(eventType, config, isCLIEnabled)
         await fireFunnelRequest(data)
         BStackLogger.debug('Funnel event success')
-        config.sentFunnelData()
+        if (eventType === 'SDKTestSuccessful') {
+            config.sentFunnelData()
+        }
     } catch (error) {
-        BStackLogger.debug(`Exception in sending funnel data: ${format(error)}`)
+        BStackLogger.debug('Exception in sending funnel data: ' + error)
     }
 }
 
 export async function sendStart(config: BrowserStackConfig) {
+    // Remove Workers folder if exists
+    removeWorkersDataDir()
 
     // Track funnel test attempted event
     PerformanceTester.start(EVENTS.SDK_FUNNEL_TEST_ATTEMPTED)
@@ -66,7 +69,7 @@ export function saveFunnelData(eventType: string, config: BrowserStackConfig, is
     return filePath
 }
 
-function redactCredentialsFromFunnelData(data: FunnelData) {
+function redactCredentialsFromFunnelData(data: any) {
     if (data) {
         if (data.userName) {
             data.userName = '[REDACTED]'
@@ -79,22 +82,15 @@ function redactCredentialsFromFunnelData(data: FunnelData) {
 }
 
 // Called from two different process
-export async function fireFunnelRequest(data: FunnelData): Promise<void> {
+export async function fireFunnelRequest(data: any): Promise<void> {
     const { userName, accessKey } = data
     redactCredentialsFromFunnelData(data)
-
     BStackLogger.debug('Sending SDK event with data ' + util.inspect(data, { depth: 6 }))
-
-    const encodedAuth = Buffer.from(`${userName}:${accessKey}`, 'utf8').toString('base64')
-    const response = await fetchWrap(APIUtils.FUNNEL_INSTRUMENTATION_URL, {
-        method: 'POST',
+    await got.post(APIUtils.FUNNEL_INSTRUMENTATION_URL, {
         headers: {
-            'content-type': 'application/json',
-            Authorization: `Basic ${encodedAuth}`,
-        },
-        body: JSON.stringify(data)
+            'content-type': 'application/json'
+        }, username: userName, password: accessKey, json: data
     })
-    BStackLogger.debug('Funnel Event Response: ' + JSON.stringify(await response.text()))
 }
 
 function getProductList(config: BrowserStackConfig) {
@@ -121,11 +117,9 @@ function getProductList(config: BrowserStackConfig) {
     return products
 }
 
-function buildEventData(eventType: string, config: BrowserStackConfig, isCLIEnabled = false) {
-    const eventProperties: EventProperties = {
+function buildEventData(eventType: string, config: BrowserStackConfig, isCLIEnabled = false): any {
+    const eventProperties: any = {
         // Framework Details
-        sdkRunId: config?.sdkRunID,
-        testhub_uuid: TestOpsConfig.getInstance().buildHashedId,
         language_framework: getLanguageFramework(config.framework),
         referrer: getReferrer(config.framework),
         language: 'WebdriverIO',
@@ -134,6 +128,7 @@ function buildEventData(eventType: string, config: BrowserStackConfig, isCLIEnab
         // Build Details
         buildName: config.buildName || 'undefined',
         buildIdentifier: String(config.buildIdentifier),
+        sdkRunId: config.sdkRunID,
 
         // Host details
         os: os.type() || 'unknown',
@@ -146,16 +141,26 @@ function buildEventData(eventType: string, config: BrowserStackConfig, isCLIEnab
         // framework details
         framework: config.framework,
 
-        // CLI Details
-        isCLIEnabled: isCLIEnabled
+        // CLI details
+        isCLIEnabled: isCLIEnabled,
+    }
+    if (TestOpsConfig.getInstance().buildHashedId) {
+        eventProperties.testhub_uuid = TestOpsConfig.getInstance().buildHashedId
     }
 
     if (eventType === 'SDKTestSuccessful') {
         const workerData = getDataFromWorkers()
-        // @ts-expect-error
         eventProperties.productUsage = getProductUsage(workerData)
-        if (process.env.BSTACK_A11Y_POLLING_TIMEOUT) {
-            eventProperties.pollingTimeout = process.env.BSTACK_A11Y_POLLING_TIMEOUT as string
+        eventProperties.isPercyAutoEnabled = config.isPercyAutoEnabled
+        eventProperties.percyBuildId = config.percyBuildId
+        if (process.env[BSTACK_A11Y_POLLING_TIMEOUT]) {
+            eventProperties.pollingTimeout = process.env[BSTACK_A11Y_POLLING_TIMEOUT]
+        }
+        if (config.killSignal) {
+            eventProperties.finishedMetadata = {
+                reason: 'user_killed',
+                signal: config.killSignal
+            }
         }
     }
 
@@ -165,11 +170,11 @@ function buildEventData(eventType: string, config: BrowserStackConfig, isCLIEnab
         event_type: eventType,
         detectedFramework: WDIO_NAMING_PREFIX + config.framework,
         event_properties: eventProperties
-    } as unknown as FunnelData
+    }
 
 }
 
-function getProductUsage(workersData: { usageStats: UsageStat }[]) {
+function getProductUsage(workersData: any[]) {
     return {
         testObservability: UsageStats.getInstance().getFormattedData(workersData)
     }
@@ -190,18 +195,6 @@ const sendEvent = {
     tcgAuthFailure: (config: BrowserStackConfig) => fireFunnelTestEvent('SDKTestTcgAuthFailure', config),
     tcgtInitSuccessful: (config: BrowserStackConfig) => fireFunnelTestEvent('SDKTestTcgtInitSuccessful', config),
     initFailed: (config: BrowserStackConfig) => fireFunnelTestEvent('SDKTestInitFailedResponse', config),
-    tcgProxyFailure: (config: BrowserStackConfig) => fireFunnelTestEvent('SDKTestTcgProxyFailure', config),
-}
-
-function isProxyError(authResult: { status?: number }): boolean {
-    return (authResult as BrowserstackHealing.InitErrorResponse)?.status === 502
-}
-
-function handleProxyError(config: BrowserStackConfig, isSelfHealEnabled: boolean | undefined) {
-    sendEvent.tcgProxyFailure(config)
-    if (isSelfHealEnabled) {
-        BStackLogger.warn('Proxy Error. Disabling Healing for this session.')
-    }
 }
 
 function handleUpgradeRequired(isSelfHealEnabled: boolean | undefined) {
@@ -249,27 +242,14 @@ function handleInitializationFailure(status: number, config: BrowserStackConfig,
     }
 }
 
-interface AuthResult {
-    message: string
-    isAuthenticated: boolean
-    status: number
-    userId: string
-    groupId: string
-    isHealingEnabled: boolean
-}
-
 export function handleHealingInstrumentation(
-    authResult: AuthResult,
+    authResult: BrowserstackHealing.InitErrorResponse | BrowserstackHealing.InitSuccessResponse,
     config: BrowserStackConfig,
     isSelfHealEnabled: boolean | undefined,
 ) {
     try {
-        if (isProxyError(authResult)) {
-            handleProxyError(config, isSelfHealEnabled)
-            return
-        }
 
-        const { message, isAuthenticated, status, userId, groupId, isHealingEnabled: isHealingEnabledForUser } = authResult
+        const { message, isAuthenticated, status, userId, groupId, isHealingEnabled: isHealingEnabledForUser } = authResult as any
 
         if (message === 'Upgrade required') {
             handleUpgradeRequired(isSelfHealEnabled)

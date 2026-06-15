@@ -1,3 +1,5 @@
+import got from 'got'
+import type { OptionsOfJSONResponseBody } from 'got'
 import type { Services, Capabilities, Options, Frameworks } from '@wdio/types'
 
 import {
@@ -7,13 +9,16 @@ import {
     getParentSuiteName,
     isBrowserstackSession,
     patchConsoleLogs,
-    isTrue
+    shouldAddServiceVersion,
+    isTrue,
+    normalizeTestReportingConfig,
+    normalizeTestReportingEnvVariables
 } from './util.js'
-import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from './types.js'
+import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction, SessionResponse, TurboScaleSessionResponse } from './types.js'
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
 import InsightsHandler from './insights-handler.js'
 import TestReporter from './reporter.js'
-import { DEFAULT_OPTIONS, NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV } from './constants.js'
+import { DEFAULT_OPTIONS, PERF_MEASUREMENT_ENV } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import AccessibilityHandler from './accessibility-handler.js'
 import { BStackLogger } from './bstackLogger.js'
@@ -27,28 +32,24 @@ import PerformanceTester from './instrumentation/performance/performance-tester.
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import { EVENTS } from './instrumentation/performance/constants.js'
 import { BrowserstackCLI } from './cli/index.js'
-import { CLIUtils } from './cli/cliUtils.js'
-
-import { _fetch as fetch } from './fetchWrapper.js'
+import { TestFrameworkState } from './cli/states/testFrameworkState.js'
+import { HookState } from './cli/states/hookState.js'
+import { AutomationFrameworkState } from './cli/states/automationFrameworkState.js'
+import TestFramework from './cli/frameworks/testFramework.js'
+import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
+import { AutomationFrameworkConstants } from './cli/frameworks/constants/automationFrameworkConstants.js'
 import AutomationFramework from './cli/frameworks/automationFramework.js'
 import type AutomationFrameworkInstance from './cli/instances/automationFrameworkInstance.js'
-import { AutomationFrameworkState } from './cli/states/automationFrameworkState.js'
-import { HookState } from './cli/states/hookState.js'
-import { AutomationFrameworkConstants } from './cli/frameworks/constants/automationFrameworkConstants.js'
-import TestFramework from './cli/frameworks/testFramework.js'
-import { TestFrameworkState } from './cli/states/testFrameworkState.js'
-import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
-
 import util from 'node:util'
+import APIUtils from './cli/apiUtils.js'
+import { CLIUtils } from './cli/cliUtils.js'
 
 export default class BrowserstackService implements Services.ServiceInstance {
-    private _sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
+    private _sessionBaseUrl = `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate/sessions`
     private _failReasons: string[] = []
     private _hookFailReasons: string[] = []
     private _pureTestFailReasons: string[] = []
     private _scenariosThatRan: string[] = []
-    private _lastScenarioName?: string  // Track last scenario for preferScenarioName feature
-    private _scenariosRanCount: number = 0  // Count of non-skipped scenarios
     private _failureStatuses: string[] = ['failed', 'ambiguous', 'undefined', 'unknown']
     private _browser?: WebdriverIO.Browser
     private _suiteTitle?: string
@@ -68,15 +69,16 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
     constructor (
         options: BrowserstackConfig & Options.Testrunner,
-        private _caps: Capabilities.ResolvedTestrunnerCapabilities,
+        private _caps: Capabilities.RemoteCapability,
         private _config: Options.Testrunner
     ) {
         this._options = { ...DEFAULT_OPTIONS, ...options }
         // added to maintain backward compatibility with webdriverIO v5
-        if (!this._config) {
-            this._config = this._options
-        }
+        this._config || (this._config = this._options)
 
+        normalizeTestReportingConfig(this._options)
+
+        normalizeTestReportingEnvVariables()
         this._observability = this._options.testObservability
         this._accessibility = this._options.accessibility
         this._percy = isTrue(process.env.BROWSERSTACK_PERCY)
@@ -105,8 +107,8 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
     }
 
-    _updateCaps (fn: (caps: WebdriverIO.Capabilities) => void) {
-        const multiRemoteCap = this._caps as Capabilities.RequestedMultiremoteCapabilities
+    _updateCaps (fn: (caps: WebdriverIO.Capabilities | Capabilities.DesiredCapabilities) => void) {
+        const multiRemoteCap = this._caps as Capabilities.MultiRemoteCapabilities
 
         if (multiRemoteCap.capabilities) {
             return Object.entries(multiRemoteCap).forEach(([, caps]) => fn(caps.capabilities as WebdriverIO.Capabilities))
@@ -116,7 +118,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeSession' })
-    async beforeSession(config: Omit<Options.Testrunner, 'capabilities'>, capabilities: WebdriverIO.Capabilities) {
+    async beforeSession (config: Omit<Options.Testrunner, 'capabilities'>, capabilities: WebdriverIO.Capabilities) {
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.INIT)
 
         // if no user and key is specified even though a browserstack service was
@@ -133,7 +135,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
         this._config.user = config.user
         this._config.key = config.key
 
-        // CLI integration for beforeSession
         try {
             // Detect if multi-remote and disable CLI for those sessions
             if (CLIUtils.checkCLISupportedFrameworks(this._config.framework) && process.env.BROWSERSTACK_IS_MULTIREMOTE !== 'true') {
@@ -150,22 +151,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_FIND_NEAREST_HUB, false, 'Hub URL not found')
                 }
             }
-            try {
-                if (BrowserstackCLI.getInstance().isRunning()) {
-                    await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.PRE, { caps: capabilities })
-                    const instance = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
-                    const caps = AutomationFramework.getState(instance, AutomationFrameworkConstants.KEY_CAPABILITIES)
-                    Object.assign(capabilities, caps)
-
-                    // Strip CLI-only options that BrowserStack hub doesn't accept
-                    const bstackOptions = (capabilities as Record<string, unknown>)['bstack:options'] as Record<string, unknown> | undefined
-                    if (bstackOptions && typeof bstackOptions === 'object') {
-                        NOT_ALLOWED_KEYS_IN_CAPS.forEach(key => delete bstackOptions[key])
-                    }
-                    NOT_ALLOWED_KEYS_IN_CAPS.forEach(key => delete (capabilities as Record<string, unknown>)[`browserstack.${key}`])
-                }
-            } catch (err) {
-                BStackLogger.error(`Error while tracking automation framework event: ${err}`)
+            if (BrowserstackCLI.getInstance().isRunning()) {
+                await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.PRE, { caps: capabilities })
+                const instance = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
+                const caps = AutomationFramework.getState(instance, AutomationFrameworkConstants.KEY_CAPABILITIES)
+                Object.assign(capabilities, caps)
             }
         } catch (err) {
             BStackLogger.error(`Error while connecting to Browserstack CLI: ${err}`)
@@ -182,7 +172,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'before' })
-    async before(caps: Capabilities.ResolvedTestrunnerCapabilities, specs: string[], browser: WebdriverIO.Browser) {
+    async before(caps: Capabilities.RemoteCapability, specs: string[], browser: WebdriverIO.Browser) {
         // End device allocation tracking - remote session is now created and browser object is available
         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_DEVICE_ALLOCATION, true, 'Device allocated and session created')
         BStackLogger.debug('Device allocation tracking ended - remote session created successfully')
@@ -194,7 +184,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
         PerformanceTester.browser = this._browser
 
         // Healing Support:
-        if (!isBrowserstackSession(this._browser)) {
+        if (!shouldAddServiceVersion(this._config, this._options.testObservability, caps as any)) {
             try {
                 await AiHandler.selfHeal(this._options, caps, this._browser)
             } catch (err) {
@@ -207,22 +197,19 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // Ensure capabilities are not null in case of multiremote
 
         if (this._isAppAutomate()) {
-            this._sessionBaseUrl = 'https://api-cloud.browserstack.com/app-automate/sessions'
+            this._sessionBaseUrl = `${APIUtils.BROWSERSTACK_AA_API_CLOUD_URL}/app-automate/sessions`
         }
 
         if (this._turboScale) {
-            this._sessionBaseUrl = 'https://api.browserstack.com/automate-turboscale/v1/sessions'
+            this._sessionBaseUrl = `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate-turboscale/v1/sessions`
         }
 
         this._scenariosThatRan = []
-        this._scenariosRanCount = 0
-        this._lastScenarioName = undefined
-        PerformanceTester.scenarioThatRan = this._scenariosThatRan
+        PerformanceTester.scenarioThatRan = [...(this._scenariosThatRan ?? [])]
 
         if (this._browser) {
             try {
                 const sessionId = this._browser.sessionId
-
                 try {
                     this._accessibilityHandler = new AccessibilityHandler(
                         this._browser,
@@ -235,14 +222,12 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         this._turboScale,
                         this._options.accessibilityOptions
                     )
-
                     if (isBrowserstackSession(this._browser) && BrowserstackCLI.getInstance().isRunning()){
                         BStackLogger.info(`CLI is running, tracking accessibility event for before: ${sessionId}`)
                         // BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { sessionId })
                     } else {
                         await this._accessibilityHandler.before(sessionId)
                     }
-
                     Listener.setAccessibilityOptions(this._options.accessibilityOptions)
                 } catch (err) {
                     BStackLogger.error(`[Accessibility Test Run] Error in service class before function: ${err}`)
@@ -258,7 +243,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         this._options
                     )
                     if (BrowserstackCLI.getInstance().isRunning()) {
-                        BStackLogger.info(`CLI is running, tracking insights event for before: ${sessionId}`)
                         await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { browser: this._browser, hubUrl: this._config.hostname })
                         this._insightsHandler.setGitConfigPath()
                         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.PRE_INITIALIZE)
@@ -267,10 +251,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     await this._insightsHandler.before()
                 }
 
-                /**
-                 * register command event
-                 */
                 if (!BrowserstackCLI.getInstance().isRunning()) {
+                    /**
+                     * register command event
+                     */
                     this._browser.on('command', async (command) => {
                         if (shouldProcessEventForTesthub('')) {
                             this._insightsHandler?.browserCommand(
@@ -303,23 +287,27 @@ export default class BrowserstackService implements Services.ServiceInstance {
             } catch (err) {
                 BStackLogger.error(`Error in service class before function: ${err}`)
                 if (shouldProcessEventForTesthub('')) {
-                    CrashReporter.uploadCrashReport(`Error in service class before function: ${err}`, err ? (err as Error).stack as string : 'unknown error')
+                    CrashReporter.uploadCrashReport(`Error in service class before function: ${err}`, err && (err as any).stack)
                 }
             }
 
-            if (this._percy && !BrowserstackCLI.getInstance().isRunning()) {
-                this._percyHandler = new PercyHandler(
-                    this._percyCaptureMode,
-                    this._browser,
-                    this._caps,
-                    this._isAppAutomate(),
-                    this._config.framework
-                )
-                this._percyHandler.before()
+            if (!BrowserstackCLI.getInstance().isRunning()) {
+                if (this._percy) {
+                    this._percyHandler = new PercyHandler(
+                        this._percyCaptureMode,
+                        this._browser,
+                        this._caps,
+                        this._isAppAutomate(),
+                        this._config.framework
+                    )
+                    this._percyHandler.before()
+                }
             }
         }
+
         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.PRE_INITIALIZE)
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.POST_INITIALIZE)
+
         const result = await this._printSessionURL()
 
         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.POST_INITIALIZE)
@@ -347,7 +335,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeHook' })
-    async beforeHook (test: Frameworks.Test|CucumberHook, context: unknown) {
+    async beforeHook (test: Frameworks.Test|CucumberHook, context: any) {
         if (this._config.framework !== 'cucumber') {
             this._currentTest = test as Frameworks.Test // not update currentTest when this is called for cucumber step
         }
@@ -385,6 +373,8 @@ export default class BrowserstackService implements Services.ServiceInstance {
             }
         }
 
+        await this._setAnnotation(`Test: ${test.fullName ?? test.title}`)
+
         if (BrowserstackCLI.getInstance().isRunning()) {
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test })
             const uuid = TestFramework.getState(TestFramework.getTrackedInstance(), TestFrameworkConstants.KEY_TEST_UUID)
@@ -392,8 +382,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
             return
         }
-
-        await this._setAnnotation(`Test: ${test.fullName ?? test.title}`)
         await this._setSessionName(suiteTitle, test)
         await this._accessibilityHandler?.beforeTest(suiteTitle, test)
         await this._insightsHandler?.beforeTest(test)
@@ -402,8 +390,8 @@ export default class BrowserstackService implements Services.ServiceInstance {
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'afterTest' })
     async afterTest(test: Frameworks.Test, context: never, results: Frameworks.TestResult) {
         this._specsRan = true
-        const { error, passed, skipped } = results
-        if (!passed && !skipped) {
+        const { error, passed } = results
+        if (!passed) {
             const testError = (error && error.message) || 'Unknown Error'
             this._failReasons.push(testError)
 
@@ -416,38 +404,25 @@ export default class BrowserstackService implements Services.ServiceInstance {
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result: results, suiteTite: this._suiteTitle })
             return
         }
-
         await this._accessibilityHandler?.afterTest(this._suiteTitle, test)
         await this._insightsHandler?.afterTest(test, results)
         await this._percyHandler?.afterTest()
     }
 
-    @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'after' })
     async after (result: number) {
+        PerformanceTester.start(PERFORMANCE_SDK_EVENTS.HOOK_EVENTS.AFTER)
+        PerformanceTester.start(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.QUIT)
+
         try {
-            PerformanceTester.start(PERFORMANCE_SDK_EVENTS.HOOK_EVENTS.AFTER)
-            PerformanceTester.start(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.QUIT)
-
-            const { preferScenarioName, setSessionName, setSessionStatus } = this._options
-            // For Cucumber: If only 1 Scenario ran and preferScenarioName is enabled,
-            // use the scenario name instead of the feature name
-            if (preferScenarioName && this._scenariosRanCount === 1 && this._lastScenarioName) {
-                this._fullTitle = this._lastScenarioName
-            }
-
             if (BrowserstackCLI.getInstance().isRunning()) {
                 await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.EXECUTE, HookState.POST, {})
             }
-
-            // if (setSessionStatus) {
-            //     const hasReasons = this._failReasons.length > 0
-            //     await this._updateJob({
-            //         status: result === 0 && this._specsRan ? 'passed' : 'failed',
-            //         ...(setSessionName ? { name: this._fullTitle } : {}),
-            //         ...(result === 0 && this._specsRan ?
-            //             {} : hasReasons ? { reason: this._failReasons.join('\n') } : {})
-            //     })
-            // }
+            const { preferScenarioName, setSessionName, setSessionStatus } = this._options
+            // For Cucumber: Checks scenarios that ran (i.e. not skipped) on the session
+            // Only 1 Scenario ran and option enabled => Redefine session name to Scenario's name
+            if (preferScenarioName && this._scenariosThatRan.length === 1){
+                this._fullTitle = this._scenariosThatRan.pop()
+            }
 
             await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.AUTOMATE_EVENTS.SESSION_STATUS, async () => {
                 if (setSessionStatus && !BrowserstackCLI.getInstance().isRunning()) {
@@ -456,35 +431,35 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     let failureReason: string | undefined
 
                     if (result === 0 && this._specsRan) {
-                        // Test runner reported success and tests ran
+                    // Test runner reported success and tests ran
                         if (ignoreHooksStatus) {
-                            // Only consider pure test failures, ignore hook failures
+                        // Only consider pure test failures, ignore hook failures
                             const hasPureTestFailures = this._pureTestFailReasons.length > 0
                             sessionStatus = hasPureTestFailures ? 'failed' : 'passed'
                             failureReason = hasPureTestFailures ? this._pureTestFailReasons.join('\n') : undefined
                         } else {
-                            // Default behavior: consider all failures including hooks
+                        // Default behavior: consider all failures including hooks
                             const hasReasons = this._failReasons.length > 0
                             sessionStatus = hasReasons ? 'failed' : 'passed'
                             failureReason = hasReasons ? this._failReasons.join('\n') : undefined
                         }
                     } else if (ignoreHooksStatus && this._specsRan) {
-                        // Test runner reported failure but ignoreHooksStatus is enabled
-                        // Check if we only have hook failures and no pure test failures
+                    // Test runner reported failure but ignoreHooksStatus is enabled
+                    // Check if we only have hook failures and no pure test failures
                         const hasPureTestFailures = this._pureTestFailReasons.length > 0
                         const hasOnlyHookFailures = this._failReasons.length === 0 && this._hookFailReasons.length > 0
 
                         if (hasOnlyHookFailures && !hasPureTestFailures) {
-                            // Only hook failures exist - mark as passed when ignoreHooksStatus is true
+                        // Only hook failures exist - mark as passed when ignoreHooksStatus is true
                             sessionStatus = 'passed'
                             failureReason = undefined
                         } else {
-                            // Pure test failures exist - mark as failed
+                        // Pure test failures exist - mark as failed
                             sessionStatus = 'failed'
                             failureReason = hasPureTestFailures ? this._pureTestFailReasons.join('\n') : undefined
                         }
                     } else {
-                        // Default behavior: mark as failed (test runner reported failure or no tests ran)
+                    // Default behavior: mark as failed (test runner reported failure or no tests ran)
                         sessionStatus = 'failed'
                         if (ignoreHooksStatus && this._pureTestFailReasons.length > 0) {
                             failureReason = this._pureTestFailReasons.join('\n')
@@ -494,6 +469,8 @@ export default class BrowserstackService implements Services.ServiceInstance {
                             failureReason = undefined
                         }
                     }
+
+                    BStackLogger.debug(`Setting session status to ${sessionStatus} for sessionId ${this._browser?.sessionId}, failure reason: ${failureReason}`)
 
                     await this._updateJob({
                         status: sessionStatus,
@@ -541,7 +518,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     'uploadPending', 'teardown', 'browserCommand'
                 ])
             }
-
             // Override process exit when we have only hook failures and ignoreHooksStatus is true
             const ignoreHooksStatus = this._options.testObservabilityOptions?.ignoreHooksStatus === true
             const hasOnlyHookFailures = this._failReasons.length === 0 && this._hookFailReasons.length > 0
@@ -550,12 +526,14 @@ export default class BrowserstackService implements Services.ServiceInstance {
             if (shouldOverrideResult && result !== 0) {
                 return
             }
-        }  catch (error) {
+
+        } catch (error) {
             BStackLogger.error(`Error in after hook: ${error}`)
             PerformanceTester.end(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.QUIT, false, util.format(error))
             PerformanceTester.end(PERFORMANCE_SDK_EVENTS.HOOK_EVENTS.AFTER, false, util.format(error))
             await PerformanceTester.stopAndGenerate('performance-service.html')
         }
+
     }
 
     /**
@@ -588,10 +566,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
         this._specsRan = true
         const status = world.result?.status.toLowerCase()
         if (status !== 'skipped') {
-            const scenarioName = world.pickle.name || 'unknown pickle name'
-            this._scenariosThatRan.push(scenarioName)
-            this._lastScenarioName = scenarioName
-            this._scenariosRanCount++
+            this._scenariosThatRan.push(world.pickle.name || 'unknown pickle name')
         }
 
         if (status && this._failureStatuses.includes(status)) {
@@ -623,7 +598,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
         await this._accessibilityHandler?.afterScenario(world)
         await this._insightsHandler?.afterScenario(world)
-        await this._percyHandler?.afterScenario()
+        if (!BrowserstackCLI.getInstance().isRunning()) {
+            await this._percyHandler?.afterScenario()
+        }
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeStep' })
@@ -664,13 +641,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
         if (!this._browser.isMultiremote) {
             BStackLogger.info(`Update (reloaded) job with sessionId ${oldSessionId}, ${sessionStatus}`)
         } else {
-            const browserName = (this._browser as unknown as WebdriverIO.MultiRemoteBrowser).instances.filter(
-                (browserName: string) => this._browser && (this._browser as unknown as WebdriverIO.MultiRemoteBrowser).getInstance(browserName).sessionId === newSessionId)[0]
+            const browserName = (this._browser as any as WebdriverIO.MultiRemoteBrowser).instances.filter(
+                (browserName: string) => this._browser && (this._browser as any as WebdriverIO.MultiRemoteBrowser).getInstance(browserName).sessionId === newSessionId)[0]
             BStackLogger.info(`Update (reloaded) multiremote job for browser "${browserName}" and sessionId ${oldSessionId}, ${sessionStatus}`)
         }
-
-        BStackLogger.warn(`Session Reloaded: Old Session Id: ${oldSessionId}, New Session Id: ${newSessionId}`)
-        await this._insightsHandler?.sendCBTInfo()
 
         if (setSessionStatus) {
             await this._update(oldSessionId, {
@@ -680,9 +654,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
             })
         }
 
+        BStackLogger.warn(`Session Reloaded: Old Session Id: ${oldSessionId}, New Session Id: ${newSessionId}`)
+        await this._insightsHandler?.sendCBTInfo()
+
         this._scenariosThatRan = []
-        this._scenariosRanCount = 0
-        this._lastScenarioName = undefined
         delete this._fullTitle
         delete this._suiteFile
         this._failReasons = []
@@ -690,18 +665,13 @@ export default class BrowserstackService implements Services.ServiceInstance {
         this._pureTestFailReasons = []
         await this._printSessionURL()
     }
-
     _isAppAutomate(): boolean {
-        const browserDesiredCapabilities = (this._browser?.capabilities ?? {})
-        const desiredCapabilities = (this._caps ?? {}) as WebdriverIO.Capabilities
-        return (
-            !!browserDesiredCapabilities['appium:app'] ||
-            !!desiredCapabilities['appium:app'] ||
-            !!desiredCapabilities['appium:options']?.app
-        )
+        const browserDesiredCapabilities = (this._browser?.capabilities ?? {}) as Capabilities.DesiredCapabilities
+        const desiredCapabilities = (this._caps ?? {})  as Capabilities.DesiredCapabilities
+        return !!browserDesiredCapabilities['appium:app'] || !!desiredCapabilities['appium:app'] || !!(( desiredCapabilities as any)['appium:options']?.app)
     }
 
-    _updateJob (requestBody: unknown) {
+    _updateJob (requestBody: any) {
         return this._multiRemoteAction((sessionId: string, browserName: string) => {
             BStackLogger.info(browserName
                 ? `Update multiremote job for browser "${browserName}" and sessionId ${sessionId}`
@@ -720,42 +690,35 @@ export default class BrowserstackService implements Services.ServiceInstance {
             return action(this._browser.sessionId)
         }
 
-        const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
-        return Promise.all(multiRemoteBrowser.instances
+        const multiremotebrowser = this._browser as any as WebdriverIO.MultiRemoteBrowser
+        return Promise.all(multiremotebrowser.instances
             .filter((browserName: string) => {
-                const cap = getBrowserCapabilities(multiRemoteBrowser, this._caps, browserName)
+                const cap = getBrowserCapabilities(multiremotebrowser, (this._caps as Capabilities.MultiRemoteCapabilities), browserName)
                 return isBrowserstackCapability(cap)
             })
             .map((browserName: string) => (
-                action(multiRemoteBrowser.getInstance(browserName).sessionId, browserName)
+                action(multiremotebrowser.getInstance(browserName).sessionId, browserName)
             ))
         )
     }
 
-    _update(sessionId: string, requestBody: unknown) {
+    _update(sessionId: string, requestBody: any) {
         if (!isBrowserstackSession(this._browser)) {
             return Promise.resolve()
         }
         const sessionUrl = `${this._sessionBaseUrl}/${sessionId}.json`
         BStackLogger.debug(`Updating Browserstack session at ${sessionUrl} with request body: `, requestBody)
-
-        const encodedAuth = Buffer.from(`${this._config.user}:${this._config.key}`, 'utf8').toString('base64')
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json; charset=utf-8',
-            Authorization: `Basic ${encodedAuth}`,
-        }
-
         if (this._turboScale) {
-            return fetch(sessionUrl, {
-                method: 'PATCH',
-                body: JSON.stringify(requestBody),
-                headers
+            return got.patch(sessionUrl, {
+                json: requestBody,
+                username: this._config.user,
+                password: this._config.key
             })
         }
-        return fetch(sessionUrl, {
-            method: 'PUT',
-            body: JSON.stringify(requestBody),
-            headers
+        return got.put(sessionUrl, {
+            json: requestBody,
+            username: this._config.user,
+            password: this._config.key
         })
     }
 
@@ -769,27 +732,18 @@ export default class BrowserstackService implements Services.ServiceInstance {
             BStackLogger.debug(`Requesting Browserstack session URL at ${sessionUrl}`)
 
             let browserUrl
-
-            const encodedAuth = Buffer.from(`${this._config.user}:${this._config.key}`, 'utf8').toString('base64')
-            const headers: Record<string, string> = {
-                'Content-Type': 'application/json; charset=utf-8',
-                Authorization: `Basic ${encodedAuth}`,
+            const reqOpts: OptionsOfJSONResponseBody = {
+                username: this._config.user,
+                password: this._config.key,
+                responseType: 'json'
             }
 
             if (this._turboScale) {
-                const response = await fetch(sessionUrl, {
-                    method: 'GET',
-                    headers
-                })
-                const res = response.clone()
-                browserUrl = (await res.json()).url
+                const response = await got<TurboScaleSessionResponse>(sessionUrl, reqOpts)
+                browserUrl = response.body.url
             } else {
-                const response = await fetch(sessionUrl, {
-                    method: 'GET',
-                    headers
-                })
-                const res = response.clone()
-                browserUrl = (await res.json()).automation_session.browser_url
+                const response = await got<SessionResponse>(sessionUrl, reqOpts)
+                browserUrl = response.body.automation_session.browser_url
             }
 
             if (!this._browser) {
@@ -815,30 +769,31 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 suiteTitle,
                 test?.title
             )
-        } else if (test && !test.fullName) {
+        } else if (test && !test.fullName && this._config.framework !== 'jasmine') {
             // Mocha
             const pre = this._options.sessionNamePrependTopLevelSuiteTitle ? `${suiteTitle} - ` : ''
             const post = !this._options.sessionNameOmitTestTitle ? ` - ${test.title}` : ''
             name = `${pre}${test.parent}${post}`
+        } else if (this._config.framework === 'jasmine') {
+            // Jasmine
+            name = (this._caps as any)?.['bstack:options']?.sessionName
         }
 
         if (!BrowserstackCLI.getInstance().isRunning()) {
             this._percyHandler?._setSessionName(name)
         }
 
-        if (name !== this._fullTitle && !BrowserstackCLI.getInstance().isRunning()) {
+        if (name !== this._fullTitle) {
             this._fullTitle = name
             await this._updateJob({ name })
         }
-
-        return name
     }
 
     private _setAnnotation(data: string) {
         return this._executeCommand('annotate', { data, level: 'info' })
     }
 
-    private async _executeCommand(
+    private async _executeCommand<T = any>(
         action: string,
         args?: object,
     ) {
@@ -850,14 +805,14 @@ export default class BrowserstackService implements Services.ServiceInstance {
         const script = `browserstack_executor: ${JSON.stringify(cmd)}`
 
         if (this._browser.isMultiremote) {
-            const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
+            const multiRemoteBrowser = this._browser as any as WebdriverIO.MultiRemoteBrowser
             return Promise.all(Object.keys(this._caps).map(async (browserName) => {
                 const browser = multiRemoteBrowser.getInstance(browserName)
-                return (await browser.executeScript(script, []))
+                return (await browser.execute<T, []>(script))
             }))
         }
 
-        return (await this._browser.executeScript(script, []))
+        return (await this._browser.execute<T, []>(script))
     }
 
     private saveWorkerData() {

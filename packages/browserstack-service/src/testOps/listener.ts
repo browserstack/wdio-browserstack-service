@@ -7,8 +7,7 @@ import {
     DATA_BATCH_ENDPOINT,
     DEFAULT_WAIT_INTERVAL_FOR_PENDING_UPLOADS,
     DEFAULT_WAIT_TIMEOUT_FOR_PENDING_UPLOADS,
-    LOG_KIND_USAGE_MAP,
-    TESTOPS_BUILD_COMPLETED_ENV,
+    LOG_KIND_USAGE_MAP, TESTOPS_BUILD_COMPLETED_ENV,
     TEST_ANALYTICS_ID
 } from '../constants.js'
 import { sendScreenshots } from './requestUtils.js'
@@ -26,7 +25,7 @@ class Listener {
     private readonly logEvents: FeatureStats = this.usageStats.logStats
     private requestBatcher?: RequestQueueHandler
     private pendingUploads = 0
-    private static _accessibilityOptions?: { [key: string]: unknown; }
+    private static _accessibilityOptions?: { [key: string]: any; }
     private static _testRunAccessibilityVar?: boolean = false
 
     // Making the constructor private to use singleton pattern
@@ -40,7 +39,7 @@ class Listener {
         return Listener.instance
     }
 
-    public static setAccessibilityOptions(options:  { [key: string]: unknown; } | undefined) {
+    public static setAccessibilityOptions(options:  { [key: string]: any; } | undefined) {
         Listener._accessibilityOptions = options
     }
 
@@ -225,7 +224,7 @@ class Listener {
                     await batchAndPostEvents(DATA_BATCH_ENDPOINT, 'BATCH_DATA', data)
                     BStackLogger.debug('callback: marking events success ' + data.length)
                     this.eventsSuccess(data)
-                } catch {
+                } catch (e) {
                     BStackLogger.debug('callback: marking events failed ' + data.length)
                     this.eventsFailed(data)
                 } finally {

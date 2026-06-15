@@ -1,20 +1,34 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('../../../src/cli/frameworks/testFramework.js', () => ({
-    default: class MockTestFramework {
+// Mock TestFramework as a proper class that can be extended
+vi.mock('../../../src/cli/frameworks/testFramework.js', () => {
+    const MockTestFramework = class TestFramework {
         static registerObserver = vi.fn()
         static getTrackedInstance = vi.fn()
         static getState = vi.fn()
         static setState = vi.fn()
+        static setTrackedInstance = vi.fn()
+
+        constructor() {}
+
+        getTestFrameworks() { return ['mocha'] }
+        getTestFrameworksVersions() { return { mocha: '1.0.0' } }
+        updateInstanceState() {}
+        runHooks() {}
+        trackEvent() {}
     }
-}))
+
+    return {
+        default: MockTestFramework
+    }
+})
 
 vi.mock('../../../src/cli/frameworks/automationFramework.js', () => ({
-    default: class MockAutomationFramework {
-        static registerObserver = vi.fn()
-        static getTrackedInstance = vi.fn()
-        static getDriver = vi.fn()
-        static getState = vi.fn()
+    default: {
+        registerObserver: vi.fn(),
+        getTrackedInstance: vi.fn(),
+        getDriver: vi.fn(),
+        getState: vi.fn()
     }
 }))
 
@@ -31,12 +45,13 @@ vi.mock('../../../src/scripts/accessibility-scripts.js', () => ({
 vi.mock('../../../src/util.js', () => ({
     validateCapsWithA11y: vi.fn().mockReturnValue(true),
     validateCapsWithAppA11y: vi.fn().mockReturnValue(true),
+    validateCapsWithNonBstackA11y: vi.fn().mockReturnValue(true),
     shouldScanTestForAccessibility: vi.fn().mockReturnValue(true),
     getAppA11yResults: vi.fn().mockResolvedValue([]),
     getAppA11yResultsSummary: vi.fn().mockResolvedValue({}),
     _getParamsForAppAccessibility: vi.fn().mockReturnValue('{}'),
     formatString: vi.fn().mockReturnValue('formatted-script'),
-    o11yClassErrorHandler: vi.fn().mockImplementation((cls) => cls)
+    isBrowserstackSession: vi.fn().mockReturnValue(true)
 }))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({
@@ -50,12 +65,26 @@ vi.mock('../../../src/cli/grpcClient.js', () => ({
     }
 }))
 
+vi.mock('../../../src/cli/index.js', () => ({
+    BrowserstackCLI: {
+        getInstance: vi.fn().mockReturnValue({
+            options: {
+                accessibilityOptions: {
+                    autoScanning: true
+                }
+            }
+        })
+    }
+}))
+
 import AccessibilityModule from '../../../src/cli/modules/accessibilityModule.js'
 import TestFramework from '../../../src/cli/frameworks/testFramework.js'
 import AutomationFramework from '../../../src/cli/frameworks/automationFramework.js'
 import { AutomationFrameworkState } from '../../../src/cli/states/automationFrameworkState.js'
 import { HookState } from '../../../src/cli/states/hookState.js'
 import { TestFrameworkState } from '../../../src/cli/states/testFrameworkState.js'
+import { BrowserstackCLI } from '../../../src/cli/index.js'
+import { shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y } from '../../../src/util.js'
 
 describe('AccessibilityModule', () => {
     let accessibilityModule: AccessibilityModule
@@ -67,10 +96,16 @@ describe('AccessibilityModule', () => {
     beforeEach(() => {
         vi.clearAllMocks()
 
+        vi.mocked(BrowserstackCLI.getInstance).mockReturnValue({
+            options: {
+                accessibilityOptions: {
+                    autoScanning: true
+                }
+            }
+        } as any)
+
         mockAccessibilityConfig = {
-            isAppAccessibility: false,
-            success: true,
-            errors: []
+            isAppAccessibility: false
         }
 
         mockBrowser = {
@@ -92,8 +127,17 @@ describe('AccessibilityModule', () => {
         vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue(mockAutoInstance)
         vi.mocked(AutomationFramework.getDriver).mockReturnValue(mockBrowser)
         vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
-            if (key.includes('SESSION_ID')) {
+            if (key === 'framework_session_id') {
                 return 12345
+            }
+            if (key.includes('IS_BROWSERSTACK_HUB')) {
+                return true
+            }
+            if (key.includes('CAPABILITIES')) {
+                return { browserName: 'chrome' }
+            }
+            if (key.includes('INPUT_CAPABILITIES')) {
+                return {}
             }
             return {}
         })
@@ -101,7 +145,6 @@ describe('AccessibilityModule', () => {
         vi.mocked(TestFramework.getTrackedInstance).mockReturnValue(mockTestInstance)
 
         accessibilityModule = new AccessibilityModule(mockAccessibilityConfig, false)
-
         accessibilityModule.config = { accessibilityOptions: {} }
     })
 
@@ -139,16 +182,9 @@ describe('AccessibilityModule', () => {
         })
 
         it('should set isAppAccessibility from config', () => {
-            const appConfig = { isAppAccessibility: true, success: true, errors: [] }
+            const appConfig = { isAppAccessibility: true } as any
             const module = new AccessibilityModule(appConfig, false)
             expect(module.isAppAccessibility).toBe(true)
-            expect(module.isNonBstackA11y).toBe(false)
-        })
-
-        it('should set isNonBstackA11y from constructor parameter', () => {
-            const config = { isAppAccessibility: false, success: true, errors: [] }
-            const module = new AccessibilityModule(config, true)
-            expect(module.isNonBstackA11y).toBe(true)
         })
     })
 
@@ -173,9 +209,11 @@ describe('AccessibilityModule', () => {
 
             await accessibilityModule.onBeforeExecute()
 
-            // Verify that onBeforeExecute completes without error
-            // The actual browser patching happens on the object returned by AutomationFramework.getDriver
-            expect(vi.mocked(AutomationFramework.getDriver)).toHaveBeenCalled()
+            expect(mockBrowser.getAccessibilityResultsSummary).toBeDefined()
+            expect(mockBrowser.getAccessibilityResults).toBeDefined()
+            expect(mockBrowser.performScan).toBeDefined()
+            expect(mockBrowser.startA11yScanning).toBeDefined()
+            expect(mockBrowser.stopA11yScanning).toBeDefined()
         })
 
         it('should return early when no automation instance found', async () => {
@@ -195,9 +233,59 @@ describe('AccessibilityModule', () => {
 
             expect(mockBrowser.getAccessibilityResultsSummary).toBeUndefined()
         })
+
+        it('should show warning when startA11yScanning is called outside test', async () => {
+            const loggerWarnSpy = vi.spyOn(accessibilityModule.logger, 'warn')
+            // Enable accessibility for this test
+            accessibilityModule.accessibility = true
+            accessibilityModule.isAppAccessibility = true
+            // Mock validation to return true so accessibility stays enabled
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            vi.mocked(validateCapsWithAppA11y).mockReturnValue(true)
+
+            await accessibilityModule.onBeforeExecute()
+
+            await mockBrowser.startA11yScanning()
+
+            expect(loggerWarnSpy).toHaveBeenCalledWith('Accessibility scanning cannot be started from outside the test')
+        })
+
+        it('should show warning when stopA11yScanning is called outside test', async () => {
+            const loggerWarnSpy = vi.spyOn(accessibilityModule.logger, 'warn')
+            // Enable accessibility for this test
+            accessibilityModule.accessibility = true
+            accessibilityModule.isAppAccessibility = true
+            // Mock validation to return true so accessibility stays enabled
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            vi.mocked(validateCapsWithAppA11y).mockReturnValue(true)
+
+            await accessibilityModule.onBeforeExecute()
+
+            await mockBrowser.stopA11yScanning()
+
+            expect(loggerWarnSpy).toHaveBeenCalledWith('Accessibility scanning cannot be stopped from outside the test')
+        })
     })
 
     describe('onBeforeTest', () => {
+        beforeEach(() => {
+            // Mock shouldScanTestForAccessibility to return true for proper test behavior
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+        })
+
+        it('should patch browser methods when automation instance exists', async () => {
+            const mockArgs = {
+                suiteTitle: 'Test Suite',
+                test: { title: 'Test Case' }
+            }
+
+            await accessibilityModule.onBeforeTest(mockArgs)
+
+            expect(mockBrowser.performScan).toBeDefined()
+            expect(mockBrowser.startA11yScanning).toBeDefined()
+            expect(mockBrowser.stopA11yScanning).toBeDefined()
+        })
+
         it('should set up accessibility metadata for test', async () => {
             const mockArgs = {
                 suiteTitle: 'Test Suite',
@@ -213,6 +301,26 @@ describe('AccessibilityModule', () => {
             await accessibilityModule.onBeforeTest({})
 
             expect(TestFramework.setState).toHaveBeenCalled()
+        })
+
+        it('should enable accessibility scanning for test when conditions are met', async () => {
+            // Enable accessibility and auto scanning for this test
+            accessibilityModule.accessibility = true
+            accessibilityModule.autoScanning = true
+            // Set up config property that's expected by onBeforeTest
+            accessibilityModule.config = { accessibilityOptions: {} }
+
+            const mockArgs = {
+                suiteTitle: 'Test Suite',
+                test: { title: 'Test Case' }
+            }
+
+            // Ensure the mock returns true
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+
+            await accessibilityModule.onBeforeTest(mockArgs)
+
+            expect(accessibilityModule.accessibilityMap.get(12345)).toBe(true)
         })
     })
 
@@ -234,6 +342,24 @@ describe('AccessibilityModule', () => {
             await accessibilityModule.onAfterTest()
 
             expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+        })
+
+        it('should process accessibility results when scan was started', async () => {
+            const loggerInfoSpy = vi.spyOn(accessibilityModule.logger, 'info')
+
+            // Mock the getDriverExecuteParams method to avoid async issues
+            vi.spyOn(accessibilityModule as any, 'getDriverExecuteParams').mockResolvedValue({})
+            vi.spyOn(accessibilityModule as any, 'sendTestStopEvent').mockResolvedValue(undefined)
+
+            vi.mocked(mockTestInstance.getData).mockReturnValue({
+                accessibilityScanStarted: true,
+                scanTestForAccessibility: true
+            })
+
+            await accessibilityModule.onAfterTest()
+
+            expect(loggerInfoSpy).toHaveBeenCalledWith('Automate test case execution has ended. Processing for accessibility testing is underway.')
+            expect(loggerInfoSpy).toHaveBeenCalledWith('Accessibility testing for this test case has ended.')
         })
     })
 

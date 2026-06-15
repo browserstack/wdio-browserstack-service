@@ -1,7 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 
 import { spawn } from 'node:child_process'
 
@@ -23,10 +22,10 @@ class Percy {
     #logfile: string = path.join(logDir, 'percy.log')
     #address: string = process.env.PERCY_SERVER_ADDRESS || 'http://127.0.0.1:5338'
 
-    #binaryPath: string | null = null
+    #binaryPath: string | any = null
     #options: BrowserstackConfig & Options.Testrunner
     #config: Options.Testrunner
-    #proc: ChildProcessWithoutNullStreams | null = null
+    #proc: any = null
     #isApp: boolean
     #projectName: string | undefined = undefined
 
@@ -48,19 +47,19 @@ class Percy {
     async #getBinaryPath(): Promise<string> {
         if (!this.#binaryPath) {
             const pb = new PercyBinary()
-            this.#binaryPath = await pb.getBinaryPath()
+            this.#binaryPath = await pb.getBinaryPath(this.#config)
         }
         return this.#binaryPath
     }
 
     async healthcheck() {
         try {
-            const resp = await nodeRequest('GET', 'percy/healthcheck', {}, this.#address)
+            const resp = await nodeRequest('GET', 'percy/healthcheck', null, this.#address)
             if (resp) {
                 this.buildId = resp.build.id
                 return true
             }
-        } catch {
+        } catch (err) {
             return false
         }
     }
@@ -69,13 +68,12 @@ class Percy {
     async start() {
         const binaryPath: string = await this.#getBinaryPath()
         const logStream = fs.createWriteStream(this.#logfile, { flags: 'a' })
-        const token = await this.fetchPercyToken()
+        const token= await this.fetchPercyToken()
         const configPath = await this.createPercyConfig()
 
         if (!token) {
             return false
         }
-
         const commandArgs = [`${this.#isApp ? 'app:exec' : 'exec'}:start`]
 
         if (configPath) {
@@ -115,7 +113,7 @@ class Percy {
         const binaryPath = await this.#getBinaryPath()
         return new Promise( (resolve) => {
             const proc = spawn(binaryPath, ['exec:stop'])
-            proc.on('close', (code: number) => {
+            proc.on('close', (code: any) => {
                 this.isProcessRunning = false
                 resolve(code)
             })
@@ -142,24 +140,21 @@ class Percy {
             }
             params.set('percy', String(this.#options.percy))
             const query = `api/app_percy/get_project_token?${params.toString()}`
-            const requestInit: RequestInit = {
-                headers: {
-                    Authorization: `Basic ${Buffer.from(`${getBrowserStackUser(this.#config)}:${getBrowserStackKey(this.#config)}`).toString('base64')}`,
+            const response = await nodeRequest('GET', query,
+                {
+                    username: getBrowserStackUser(this.#config),
+                    password: getBrowserStackKey(this.#config)
                 },
-            }
-            const response = await nodeRequest('GET', query, requestInit, APIUtils.BROWSERSTACK_PERCY_API_URL)
+                APIUtils.BROWSERSTACK_PERCY_API_URL
+            )
+            PercyLogger.debug('Percy fetch token success : ' + response.token)
             if (!this.#options.percy && response.success) {
                 this.percyAutoEnabled = response.success
             }
             this.percyCaptureMode = response.percy_capture_mode
             this.percy = response.success
-            if (response.token) {
-                PercyLogger.debug('Percy fetch token success: ' + response.token)
-                return response.token
-            }
-            PercyLogger.error('Unable to fetch percy project token')
-            return null
-        } catch (err) {
+            return response.token
+        } catch (err: any) {
             PercyLogger.error(`Percy unable to fetch project token: ${err}`)
             return null
         }
@@ -183,7 +178,7 @@ class Percy {
                 JSON.stringify(
                     percyOptions
                 ),
-                (err: unknown) => {
+                (err: any) => {
                     if (err) {
                         PercyLogger.error(`Error creating percy config: ${err}`)
                         resolve(null)

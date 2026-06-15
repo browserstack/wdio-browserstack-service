@@ -9,9 +9,7 @@ import * as bstackLogger from '../src/bstackLogger.js'
 
 const log = logger('test')
 
-// Fake only the clock (for deterministic timestamps). Faking setTimeout/setImmediate
-// at module scope stalls Vitest's own worker finalization and hangs the run.
-vi.useFakeTimers({ toFake: ['Date'] }).setSystemTime(new Date('2020-01-01'))
+vi.useFakeTimers().setSystemTime(new Date('2020-01-01'))
 vi.mock('uuid', () => ({ v4: () => '123456789' }))
 vi.mock('@wdio/reporter', () => import(path.join(process.cwd(), '__mocks__', '@wdio/reporter')))
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
@@ -353,5 +351,6 @@ describe('test-reporter', () => {
             expect(testLogObj.test_run_uuid).toBe(undefined)
             expect(sendDataSpy).toBeCalledTimes(0)
         })
+
     })
 })

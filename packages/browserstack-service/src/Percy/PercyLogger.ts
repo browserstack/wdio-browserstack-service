@@ -44,7 +44,7 @@ export class PercyLogger {
         log.error(message)
     }
 
-    public static debug(message: string, param?: unknown) {
+    public static debug(message: string, param?: any) {
         this.logToFile(message, 'debug')
         if (param) {
             log.debug(message, param)

@@ -1,15 +1,11 @@
-import {
-    DATA_BATCH_SIZE,
-    DATA_BATCH_INTERVAL,
-    TESTOPS_BUILD_COMPLETED_ENV
-} from './constants.js'
+import { DATA_BATCH_SIZE, DATA_BATCH_INTERVAL, TESTOPS_BUILD_COMPLETED_ENV } from './constants.js'
 import type { UploadType } from './types.js'
 import { BStackLogger } from './bstackLogger.js'
 
 export default class RequestQueueHandler {
     private queue: UploadType[] = []
-    private readonly callback: Function|undefined
     private pollEventBatchInterval?: ReturnType<typeof setInterval>
+    private readonly callback?: Function
     public static tearDownInvoked = false
 
     static instance: RequestQueueHandler
@@ -70,7 +66,7 @@ export default class RequestQueueHandler {
 
     callCallback = async (data: UploadType[], kind: string) => {
         BStackLogger.debug('calling callback with kind ' + kind)
-        await this.callback?.(data)
+        this.callback && await this.callback(data)
     }
 
     resetEventBatchPolling () {

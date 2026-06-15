@@ -3,9 +3,8 @@ class TestOpsConfig {
     public buildStopped: boolean = false
     public buildHashedId?: string
 
-    static getInstance(...args: unknown[]) {
+    static getInstance(...args: any[]) {
         if (!this._instance) {
-            // @ts-expect-error passing args to constructor
             this._instance = new TestOpsConfig(...args)
         }
         return this._instance

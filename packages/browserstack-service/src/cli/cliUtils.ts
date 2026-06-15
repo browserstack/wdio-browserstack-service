@@ -4,12 +4,14 @@ import { platform, arch, homedir } from 'node:os'
 import path from 'node:path'
 import util, { promisify } from 'node:util'
 import { exec } from 'node:child_process'
-import { Readable } from 'node:stream'
 import type { ZipFile, Options as yauzlOptions } from 'yauzl'
 import yauzl from 'yauzl'
+import got from 'got'
 import { threadId } from 'node:worker_threads'
 
-import { _fetch as fetch } from '../fetchWrapper.js'
+import { createRequire } from 'node:module'
+const require = createRequire(import.meta.url)
+const { version: bstackServiceVersion } = require('../../package.json')
 
 import {
     isNullOrEmpty,
@@ -18,6 +20,7 @@ import {
     isWritable,
     setReadWriteAccess,
     isTrue,
+    nodeRequest,
     getBrowserStackUser,
     getBrowserStackKey,
     isFalse,
@@ -27,22 +30,11 @@ import {
 import PerformanceTester from '../instrumentation/performance/performance-tester.js'
 import { EVENTS as PerformanceEvents } from '../instrumentation/performance/constants.js'
 import { BStackLogger as logger } from './cliLogger.js'
-import { UPDATED_CLI_ENDPOINT, BSTACK_SERVICE_VERSION, BINARY_BUSY_ERROR_CODES } from '../constants.js'
+import { UPDATED_CLI_ENDPOINT } from '../constants.js'
 import type { Options, Capabilities } from '@wdio/types'
-import type {
-    BrowserstackConfig,
-    BrowserstackOptions,
-    TestManagementOptions,
-    TestObservabilityOptions,
-} from '../types.js'
+import type { BrowserstackConfig, BrowserstackOptions, TestObservabilityOptions } from '../types.js'
 import { TestFrameworkConstants } from './frameworks/constants/testFrameworkConstants.js'
 import APIUtils from './apiUtils.js'
-
-const CLI_LOCK_TIMEOUT_MS = 5 * 60 * 1000
-const CLI_LOCK_POLL_MS = 1000
-const CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000
-const CLI_DOWNLOAD_TMP_PREFIX = 'downloaded_file_'
-const CLI_DOWNLOAD_TMP_SUFFIX = '.zip'
 
 export class CLIUtils {
     static automationFrameworkDetail = {}
@@ -56,7 +48,7 @@ export class CLIUtils {
     static getCLIParamsForDevEnv(): Record<string, string> {
         return {
             id: process.env.BROWSERSTACK_CLI_ENV || '',
-            listen: `unix:/tmp/sdk-platform-${process.env.BROWSERSTACK_CLI_ENV}.sock`,
+            listen: `unix:/tmp/sdk-platform-${process.env.BROWSERSTACK_CLI_ENV}.sock`
         }
     }
 
@@ -65,62 +57,37 @@ export class CLIUtils {
      * @returns {string}
      * @throws {Error}
      */
-    static getBinConfig(
-        config: Options.Testrunner,
-        capabilities:
-            | Capabilities.RequestedStandaloneCapabilities
-            | Capabilities.RequestedStandaloneCapabilities[],
-        options: BrowserstackConfig & BrowserstackOptions,
-        buildTag?: string,
-    ) {
+    static getBinConfig(config: Options.Testrunner, capabilities: Capabilities.RemoteCapabilities, options: BrowserstackConfig & BrowserstackOptions, buildTag?: string) {
         const modifiedOpts: Record<string, unknown> = { ...options }
         if (modifiedOpts.opts) {
             modifiedOpts.browserStackLocalOptions = modifiedOpts.opts
             delete modifiedOpts.opts
         }
-        delete modifiedOpts.testManagementOptions
 
         modifiedOpts.testContextOptions = {
             skipSessionName: isFalse(modifiedOpts.setSessionName),
             skipSessionStatus: isFalse(modifiedOpts.setSessionStatus),
             sessionNameOmitTestTitle: modifiedOpts.sessionNameOmitTestTitle || false,
-            sessionNamePrependTopLevelSuiteTitle:
-                modifiedOpts.sessionNamePrependTopLevelSuiteTitle || false,
-            sessionNameFormat: modifiedOpts.sessionNameFormat || '',
+            sessionNamePrependTopLevelSuiteTitle: modifiedOpts.sessionNamePrependTopLevelSuiteTitle || false,
+            sessionNameFormat: modifiedOpts.sessionNameFormat || ''
         }
 
         const commonBstackOptions = (() => {
+            const caps = config.capabilities as unknown
             if (
-                capabilities &&
-                !Array.isArray(capabilities) &&
-                typeof capabilities === 'object' &&
-                'bstack:options' in (capabilities as Record<string, unknown>)
+                caps &&
+                !Array.isArray(caps) &&
+                typeof caps === 'object' &&
+                'bstack:options' in (caps as Record<string, unknown>)
             ) {
                 // Cast after guard to satisfy TypeScript
-                return (
-                    (
-                        capabilities as {
-                            ['bstack:options']?: Record<string, unknown>;
-                        }
-                    )['bstack:options'] || {}
-                )
+                return (caps as { ['bstack:options']?: Record<string, unknown> })['bstack:options'] || {}
             }
             return {}
         })()
 
-        const isNonBstackA11y =
-            isTurboScale(options) ||
-            !shouldAddServiceVersion(
-                config as Options.Testrunner,
-                options.testObservability,
-            )
-        const observabilityOptions: TestObservabilityOptions =
-            options.testObservabilityOptions || {}
-        const testManagementOptions: TestManagementOptions =
-            options.testManagementOptions || {}
-        const testPlanId = typeof testManagementOptions.testPlanId === 'string'
-            ? testManagementOptions.testPlanId.trim()
-            : ''
+        const isNonBstackA11y = isTurboScale(options) || !shouldAddServiceVersion(config as Options.Testrunner, options.testObservability)
+        const observabilityOptions: TestObservabilityOptions = options.testObservabilityOptions || {}
         const binconfig: Record<string, unknown> = {
             userName: observabilityOptions.user || config.user,
             accessKey: observabilityOptions.key || config.key,
@@ -133,51 +100,47 @@ export class CLIUtils {
         binconfig.buildName = observabilityOptions.buildName || binconfig.buildName
         binconfig.projectName = observabilityOptions.projectName || binconfig.projectName
         binconfig.buildTag = this.getObservabilityBuildTags(observabilityOptions, buildTag) || []
-        if (testPlanId.length > 0) {
-            binconfig.testManagementOptions = {
-                testPlanId,
-            }
+
+        let caps = capabilities
+        if (capabilities && !Array.isArray(capabilities)) {
+            caps = [capabilities]
         }
+        if (Array.isArray(caps)) {
+            for (const cap of caps) {
+                const platform: Record<string, unknown> = {}
+                const capability = cap as Record<string, any>
 
-        const caps = Array.isArray(capabilities) ? capabilities : [capabilities]
-        for (const cap of caps) {
-            const platform: Record<string, unknown> = {}
-            const capability = cap as Record<string, unknown>
+                Object.keys(capability)
+                    .filter((key) => (key !== 'bstack:options'))
+                    .forEach((key) => {
+                        if (binconfig[key] === undefined) {
+                            platform[key] = capability[key]
+                        }
+                    })
 
-            Object.keys(capability)
-                .filter((key) => key !== 'bstack:options')
-                .forEach((key) => {
-                    platform[key] = capability[key]
-                })
-
-            if (capability['bstack:options']) {
-                Object.keys(
-                    capability['bstack:options'] as Record<string, unknown>,
-                ).forEach((key) => {
-                    platform[key] = (
-                        capability['bstack:options'] as Record<
-                            string,
-                            unknown
-                        >
-                    )[key]
-                })
+                if (capability['bstack:options']) {
+                    Object.keys(capability['bstack:options'])
+                        .forEach((key) => {
+                            if (binconfig[key] === undefined) {
+                                platform[key] = capability['bstack:options'][key]
+                            }
+                        })
+                }
+                (binconfig.platforms as Array<unknown>).push(platform)
             }
-            (binconfig.platforms as Array<unknown>).push(platform)
         }
         return JSON.stringify(binconfig)
     }
 
     static getSdkVersion() {
-        return BSTACK_SERVICE_VERSION
+        return bstackServiceVersion
     }
 
     static getSdkLanguage() {
         return 'ECMAScript'
     }
 
-    static async setupCliPath(
-        config: Options.Testrunner,
-    ): Promise<string | null> {
+    static async setupCliPath(config: Options.Testrunner): Promise<string|null> {
         logger.debug('Configuring Cli path.')
         const developmentBinaryPath = process.env.SDK_CLI_BIN_PATH || null
         if (!isNullOrEmpty(developmentBinaryPath)) {
@@ -191,40 +154,16 @@ export class CLIUtils {
                 throw new Error('No writable directory available for the CLI')
             }
             const existingCliPath = this.getExistingCliPath(cliDir)
-            const finalBinaryPath = await this.checkAndUpdateCli(
-                existingCliPath,
-                cliDir,
-                config,
-            )
+            const finalBinaryPath = await this.checkAndUpdateCli(existingCliPath, cliDir, config)
             logger.debug(`Resolved binary path: ${finalBinaryPath}`)
             return finalBinaryPath
         } catch (err) {
-            logger.debug(
-                `Error in setting up cli path directory, Exception: ${util.format(err)}`,
-            )
+            logger.debug(`Error in setting up cli path directory, Exception: ${util.format(err)}`)
         }
         return null
     }
 
-    static async checkAndUpdateCli(
-        existingCliPath: string,
-        cliDir: string,
-        config: Options.Testrunner,
-    ): Promise<string | null> {
-        // Skip CLI update in worker processes - only launcher should update
-        // Workers are identified by having BROWSERSTACK_TESTHUB_JWT set (build already started)
-        if (process.env.BROWSERSTACK_TESTHUB_JWT) {
-            logger.debug(
-                `Worker process detected, skipping CLI update. Using existing: ${existingCliPath}`,
-            )
-            if (existingCliPath && fs.existsSync(existingCliPath)) {
-                return existingCliPath
-            }
-            logger.warn(
-                'Worker process has no existing CLI binary, attempting download as fallback.',
-            )
-        }
-
+    static async checkAndUpdateCli(existingCliPath: string, cliDir: string, config: Options.Testrunner): Promise<string|null> {
         PerformanceTester.start(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
         logger.info(`Current CLI Path Found: ${existingCliPath}`)
         const queryParams: Record<string, string> = {
@@ -235,42 +174,20 @@ export class CLIUtils {
             sdk_language: this.getSdkLanguage(),
         }
         if (!isNullOrEmpty(existingCliPath)) {
-            // If binary is busy (being executed by another process), skip version check
-            // and API call entirely — use existing binary as-is
-            if (this.isBinaryBusy(existingCliPath)) {
-                logger.warn(`Existing binary is currently in use, skipping update: ${existingCliPath}`)
-                PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
-                return existingCliPath
-            }
-            const version = await this.runShellCommand(
-                `${existingCliPath} version`,
-            )
-            if (version.toLowerCase().includes('text file busy')) {
-                logger.warn(`Binary busy during version check, skipping update: ${existingCliPath}`)
-                PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
-                return existingCliPath
-            }
-            queryParams.cli_version = version
+            const nullDevice = platform() === 'win32' ? 'NUL' : '/dev/null'
+            queryParams.cli_version = await this.runShellCommand(`${existingCliPath} version 2>${nullDevice}`)
         }
         const response = await this.requestToUpdateCLI(queryParams, config)
         if (nestedKeyValue(response, ['updated_cli_version'])) {
-            logger.debug(
-                `Need to update binary, current binary version: ${queryParams.cli_version}`,
-            )
+            logger.debug(`Need to update binary, current binary version: ${queryParams.cli_version}`)
 
-            const browserStackBinaryUrl =
-                process.env.BROWSERSTACK_BINARY_URL || null
+            const browserStackBinaryUrl = process.env.BROWSERSTACK_BINARY_URL || null
             if (!isNullOrEmpty(browserStackBinaryUrl)) {
-                logger.debug(
-                    `Using BROWSERSTACK_BINARY_URL: ${browserStackBinaryUrl}`,
-                )
+                logger.debug(`Using BROWSERSTACK_BINARY_URL: ${browserStackBinaryUrl}`)
                 response.url = browserStackBinaryUrl
             }
 
-            const finalBinaryPath = await this.downloadLatestBinary(
-                nestedKeyValue(response, ['url']),
-                cliDir,
-            )
+            const finalBinaryPath = await this.downloadLatestBinary(nestedKeyValue(response, ['url']), cliDir)
             PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
             return finalBinaryPath
         }
@@ -290,9 +207,7 @@ export class CLIUtils {
             }
             return cliDirPath
         } catch (err) {
-            logger.error(
-                `Error in getting writable directory, writableDir=${util.format(err)}`,
-            )
+            logger.error(`Error in getting writable directory, writableDir=${util.format(err)}`)
             return ''
         }
     }
@@ -315,9 +230,7 @@ export class CLIUtils {
                         logger.debug(`Giving write permission to ${path}`)
                         const success = setReadWriteAccess(path!)
                         if (!isTrue(success)) {
-                            logger.warn(
-                                `Unable to provide write permission to ${path}`,
-                            )
+                            logger.warn(`Unable to provide write permission to ${path}`)
                         }
                     }
                 } else {
@@ -326,16 +239,12 @@ export class CLIUtils {
                     logger.debug(`Giving write permission to ${path}`)
                     const success = setReadWriteAccess(path!)
                     if (!isTrue(success)) {
-                        logger.warn(
-                            `Unable to provide write permission to ${path}`,
-                        )
+                        logger.warn(`Unable to provide write permission to ${path}`)
                     }
                 }
                 return path
             } catch (err) {
-                logger.error(
-                    `Unable to get writable directory, exception ${util.format(err)}`,
-                )
+                logger.error(`Unable to get writable directory, exception ${util.format(err)}`)
             }
         }
         return null
@@ -352,11 +261,7 @@ export class CLIUtils {
             const allBinaries = fs
                 .readdirSync(cliDir)
                 .map((file: string) => path.join(cliDir, file))
-                .filter(
-                    (filePath: string) =>
-                        fs.statSync(filePath).isFile() &&
-                        path.basename(filePath).startsWith('binary-'),
-                )
+                .filter((filePath: string) => fs.statSync(filePath).isFile() && path.basename(filePath).startsWith('binary-'))
 
             if (allBinaries.length > 0) {
                 // Get the latest binary by comparing the last modified time
@@ -365,23 +270,17 @@ export class CLIUtils {
                         filePath,
                         mtime: fs.statSync(filePath).mtime,
                     }))
-                    .reduce(
-                        (
-                            latest: { filePath: string; mtime: Date } | null,
-                            current: { filePath: string; mtime: Date },
-                        ) => {
-                            if (!latest || !latest.mtime) {
-                                return current
-                            }
+                    .reduce((latest: { filePath: string; mtime: Date } | null, current: { filePath: string; mtime: Date }) => {
+                        if (!latest || !latest.mtime) {
+                            return current
+                        }
 
-                            if (current.mtime > latest.mtime) {
-                                return current
-                            }
+                        if (current.mtime > latest.mtime) {
+                            return current
+                        }
 
-                            return latest
-                        },
-                        null,
-                    )
+                        return latest
+                    }, null)
                 return latestBinary ? latestBinary.filePath : ''
             }
 
@@ -392,50 +291,24 @@ export class CLIUtils {
         }
     }
 
-    static isBinaryBusy(binaryPath: string): boolean {
-        if (isNullOrEmpty(binaryPath)) {return false}
-        if (platform() === 'darwin') {return false}
-        if (!fs.existsSync(binaryPath)) {return false}
-
-        try {
-            const fd = fs.openSync(binaryPath, 'r+')
-            fs.closeSync(fd)
-            return false
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } catch (err: any) {
-            if (BINARY_BUSY_ERROR_CODES.includes(err.code)) {
-                logger.debug(`Binary is busy: ${binaryPath}`)
-                return true
-            }
-            logger.debug(`Error checking if binary is busy: ${err.message}`)
-            return false
-        }
-    }
-
-    static requestToUpdateCLI = async (
-        queryParams: Record<string, string>,
-        config: Options.Testrunner,
-    ) => {
+    static requestToUpdateCLI = async (queryParams: Record<string, string>, config: Options.Testrunner) => {
         const params = new URLSearchParams(queryParams)
         const requestInit: RequestInit = {
-            method: 'GET',
             headers: {
                 Authorization: `Basic ${Buffer.from(`${getBrowserStackUser(config)}:${getBrowserStackKey(config)}`).toString('base64')}`,
             },
         }
-        const response = await fetch(
-            `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/${UPDATED_CLI_ENDPOINT}?${params.toString()}`,
+        const response = await nodeRequest(
+            'GET',
+            `${UPDATED_CLI_ENDPOINT}?${params.toString()}`,
             requestInit,
+            APIUtils.BROWSERSTACK_AUTOMATE_API_URL
         )
-        const jsonResponse = await response.json()
-        logger.debug(`response ${JSON.stringify(jsonResponse)}`)
-        return jsonResponse
+        logger.debug(`response ${JSON.stringify(response)}`)
+        return response
     }
 
-    static runShellCommand(
-        cmdCommand: string,
-        workingDir = '',
-    ): Promise<string> {
+    static runShellCommand(cmdCommand: string, workingDir = ''): Promise<string> {
         return new Promise((resolve) => {
             const process = exec(
                 cmdCommand,
@@ -446,7 +319,7 @@ export class CLIUtils {
                     } else {
                         resolve(stdout.trim())
                     }
-                },
+                }
             )
 
             // Ensure the process is killed if it exceeds the timeout
@@ -456,395 +329,77 @@ export class CLIUtils {
         })
     }
 
-    static downloadLatestBinary = async (
-        binDownloadUrl: string,
-        cliDir: string,
-    ): Promise<string | null> => {
-        const lockPath = path.join(cliDir, 'download.lock')
-
-        const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-
-        const parseLockFile = () => {
-            try {
-                const content = fs.readFileSync(lockPath, 'utf8').trim()
-                const [pidLine, timestampLine] = content.split('\n')
-                const pid = Number.parseInt(pidLine, 10)
-                const timestamp = Number.parseInt(timestampLine, 10)
-                if (!Number.isFinite(pid) || !Number.isFinite(timestamp)) {
-                    return null
-                }
-                return { pid, timestamp }
-            } catch {
-                return null
-            }
-        }
-
-        const isProcessRunning = (pid: number) => {
-            try {
-                process.kill(pid, 0)
-                return true
-            } catch {
-                return false
-            }
-        }
-
-        const acquireLock = async (
-            timeoutMs = CLI_LOCK_TIMEOUT_MS,
-            pollMs = CLI_LOCK_POLL_MS,
-        ): Promise<(() => void) | { alreadyExists: string }> => {
-            const start = Date.now()
-            while (true) {
-                try {
-                    const fd = fs.openSync(lockPath, 'wx')
-                    try {
-                        fs.writeFileSync(fd, `${process.pid}\n${Date.now()}\n`)
-                    } catch {
-                        // intentionally ignore write errors; the open fd still holds
-                        // the exclusive lock and will be closed in cleanup
-                    }
-                    return () => {
-                        try {
-                            fs.closeSync(fd)
-                        } catch {
-                            // ignore cleanup errors
-                        }
-                        try {
-                            fs.unlinkSync(lockPath)
-                        } catch {
-                            // ignore cleanup errors
-                        }
-                    }
-                } catch (e: unknown) {
-                    const error = e as { code?: string }
-                    if (error.code === 'EEXIST') {
-                        const lockMeta = parseLockFile()
-                        if (lockMeta) {
-                            const lockAge = Date.now() - lockMeta.timestamp
-                            const running = isProcessRunning(lockMeta.pid)
-                            if (!running || lockAge > timeoutMs) {
-                                logger.warn(
-                                    `Stale CLI download lock detected (pid=${lockMeta.pid}, age=${lockAge}ms). Removing lock.`,
-                                )
-                                try {
-                                    fs.unlinkSync(lockPath)
-                                } catch {
-                                    // ignore cleanup errors
-                                }
-                                continue
-                            }
-                        }
-                        // Check if existing binary appeared while waiting
-                        const existingBinary =
-                            CLIUtils.getExistingCliPath(cliDir)
-                        if (
-                            existingBinary &&
-                            fs.existsSync(existingBinary) &&
-                            fs.statSync(existingBinary).size > 0
-                        ) {
-                            logger.debug(
-                                `Binary appeared while waiting for lock: ${existingBinary}`,
-                            )
-                            return { alreadyExists: existingBinary }
-                        }
-                        if (Date.now() - start > timeoutMs) {
-                            throw new Error(
-                                `Timeout waiting for lock: ${lockPath}`,
-                            )
-                        }
-                        await sleep(pollMs)
-                        continue
-                    }
-                    throw e
-                }
-            }
-        }
-
-        const cleanupTemporaryDownloads = (maxAgeMs = CLI_LOCK_TIMEOUT_MS) => {
-            try {
-                const now = Date.now()
-                // Match both download zips (downloaded_file_*.zip) and orphan extract
-                // temp files (<name>.tmp.<pid>) left by crashed peer workers.
-                const tmpExtractRe = /\.tmp\.\d+$/
-                for (const entry of fs.readdirSync(cliDir)) {
-                    const isDownloadZip =
-                        entry.startsWith(CLI_DOWNLOAD_TMP_PREFIX) &&
-                        entry.endsWith(CLI_DOWNLOAD_TMP_SUFFIX)
-                    const isExtractTmp = tmpExtractRe.test(entry)
-                    if (!isDownloadZip && !isExtractTmp) {
-                        continue
-                    }
-                    const filePath = path.join(cliDir, entry)
-                    let stats: fs.Stats
-                    try {
-                        stats = fs.statSync(filePath)
-                    } catch {
-                        continue
-                    }
-                    if (now - stats.mtimeMs < maxAgeMs) {
-                        continue
-                    }
-                    try {
-                        fs.unlinkSync(filePath)
-                    } catch (err) {
-                        logger.debug(
-                            `Failed to delete temp CLI file ${filePath}: ${util.format(err)}`,
-                        )
-                    }
-                }
-            } catch (err) {
-                logger.debug(
-                    `Failed to scan temp CLI files in ${cliDir}: ${util.format(err)}`,
-                )
-            }
-        }
-
+    static downloadLatestBinary = async (binDownloadUrl: string, cliDir: string): Promise<string|null> => {
         PerformanceTester.start(PerformanceEvents.SDK_CLI_DOWNLOAD)
         logger.debug(`Downloading SDK binary from: ${binDownloadUrl}`)
-
-        let downloadEnded = false
-        const endDownload = (success = true, errMsg?: string) => {
-            if (downloadEnded) {
-                return
-            }
-            downloadEnded = true
-            if (success) {
-                PerformanceTester.end(PerformanceEvents.SDK_CLI_DOWNLOAD)
-                return
-            }
-            PerformanceTester.end(
-                PerformanceEvents.SDK_CLI_DOWNLOAD,
-                false,
-                errMsg,
-            )
-        }
-
-        let releaseLock: (() => void) | undefined
         try {
-            const lockResult = await acquireLock()
-
-            // Check if binary already exists (another process downloaded it)
-            if (typeof lockResult !== 'function') {
-                endDownload()
-                return lockResult.alreadyExists
-            }
-
-            releaseLock = lockResult
-
-            // Re-check after acquiring lock
-            const existingBinary = CLIUtils.getExistingCliPath(cliDir)
-            if (
-                existingBinary &&
-                fs.existsSync(existingBinary) &&
-                fs.statSync(existingBinary).size > 0
-            ) {
-                logger.debug(
-                    `Binary already exists after acquiring lock: ${existingBinary}`,
-                )
-                endDownload()
-                releaseLock()
-                return existingBinary
-            }
-
-            cleanupTemporaryDownloads()
-
-            const zipFilePath = path.join(
-                cliDir,
-                `${CLI_DOWNLOAD_TMP_PREFIX}${process.pid}_${Date.now()}${CLI_DOWNLOAD_TMP_SUFFIX}`,
-            )
+            const zipFilePath = path.join(cliDir, 'downloaded_file.zip')
             const downloadedFileStream = fs.createWriteStream(zipFilePath)
+            return new Promise<string|null>((resolve, reject) => {
+                const binaryName = null
 
-            return new Promise<string | null>((resolve, reject) => {
-                const processDownload = async () => {
-                    const abortController = new AbortController()
-                    const timeout = setTimeout(
-                        () => abortController.abort(),
-                        CLI_DOWNLOAD_TIMEOUT_MS,
-                    )
-                    let response: Response
-                    try {
-                        response = await fetch(binDownloadUrl, {
-                            signal: abortController.signal,
-                        })
-                    } finally {
-                        clearTimeout(timeout)
-                    }
-                    if (!response.body) {
-                        throw new Error('No response body received')
-                    }
+                const stream = got.stream(binDownloadUrl, {
+                    followRedirect: true
+                })
 
-                    downloadedFileStream.on('error', function (err: Error) {
-                        logger.error(
-                            `Got Error while downloading cli binary file: ${err}`,
-                        )
-                        endDownload(false, util.format(err))
-                        releaseLock?.()
-                        reject(err)
-                    })
+                stream.pipe(downloadedFileStream)
 
-                    try {
-                        const arrayBuffer = await response.arrayBuffer()
-                        const nodeStream = Readable.from([
-                            new Uint8Array(arrayBuffer),
-                        ])
+                downloadedFileStream.on('error', function (err: Error) {
+                    logger.error('Got Error while downloading percy binary file' + err)
+                    PerformanceTester.end(PerformanceEvents.SDK_CLI_DOWNLOAD, false, util.format(err))
+                    reject(err)
+                })
 
-                        nodeStream.pipe(downloadedFileStream)
+                stream.on('error', (err) => {
+                    logger.error(`Got Error in cli binary downloading request ${util.format(err)}`)
+                    PerformanceTester.end(PerformanceEvents.SDK_CLI_DOWNLOAD, false, util.format(err))
+                    reject(err)
+                })
 
-                        // Set up the downloadFileStream handler before pipeline
-                        CLIUtils.downloadFileStream(
-                            downloadedFileStream,
-                            zipFilePath,
-                            cliDir,
-                            (result: string) => {
-                                endDownload()
-                                releaseLock?.()
-                                resolve(result)
-                            },
-                            (err?: Error) => {
-                                endDownload(false, util.format(err))
-                                releaseLock?.()
-                                reject(err)
-                            },
-                        )
-                    } catch (err) {
-                        logger.error(
-                            `Got Error in cli binary downloading request ${util.format(err)}`,
-                        )
-                        endDownload(false, util.format(err))
-                        releaseLock?.()
-                        reject(err as Error)
-                    }
-                }
-
-                processDownload()
+                CLIUtils.downloadFileStream(downloadedFileStream, binaryName, zipFilePath, cliDir, resolve, reject)
+                PerformanceTester.end(PerformanceEvents.SDK_CLI_DOWNLOAD)
             })
         } catch (err) {
-            releaseLock?.()
-            endDownload(false, util.format(err))
-            logger.debug(
-                `Failed to download binary, Exception: ${util.format(err)}`,
-            )
+            PerformanceTester.end(PerformanceEvents.SDK_CLI_DOWNLOAD, false, util.format(err))
+            logger.debug(`Failed to download binary, Exception: ${util.format(err)}`)
             return null
         }
     }
 
-    static downloadFileStream(
-        downloadedFileStream: fs.WriteStream,
-        zipFilePath: string,
-        cliDir: string,
-        resolve: (path: string) => void,
-        reject: (reason?: Error) => void,
-    ) {
+    static downloadFileStream(downloadedFileStream: fs.WriteStream, binaryName: string|null, zipFilePath: string, cliDir: string, resolve: (path: string) => void, reject: (reason?: Error) => void) {
         downloadedFileStream.on('close', async function () {
-            const yauzlOpenPromise = promisify(yauzl.open) as (
-                path: string,
-                options: yauzlOptions,
-            ) => Promise<ZipFile>
+            const yauzlOpenPromise = promisify(yauzl.open) as (path: string, options: yauzlOptions) => Promise<ZipFile>
             try {
-                const zipfile = await yauzlOpenPromise(zipFilePath, {
-                    lazyEntries: true,
-                })
-                let resolvedBinaryPath: string | null = null
-
+                const zipfile = await yauzlOpenPromise(zipFilePath, { lazyEntries: true })
                 zipfile.readEntry()
                 zipfile.on('entry', async (entry) => {
+                    if (!binaryName) {binaryName = entry.fileName}
                     if (/\/$/.test(entry.fileName)) {
+                        // Directory file names end with '/'.
                         zipfile.readEntry()
-                        return
-                    }
-
-                    // Zip-slip guard: reject entries whose resolved path escapes cliDir
-                    // (BROWSERSTACK_BINARY_URL lets users supply arbitrary zips).
-                    const candidatePath = path.join(cliDir, entry.fileName)
-                    const resolvedCandidate = path.resolve(candidatePath)
-                    const resolvedDir = path.resolve(cliDir) + path.sep
-                    if (!resolvedCandidate.startsWith(resolvedDir)) {
-                        zipfile.close()
-                        reject(new Error(`Zip-slip detected: entry "${entry.fileName}" resolves outside ${cliDir}`))
-                        return
-                    }
-
-                    const isBinaryEntry = path.basename(entry.fileName).startsWith('binary-')
-
-                    if (!isBinaryEntry) {
-                        const directStream = fs.createWriteStream(candidatePath)
-                        directStream.on('error', (writeErr) => {
-                            zipfile.close()
-                            reject(writeErr as Error)
-                        })
-                        const openReadStreamPromise = promisify(
-                            zipfile.openReadStream,
-                        ).bind(zipfile)
+                    } else {
+                        // file entry
+                        const writeStream = fs.createWriteStream(path.join(cliDir, entry.fileName))
+                        const openReadStreamPromise = promisify(zipfile.openReadStream).bind(zipfile)
                         try {
                             const readStream = await openReadStreamPromise(entry)
-                            readStream.on('end', function () {
-                                directStream.end()
-                                directStream.on('close', () => zipfile.readEntry())
-                            })
-                            readStream.pipe(directStream)
+                            readStream.on(
+                                'end',
+                                function () {
+                                    writeStream.close()
+                                    zipfile.readEntry()
+                                }
+                            )
+                            readStream.pipe(
+                                writeStream
+                            )
                         } catch (zipErr) {
-                            zipfile.close()
                             reject(zipErr as Error)
                         }
-                        return
-                    }
 
-                    // Binary entry: extract to PID-scoped temp file, chmod, atomic rename inline.
-                    // Prevents ETXTBSY/EBUSY: the file being executed is never the file being written.
-                    const finalPath = candidatePath
-                    const tempPath = path.join(cliDir, `${entry.fileName}.tmp.${process.pid}`)
-
-                    const writeStream = fs.createWriteStream(tempPath)
-
-                    let writeStreamErrored = false
-                    writeStream.on('error', (writeErr) => {
-                        writeStreamErrored = true
-                        fsp.unlink(tempPath).catch(() => {})
-                        zipfile.close()
-                        reject(writeErr as Error)
-                    })
-
-                    // 'close' fires after the fd is closed; safe for fsp.rename on Windows (where 'finish' may fire before fd release).
-                    // autoClose=true also makes 'close' fire after 'error' — bail out if the error path already rejected.
-                    writeStream.on('close', async () => {
-                        if (writeStreamErrored) { return }
-                        try {
-                            await fsp.chmod(tempPath, '0755')
-                            try {
-                                await fsp.rename(tempPath, finalPath)
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            } catch (renameErr: any) {
-                                // Narrow fallback to cross-device (EXDEV) only
-                                if (renameErr.code !== 'EXDEV') {
-                                    throw renameErr
-                                }
-                                logger.warn(`Atomic rename failed (cross-device), falling back to copy: ${renameErr.message}`)
-                                await fsp.copyFile(tempPath, finalPath)
-                                await fsp.unlink(tempPath).catch(() => {})
-                            }
-                            if (!resolvedBinaryPath) {
-                                resolvedBinaryPath = finalPath
-                            }
-                            zipfile.readEntry()
-                        } catch (err) {
-                            await fsp.unlink(tempPath).catch(() => {})
+                        if (entry.fileName === binaryName) {
                             zipfile.close()
-                            reject(err as Error)
                         }
-                    })
-
-                    const openReadStreamPromise = promisify(
-                        zipfile.openReadStream,
-                    ).bind(zipfile)
-                    try {
-                        const readStream = await openReadStreamPromise(entry)
-                        readStream.on('end', function () {
-                            writeStream.end()
-                        })
-                        readStream.pipe(writeStream)
-                    } catch (zipErr) {
-                        fsp.unlink(tempPath).catch(() => {})
-                        zipfile.close()
-                        reject(zipErr as Error)
                     }
                 })
 
@@ -853,17 +408,17 @@ export class CLIUtils {
                 })
 
                 zipfile.once('end', () => {
-                    fsp.unlink(zipFilePath).catch(() => {
-                        logger.warn(`Failed to delete zip file: ${zipFilePath}`)
-                    })
-
-                    if (!resolvedBinaryPath) {
-                        zipfile.close()
-                        reject(new Error('No binary-* entry found in zip; cannot complete CLI binary extraction'))
-                        return
-                    }
+                    fsp.unlink(zipFilePath)
+                        .catch(() => {
+                            logger.warn(`Failed to delete zip file: ${zipFilePath}`)
+                        })
+                    fsp.chmod(`${cliDir}/${binaryName}`, '0755')
+                        .then(() => {
+                            resolve(`${cliDir}/${binaryName}`)
+                        }).catch((err) => {
+                            reject(err)
+                        })
                     zipfile.close()
-                    resolve(resolvedBinaryPath)
                 })
             } catch (err) {
                 reject(err as Error)
@@ -880,21 +435,14 @@ export class CLIUtils {
 
     static getAutomationFrameworkDetail() {
         if (process.env.BROWSERSTACK_AUTOMATION_FRAMEWORK_DETAIL) {
-            return JSON.parse(
-                process.env.BROWSERSTACK_AUTOMATION_FRAMEWORK_DETAIL,
-            )
+            return JSON.parse(process.env.BROWSERSTACK_AUTOMATION_FRAMEWORK_DETAIL)
         }
         return this.automationFrameworkDetail
     }
 
-    static setFrameworkDetail(
-        testFramework: string,
-        automationFramework: string,
-    ) {
+    static setFrameworkDetail(testFramework: string, automationFramework: string) {
         if (!testFramework || !automationFramework) {
-            logger.debug(
-                `Test or Automation framework not provided testFramework=${testFramework}, automationFramework=${automationFramework}`,
-            )
+            logger.debug(`Test or Automation framework not provided testFramework=${testFramework}, automationFramework=${automationFramework}`)
         }
 
         this.testFrameworkDetail = {
@@ -907,12 +455,8 @@ export class CLIUtils {
             version: { [automationFramework]: CLIUtils.getSdkVersion() },
         }
 
-        process.env.BROWSERSTACK_AUTOMATION_FRAMEWORK_DETAIL = JSON.stringify(
-            this.automationFrameworkDetail,
-        )
-        process.env.BROWSERSTACK_TEST_FRAMEWORK_DETAIL = JSON.stringify(
-            this.testFrameworkDetail,
-        )
+        process.env.BROWSERSTACK_AUTOMATION_FRAMEWORK_DETAIL = JSON.stringify(this.automationFrameworkDetail)
+        process.env.BROWSERSTACK_TEST_FRAMEWORK_DETAIL = JSON.stringify(this.testFrameworkDetail)
     }
 
     /**
@@ -959,10 +503,7 @@ export class CLIUtils {
         return pattern.test(hookState)
     }
 
-    static getObservabilityBuildTags(
-        observabilityOptions: TestObservabilityOptions,
-        bstackBuildTag?: string,
-    ) {
+    static getObservabilityBuildTags(observabilityOptions: TestObservabilityOptions, bstackBuildTag?: string) {
         if (process.env.TEST_OBSERVABILITY_BUILD_TAG) {
             return process.env.TEST_OBSERVABILITY_BUILD_TAG.split(',')
         }
@@ -981,4 +522,5 @@ export class CLIUtils {
         }
         return this.CLISupportedFrameworks.includes(framework)
     }
+
 }

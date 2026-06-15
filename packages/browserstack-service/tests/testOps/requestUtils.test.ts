@@ -1,38 +1,41 @@
 import { uploadEventData } from '../../src/testOps/requestUtils.js'
-import { describe, expect, it, vi, afterEach } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import got from 'got'
 import { TESTOPS_BUILD_COMPLETED_ENV, BROWSERSTACK_TESTHUB_JWT } from '../../src/constants.js'
 
-vi.mock('fetch')
 describe('uploadEventData', () => {
-    const mockedFetch = vi.mocked(fetch)
+    const mockedGot = vi.mocked(got)
 
-    afterEach(() => {
-        vi.resetAllMocks()
-    })
-
-    it('should send request', async () => {
+    it('got.post called', async () => {
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
-        mockedFetch.mockReturnValueOnce(Promise.resolve(Response.json({})))
+        mockedGot.post = vi.fn().mockReturnValue({
+            json: () => Promise.resolve({ }),
+        } as any)
 
         expect(async () => uploadEventData( { event_type: 'testRunStarted' } )).not.toThrowError()
-        expect(fetch).toBeCalledTimes(1)
+        expect(got.post).toBeCalledTimes(1)
     })
 
-    it('should throw error if request fails', async () => {
+    it('got.post failed', async () => {
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
-        mockedFetch.mockReturnValueOnce(Promise.reject(Response.json({})))
+        mockedGot.post = vi.fn().mockReturnValue({
+            json: () => Promise.reject({ }),
+        } as any)
 
         await expect(uploadEventData( { event_type: 'testRunStarted' } )).rejects.toThrow()
-        expect(fetch).toBeCalledTimes(1)
+        expect(got.post).toBeCalledTimes(1)
     })
 
-    it('should throw error if JWT token is missing and not throw error', async () => {
+    it('got.post not called', async () => {
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         delete process.env[BROWSERSTACK_TESTHUB_JWT]
+        mockedGot.post = vi.fn().mockReturnValue({
+            json: () => Promise.resolve({ }),
+        } as any)
 
         await expect(uploadEventData( { event_type: 'testRunStarted' } )).rejects.toThrow()
-        expect(mockedFetch).toBeCalledTimes(0)
+        expect(got.post).toBeCalledTimes(0)
     })
 })
