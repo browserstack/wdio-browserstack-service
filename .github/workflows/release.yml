@@ -37,10 +37,16 @@ jobs:
           fetch-depth: 0   # Changesets needs full history/tags
 
       - name: Setup Node
+        # NOTE: intentionally NO `registry-url:` here. setup-node's registry-url writes
+        # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into ~/.npmrc; with no
+        # NODE_AUTH_TOKEN that becomes an empty token line that can shadow OIDC Trusted
+        # Publishing at `npm publish` time. npm already defaults to registry.npmjs.org and
+        # publishConfig.access=public handles the scoped publish, so the line isn't needed.
+        # (Follow-up to consider: split changesets/action so publish runs as its own
+        #  top-level step — further de-risks OIDC. Tracked, not done here.)
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22            # resolves to >= 22.14 on the runner (OIDC floor)
-          registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
       # Trusted Publishing needs npm >= 11.5.1. Pin to the 11.x line so a future
