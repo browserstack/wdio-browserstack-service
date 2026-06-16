@@ -15,13 +15,13 @@ export default defineConfig({
         include: ['tests/**/*.test.ts'],
         exclude: ['dist', 'build', '.idea', '.git', '.cache', '**/node_modules/**'],
         env: { WDIO_SKIP_DRIVER_SETUP: '1' },
-        // 'threads' (matching the v9 line) lets Vitest force-terminate workers on
-        // teardown; with 'forks', a child process left holding an open handle (e.g. a
-        // got keep-alive socket / gRPC channel in an error-path test) hangs the whole
-        // run after the last file even though every test has already passed.
-        pool: 'threads',
-        // Restore real timers after every file — 9 specs install fake timers at
-        // module scope and never restore them, which compounds the teardown hang.
+        pool: 'forks',
+        // Global per-file teardown (see vitest.setup.ts): restores real timers and
+        // disconnects the PerformanceTester observer. Tests call startMonitoring()
+        // without always calling stopAndGenerate(), leaving an open PerformanceObserver
+        // handle that otherwise hangs the whole-suite run under Vitest 1.x teardown
+        // (per-file is unaffected; upstream only ever runs these inside the full
+        // monorepo suite, never standalone, so it never hit this).
         setupFiles: ['./__mocks__/vitest.setup.ts'],
         testTimeout: 30000
     }
