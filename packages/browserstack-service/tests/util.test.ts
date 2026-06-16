@@ -1611,6 +1611,10 @@ describe('logPatcher', () => {
     const BSTestOpsPatcher = new logPatcher({})
     const emitSpy = vi.spyOn(process, 'emit')
     it('logPatcher methods should emit data', () => {
+        // The spy is created at describe scope and process.emit fires for unrelated
+        // events too; clear it so this only counts the six logPatcher calls below
+        // (otherwise a stray process.emit before this test makes the count flaky).
+        emitSpy.mockClear()
         BSTestOpsPatcher.info('abc')
         BSTestOpsPatcher.error('abc')
         BSTestOpsPatcher.warn('abc')

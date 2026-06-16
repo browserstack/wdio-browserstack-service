@@ -1,10 +1,18 @@
 import { vi } from 'vitest'
 
 import { EventEmitter } from 'node:events'
-// Standalone: stats classes are public named exports of the published @wdio/reporter
-// (in the monorepo this mock imported them from packages/wdio-reporter/src).
-import { HookStats, RunnerStats, SuiteStats, TestStats } from '@wdio/reporter'
 import { Chalk } from '../chalk.ts'
+
+// Stub stats classes. These MUST NOT be imported from '@wdio/reporter' — this file IS
+// the mock for '@wdio/reporter', so importing the stats from it makes the mock depend
+// on itself and deadlocks mock resolution at collection (the file hangs with no
+// output). The service only uses these as TYPES (erased at runtime) and the specs use
+// plain object literals, so empty classes are sufficient. (In the monorepo the mock
+// imported them from packages/wdio-reporter/src, a path that doesn't exist standalone.)
+export class HookStats {}
+export class RunnerStats {}
+export class SuiteStats {}
+export class TestStats {}
 
 export default class WDIOReporter extends EventEmitter {
     outputStream: { write: Function }
@@ -80,5 +88,3 @@ export default class WDIOReporter extends EventEmitter {
     /* istanbul ignore next */
     onRunnerEnd () {}
 }
-
-export { HookStats, RunnerStats, SuiteStats, TestStats }

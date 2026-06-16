@@ -9,7 +9,11 @@ import * as bstackLogger from '../src/bstackLogger.js'
 
 const log = logger('test')
 
-vi.useFakeTimers().setSystemTime(new Date('2020-01-01'))
+// Fake only Date (not setTimeout/setImmediate): this file only needs a deterministic
+// clock, and the vi.mock factories below resolve via dynamic import() — bare
+// useFakeTimers() freezes the timers that import resolution needs and deadlocks
+// collection under Vitest 1.6.x, hanging the file with no output.
+vi.useFakeTimers({ toFake: ['Date'] }).setSystemTime(new Date('2020-01-01'))
 vi.mock('uuid', () => ({ v4: () => '123456789' }))
 vi.mock('@wdio/reporter', () => import(path.join(process.cwd(), '__mocks__', '@wdio/reporter')))
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))

@@ -39,7 +39,7 @@
     "clean": "rimraf ./build",
     "build": "rimraf ./build && tsc -p tsconfig.prod.json",
     "build:watch": "tsc -p tsconfig.prod.json --watch",
-    "test": "vitest --run",
+    "test": "node ./scripts/test-isolated.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {
