@@ -7,5 +7,5 @@
   "access": "public",
   "baseBranch": "v8",
   "updateInternalDependencies": "patch",
-  "ignore": ["@browserstack/wdio-browserstack-service"]
+  "ignore": []
 }

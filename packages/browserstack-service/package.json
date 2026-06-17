@@ -31,20 +31,24 @@
   "typeScriptVersion": "3.8.3",
   "files": [
     "build",
+    "src/proto/**/*.proto",
     "browserstack-service.d.ts",
     "README.md",
     "LICENSE-MIT"
   ],
   "scripts": {
-    "clean": "rimraf ./build",
-    "build": "rimraf ./build && tsc -p tsconfig.prod.json",
+    "clean": "rimraf ./build src/grpc/generated",
+    "generate": "buf generate",
+    "build": "rimraf ./build src/grpc/generated && buf generate && tsc -p tsconfig.prod.json",
     "build:watch": "tsc -p tsconfig.prod.json --watch",
     "test": "node ./scripts/test-isolated.mjs",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@browserstack/ai-sdk-node": "1.5.17",
-    "@browserstack/wdio-browserstack-service": "^2.0.2",
+    "@bufbuild/protobuf": "^2.5.2",
+    "@grpc/grpc-js": "1.13.3",
     "@percy/appium-app": "^2.0.1",
     "@percy/selenium-webdriver": "^2.0.3",
     "@types/gitconfiglocal": "^2.0.1",
@@ -69,6 +73,7 @@
     "webdriverio": "^8.0.0"
   },
   "devDependencies": {
+    "@bufbuild/buf": "^1.55.1",
     "@changesets/cli": "^2.27.9",
     "@types/node": "^22.2.0",
     "@types/tar": "^6.1.13",
@@ -79,6 +84,7 @@
     "@wdio/reporter": "8.43.0",
     "@wdio/types": "8.41.0",
     "rimraf": "^5.0.7",
+    "ts-proto": "^2.7.5",
     "typescript": "^5.4.5",
     "vitest": "^1.6.0",
     "webdriverio": "8.46.0"

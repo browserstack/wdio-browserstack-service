@@ -31,7 +31,7 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Build (core + service)
+      - name: Build
         run: npm run build
 
       - name: Test

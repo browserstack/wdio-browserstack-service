@@ -1,11 +1,10 @@
 # wdio-browserstack-service
 
-Monorepo for the BrowserStack WebdriverIO integration, maintained by BrowserStack.
+Home of [`@wdio/browserstack-service`](https://www.npmjs.com/package/@wdio/browserstack-service) — the BrowserStack WebdriverIO integration, maintained by BrowserStack.
 
 | Package | npm | What it is |
 |---|---|---|
-| [`packages/browserstack-service`](./packages/browserstack-service) | [`@wdio/browserstack-service`](https://www.npmjs.com/package/@wdio/browserstack-service) | The WebdriverIO service users add via `services: ['browserstack']`. |
-| [`packages/core`](./packages/core) | [`@browserstack/wdio-browserstack-service`](https://www.npmjs.com/package/@browserstack/wdio-browserstack-service) | gRPC/protobuf core SDK consumed by the service. |
+| [`packages/browserstack-service`](./packages/browserstack-service) | [`@wdio/browserstack-service`](https://www.npmjs.com/package/@wdio/browserstack-service) | The WebdriverIO service users add via `services: ['browserstack']`. Its gRPC/protobuf client is generated from the bundled `.proto` files at build time. |
 
 ## Usage (for end users)
 
@@ -27,16 +26,16 @@ See the [service README](./packages/browserstack-service/README.md) for full con
 
 ## Development
 
-This is an npm workspace.
+This is an npm workspace with a single published package.
 
 ```sh
-npm ci              # install all packages
-npm run build       # build core then service
+npm ci              # install
+npm run build       # generate the gRPC client from proto, then compile
 npm test            # run the service test suite
 ```
 
-- `npm run build:core` / `npm run build:service` build a single package.
-- The service is bundled with esbuild (deps kept external) and ships TypeScript declarations from `tsc`.
+- `npm run generate` (inside the package) runs `buf generate` to emit the gRPC/protobuf client into `src/grpc/generated` from the `.proto` files under `src/proto`. `npm run build` runs this automatically before compiling, so the generated code is never committed.
+- The service is compiled with `tsc` (TypeScript declarations included).
 
 ## Releases
 
@@ -46,6 +45,6 @@ on BrowserStack's own cadence (independent of WebdriverIO core's release schedul
 - `main` → `latest` dist-tag (v9 line)
 - `v8` branch → `v8` dist-tag (v8 line)
 
-Publishing uses **npm OIDC trusted publishing** (no long-lived token; provenance-signed). The gRPC core
-`@browserstack/wdio-browserstack-service` is released separately by the SDK team and is excluded from the
-Changesets pipeline (see [`.changeset/config.json`](./.changeset/config.json)).
+Publishing uses **npm OIDC trusted publishing** (no long-lived token; provenance-signed). The gRPC/protobuf
+client is generated inline at build time from the `.proto` files in this repo — there is no separately
+published core package.

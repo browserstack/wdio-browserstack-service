@@ -18,7 +18,7 @@ import {
     AutomationSessionConstructor,
     DriverInitRequestConstructor,
     FetchDriverExecuteParamsEventRequestConstructor
-} from '@browserstack/wdio-browserstack-service'
+} from '../grpc/index.js'
 
 // Type imports
 import type {
@@ -39,7 +39,7 @@ import type {
     FetchDriverExecuteParamsEventResponse,
     TestOrchestrationRequest,
     TestOrchestrationResponse
-} from '@browserstack/wdio-browserstack-service'
+} from '../grpc/index.js'
 
 import PerformanceTester from '../instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from '../instrumentation/performance/constants.js'

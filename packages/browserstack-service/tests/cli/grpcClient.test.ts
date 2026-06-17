@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { GrpcClient } from '../../src/cli/grpcClient.js'
 import * as bstackLogger from '../../src/bstackLogger.js'
-import type { SDKClient } from '@browserstack/wdio-browserstack-service'
+import type { SDKClient } from '../../src/grpc/index.js'
 import { CLIUtils } from '../../src/cli/cliUtils.js'
 import type grpc from '@grpc/grpc-js'
 
