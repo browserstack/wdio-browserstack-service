@@ -2,7 +2,7 @@
   "name": "wdio-browserstack-service-monorepo",
   "version": "0.0.0",
   "private": true,
-  "description": "Monorepo: @wdio/browserstack-service (WebdriverIO service) + @browserstack/wdio-browserstack-service (gRPC/protobuf core).",
+  "description": "@wdio/browserstack-service — WebdriverIO service for BrowserStack (gRPC/protobuf core generated inline at build).",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -12,9 +12,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build:core && npm run build:service",
-    "build:core": "npm run build -w @browserstack/wdio-browserstack-service",
-    "build:service": "npm run build -w @wdio/browserstack-service",
+    "build": "npm run build -w @wdio/browserstack-service",
     "test": "npm run test -w @wdio/browserstack-service",
     "changeset": "changeset",
     "version": "changeset version",

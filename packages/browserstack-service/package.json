@@ -38,20 +38,24 @@
   "typeScriptVersion": "3.8.3",
   "files": [
     "build",
+    "src/proto/**/*.proto",
     "browserstack-service.d.ts",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "clean": "rimraf ./build",
-    "build": "rimraf ./build && node ./scripts/build.mjs && tsc -p tsconfig.prod.json",
+    "clean": "rimraf ./build src/grpc/generated",
+    "generate": "buf generate",
+    "build": "rimraf ./build src/grpc/generated && buf generate && node ./scripts/build.mjs && tsc -p tsconfig.prod.json",
     "build:watch": "node ./scripts/build.mjs --watch",
     "test": "vitest --run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@browserstack/ai-sdk-node": "1.5.17",
-    "@browserstack/wdio-browserstack-service": "^2.0.2",
+    "@bufbuild/protobuf": "^2.5.2",
+    "@grpc/grpc-js": "1.13.3",
     "@percy/appium-app": "^2.0.9",
     "@percy/selenium-webdriver": "^2.2.2",
     "@types/gitconfiglocal": "^2.0.1",
@@ -75,6 +79,7 @@
     "webdriverio": "^9.0.0"
   },
   "devDependencies": {
+    "@bufbuild/buf": "^1.55.1",
     "@changesets/cli": "^2.27.9",
     "@types/node": "^20.1.0",
     "@types/tar": "^7.0.87",
@@ -85,6 +90,7 @@
     "@wdio/types": "^9.0.0",
     "esbuild": "^0.27.2",
     "rimraf": "^6.0.1",
+    "ts-proto": "^2.7.5",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4",
     "webdriverio": "^9.0.0"

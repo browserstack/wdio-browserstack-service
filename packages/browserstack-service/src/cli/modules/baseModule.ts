@@ -1,5 +1,5 @@
 import { BStackLogger } from '../cliLogger.js'
-import type { SDKClient } from '@browserstack/wdio-browserstack-service'
+import type { SDKClient } from '../../grpc/index.js'
 
 /**
  * Base class for BrowserStack modules

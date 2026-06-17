@@ -47,7 +47,7 @@ import CrashReporter from './crash-reporter.js'
 import { BStackLogger } from './bstackLogger.js'
 import UsageStats from './testOps/usageStats.js'
 import TestOpsConfig from './testOps/testOpsConfig.js'
-import type { StartBinSessionResponse } from '@browserstack/wdio-browserstack-service'
+import type { StartBinSessionResponse } from './grpc/index.js'
 import APIUtils from './cli/apiUtils.js'
 import { create } from 'tar'
 

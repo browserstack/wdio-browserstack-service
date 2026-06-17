@@ -9,8 +9,8 @@ name: Release
 #     Environment:       (leave empty)
 # Requires: PUBLIC repo (for provenance), npm >= 11.5.1, Node >= 22.14.0.
 #
-# The gRPC core (@browserstack/wdio-browserstack-service) is in .changeset ignore,
-# so this workflow never versions or publishes it.
+# The gRPC/protobuf client is generated inline at build time (buf generate); there is no
+# separate core package for this workflow to version or publish.
 
 on:
   push:

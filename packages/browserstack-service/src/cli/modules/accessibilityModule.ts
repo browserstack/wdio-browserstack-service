@@ -14,10 +14,10 @@ import accessibilityScripts from '../../scripts/accessibility-scripts.js'
 import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
-import type { Accessibility } from '@browserstack/wdio-browserstack-service'
+import type { Accessibility } from '../../grpc/index.js'
 import PerformanceTester from '../../instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from '../../instrumentation/performance/constants.js'
-import type { FetchDriverExecuteParamsEventRequest, FetchDriverExecuteParamsEventResponse } from '@browserstack/wdio-browserstack-service'
+import type { FetchDriverExecuteParamsEventRequest, FetchDriverExecuteParamsEventResponse } from '../../grpc/index.js'
 import { GrpcClient } from '../grpcClient.js'
 
 export default class AccessibilityModule extends BaseModule {
