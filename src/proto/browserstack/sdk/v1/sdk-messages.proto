@@ -28,6 +28,7 @@ message AutomationFrameworkInitRequest {
     string framework_version = 4;
     string ref = 5;
     string hub_url = 6;
+    optional string client_worker_id = 500;
 }
 
 message AutomationFrameworkInitResponse {
@@ -43,6 +44,7 @@ message AutomationFrameworkStartRequest {
     string ref = 5;
     string framework_session_id = 6;
     string hub_url = 7;
+    optional string client_worker_id = 500;
 }
 
 message AutomationFrameworkStartResponse {
@@ -57,6 +59,7 @@ message AutomationFrameworkStopRequest {
     string ref = 5;
     string framework_session_id = 6;
     string hub_url = 7;
+    optional string client_worker_id = 500;
 }
 
 message AutomationFrameworkStopResponse {
@@ -65,6 +68,7 @@ message AutomationFrameworkStopResponse {
 
 message FindNearestHubRequest {
     string bin_session_id = 1;
+    optional string client_worker_id = 500;
 }
 
 message FindNearestHubResponse {
@@ -86,6 +90,8 @@ message StartBinSessionRequest {
     optional string language_version = 11;
     string test_framework = 12;
     optional string wdio_config = 13;
+    optional string client_worker_id = 500;
+    optional string platform_index = 501;
 }
 
 message StartBinSessionResponse {
@@ -162,11 +168,13 @@ message StopBinSessionResponse {
 message ConnectBinSessionRequest {
     string bin_session_id = 1;
     optional uint32 platform_index = 2;
+    optional string client_worker_id = 500;
 }
 
 message TestFrameworkEventRequest {
     string bin_session_id = 1;
     uint32 platform_index = 2;
+    optional string client_worker_id = 500;
 
     string test_framework_name = 3;
     string test_framework_version = 4;
@@ -198,6 +206,8 @@ message EnqueueTestEventRequest {
     string bin_session_id = 1;
     string event_url = 2;
     bytes event_data_json = 3;
+    optional string client_worker_id = 500;
+    optional string platform_index = 501;
 }
 
 message EnqueueTestEventResponse {
@@ -210,6 +220,7 @@ message LogCreatedEventRequest {
     uint32 platform_index = 2;
     repeated LogEntry logs = 3;
     optional ExecutionContext execution_context = 4;
+    optional string client_worker_id = 500;
 
     message LogEntry {
         string test_framework_name = 1;
@@ -245,6 +256,7 @@ message TestSessionEventRequest {
     optional ExecutionContext execution_context = 9;
 
     optional bytes capabilities = 10;
+    optional string client_worker_id = 500;
 
     message AutomationSession {
         string provider = 1;
@@ -266,6 +278,8 @@ message FetchDriverExecuteParamsEventRequest {
     string bin_session_id = 1;
     string product = 2; 
     optional string script_name = 3;
+    optional string client_worker_id = 500;
+    optional string platform_index = 501;
 }
 
 message FetchDriverExecuteParamsEventResponse {

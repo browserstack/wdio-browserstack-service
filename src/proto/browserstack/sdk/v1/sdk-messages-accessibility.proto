@@ -50,6 +50,7 @@ message AccessibilityConfigRequest {
     string framework_name = 3;
     string framework_version = 4;
     string hub_url = 5;
+    optional string client_worker_id = 500;
 }
 
 message AccessibilityConfigResponse {
