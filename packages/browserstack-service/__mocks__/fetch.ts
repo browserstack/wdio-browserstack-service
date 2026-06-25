@@ -142,7 +142,7 @@ const requestMock: any = vi.fn().mockImplementation((uri, params) => {
     }
 
     if (body?.capabilities?.alwaysMatch?.browserName === 'bidi') {
-        sessionResponse.capabilities.webSocketUrl = 'ws://webdriver.io'
+        sessionResponse.capabilities.webSocketUrl = 'wss://webdriver.io'
     }
 
     switch (uri.pathname) {
