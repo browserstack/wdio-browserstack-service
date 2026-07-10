@@ -17,6 +17,12 @@ on:
     branches:
       - main   # v9 line -> dist-tag "latest"
       - v8     # v8 line -> dist-tag "v8" (from publishConfig.tag on the v8 branch)
+  workflow_dispatch:
+    inputs:
+      canary:
+        description: 'Publish a canary prerelease to the npm `canary` dist-tag (validates OIDC + provenance end-to-end; never touches `latest`). Requires at least one pending changeset.'
+        type: boolean
+        default: false
 
 # Never run main and v8 releases on top of each other.
 concurrency: release-${{ github.ref }}
@@ -63,7 +69,10 @@ jobs:
       - name: Test
         run: npm test
 
+      # Normal release (push to main / v8): open the "Version Packages" PR, or once that PR is
+      # merged, publish to latest (main) / v8 (v8 branch, via publishConfig.tag).
       - name: Create Release PR or publish to npm
+        if: github.event_name == 'push'
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
         with:
           version: npm run version    # changeset version (opens the "Version Packages" PR)
@@ -72,4 +81,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No NPM_TOKEN: auth is OIDC via id-token: write above.
+          NPM_CONFIG_PROVENANCE: 'true'
+
+      # Canary (manual, workflow_dispatch with canary=true): snapshot-version the pending
+      # changesets and publish a prerelease to the `canary` dist-tag via the SAME OIDC trusted
+      # publisher. Validates OIDC + provenance end-to-end without touching `latest`.
+      # snapshot.useCalculatedVersion=true in .changeset/config.json makes the version
+      # <next>-canary-<datetime> (e.g. 9.30.0-canary-...). Requires >=1 pending changeset.
+      - name: Canary publish to `canary` dist-tag
+        if: github.event_name == 'workflow_dispatch' && inputs.canary
+        run: |
+          npx changeset version --snapshot canary
+          npx changeset publish --no-git-tag --tag canary
+        env:
           NPM_CONFIG_PROVENANCE: 'true'
