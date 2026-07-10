@@ -98,7 +98,7 @@ describe('teardown', () => {
         percyHandler.teardown().then(() => {
             expect(percyHandler['_percyScreenshotCounter']).toEqual(0)
 
-        }).catch((err: any) => {
+        }).catch(() => {
             expect(percyHandler['_percyScreenshotCounter']).not.equal(0)
         })
     })

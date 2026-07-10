@@ -108,8 +108,8 @@ describe('AutomateModule', () => {
         // Clear previous calls from construction in beforeEach
         vi.mocked(TestFramework.registerObserver).mockClear()
 
-        // Create new instance to test observer registration
-        const newModule = new AutomateModule(mockConfig)
+        // Create new instance to test observer registration (constructor registers the observers)
+        new AutomateModule(mockConfig)
 
         expect(TestFramework.registerObserver).toHaveBeenCalledTimes(3)
         expect(TestFramework.registerObserver).toHaveBeenCalledWith(

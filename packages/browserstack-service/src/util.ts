@@ -412,7 +412,7 @@ export const launchTestSession = PerformanceTester.measureWrapper(PERFORMANCE_SD
 
     if (accessibilityAutomation && (isTurboScale(options) || data.browserstackAutomation === false)){
         data.accessibility.settings ??= {}
-        data.accessibility.settings['includeEncodedExtension'] = true
+        data.accessibility.settings.includeEncodedExtension = true
     }
 
     try {
@@ -1619,7 +1619,7 @@ export const getResolvedDeviceName = o11yErrorHandler(function getResolvedDevice
     ): WebdriverIO.Capabilities[] => {
         if (!caps) {return []}
         const obj = caps as Record<string, unknown>
-        if (obj['deviceModel'] || obj['appium:deviceModel'] || obj['deviceName'] || obj['bstack:options']) {
+        if (obj.deviceModel || obj['appium:deviceModel'] || obj.deviceName || obj['bstack:options']) {
             // looks like flat caps
             return [caps as WebdriverIO.Capabilities]
         }

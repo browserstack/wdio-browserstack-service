@@ -493,6 +493,7 @@ export class CLIUtils {
             pollMs = CLI_LOCK_POLL_MS,
         ): Promise<(() => void) | { alreadyExists: string }> => {
             const start = Date.now()
+            // eslint-disable-next-line no-constant-condition -- intentional poll loop; exits via return/throw below
             while (true) {
                 try {
                     const fd = fs.openSync(lockPath, 'wx')

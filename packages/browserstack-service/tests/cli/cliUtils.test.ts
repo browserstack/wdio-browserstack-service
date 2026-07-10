@@ -11,7 +11,6 @@ import PerformanceTester from '../../src/instrumentation/performance/performance
 import { EVENTS as PerformanceEvents } from '../../src/instrumentation/performance/constants.js'
 import type { Options } from '@wdio/types'
 import type { BrowserstackConfig, BrowserstackOptions } from '../../src/types.js'
-import APIUtils from '../../src/cli/apiUtils.js'
 
 const bstackLoggerSpy = vi.spyOn(bstackLogger.BStackLogger, 'logToFile')
 bstackLoggerSpy.mockImplementation(() => {})

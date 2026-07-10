@@ -497,7 +497,9 @@ describe('beforeTest', () => {
 
         it('update test data', async () => {
             await insightsHandler.beforeTest({ parent: 'parent', title: 'test' } as any)
-            expect(insightsHandler['_tests']).toEqual({ 'test title': { uuid: '123456789', startedAt: '2020-01-01T00:00:00.000Z' } })
+            // beforeTest also stamps identity fields (kind/name/scopes) so a teardown sweep can
+            // synthesise a terminal TestRunFinished if the test never reaches afterTest.
+            expect(insightsHandler['_tests']).toEqual({ 'test title': { uuid: '123456789', startedAt: '2020-01-01T00:00:00.000Z', kind: 'test', name: 'test', scopes: [] } })
             expect(insightsHandler['getRunData']).toBeCalledTimes(1)
         })
     })
@@ -537,7 +539,8 @@ describe('beforeHook', () => {
 
         it('update hook data', async () => {
             await insightsHandler.beforeHook({ parent: 'parent', title: 'test' } as any, {} as any)
-            expect(insightsHandler['_tests']).toEqual({ 'parent - test': { uuid: '123456789', startedAt: '2020-01-01T00:00:00.000Z' } })
+            // beforeHook stamps the same identity fields, tagged kind: 'hook'.
+            expect(insightsHandler['_tests']).toEqual({ 'parent - test': { uuid: '123456789', startedAt: '2020-01-01T00:00:00.000Z', kind: 'hook', name: 'test', scopes: [] } })
             expect(insightsHandler['getRunData']).toBeCalledTimes(1)
         })
     })

@@ -8,7 +8,7 @@ const baseConfig = { framework: 'mocha', user: 'u', key: 'k' } as any
 
 describe('BrowserStackConfig appAutomate detection', () => {
     beforeEach(() => {
-        ;(BrowserStackConfig as any)._instance = undefined
+        (BrowserStackConfig as any)._instance = undefined
     })
 
     it('marks app_automate when options.app is set (existing behaviour)', () => {

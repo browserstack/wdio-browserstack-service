@@ -138,14 +138,6 @@ vi.mock('fs', async (importOriginal) => {
 const bstackLoggerSpy = vi.spyOn(bstackLogger.BStackLogger, 'logToFile')
 bstackLoggerSpy.mockImplementation(() => {})
 
-function assertMethodCalls(mock: { mock: { calls: any[] } }, expectedMethod: any, expectedCallCount: any) {
-    const matchingCalls = mock.mock.calls.filter(
-        ([, options]) => options.method === expectedMethod
-    )
-
-    expect(matchingCalls.length).toBe(expectedCallCount)
-}
-
 describe('getBrowserCapabilities', () => {
     it('should get default browser capabilities', () => {
         const browser = {
@@ -888,7 +880,7 @@ describe('launchTestSession', () => {
 
         const result: any = await launchTestSession({ framework: 'framework' } as any, {}, {}, {})
         expect(fetchMock).toHaveBeenCalledTimes(1)
-        const [url, options] = fetchMock.mock.calls[0]
+        const [, options] = fetchMock.mock.calls[0]
         expect(options.method).toBe('POST')
         expect(result).toEqual(mockResponse)
     })
@@ -1478,7 +1470,7 @@ describe('getA11yResultsSummary', () => {
         process.env.BSTACK_A11Y_JWT = 'abc'
         AccessibilityScripts.getResultsSummary = 'mockScript'
         vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
-        const mockExecuteAccessibilityScript = vi
+        vi
             .spyOn(utils, 'executeAccessibilityScript')
             .mockResolvedValue({ })
         const result = await utils.getA11yResultsSummary(false, {} as WebdriverIO.Browser, true, true)
@@ -2255,7 +2247,7 @@ describe('getAppA11yResultsSummary', () => {
         process.env.BSTACK_A11Y_JWT = 'abc'
         AccessibilityScripts.getResultsSummary = 'mockScript'
         vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
-        const mockExecuteAccessibilityScript = vi
+        vi
             .spyOn(utils, 'executeAccessibilityScript')
             .mockResolvedValue({ })
         const result = await utils.getA11yResultsSummary(false, {} as WebdriverIO.Browser, true, true)

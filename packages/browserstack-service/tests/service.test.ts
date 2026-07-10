@@ -7,7 +7,6 @@ import BrowserstackService from '../src/service.js'
 import * as utils from '../src/util.js'
 import InsightsHandler from '../src/insights-handler.js'
 import * as bstackLogger from '../src/bstackLogger.js'
-import { BrowserstackCLI } from '../src/cli/index.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
@@ -900,7 +899,7 @@ describe('beforeTest', () => {
 describe('afterTest', () => {
     it('should increment failure reasons on fails', async () => {
         // Mock _updateJob to avoid async timing issues
-        const updateJobSpy = vi.spyOn(service, '_updateJob' as any).mockResolvedValue(undefined)
+        vi.spyOn(service, '_updateJob' as any).mockResolvedValue(undefined)
 
         service.before(service['_config'] as any, [], browser)
         // service['_fullTitle'] = ''  // Comment this out to see if it's the issue
@@ -937,7 +936,7 @@ describe('afterTest', () => {
 
     it('should not increment failure reasons on passes', async () => {
         // Mock _updateJob to avoid async timing issues
-        const updateJobSpy = vi.spyOn(service, '_updateJob' as any).mockResolvedValue(undefined)
+        vi.spyOn(service, '_updateJob' as any).mockResolvedValue(undefined)
 
         service.before(service['_config'] as any, [], browser)
         service.beforeSuite({ title: 'foo' } as any)

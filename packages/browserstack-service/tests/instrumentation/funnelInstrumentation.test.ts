@@ -92,25 +92,6 @@ describe('funnelInstrumentation', () => {
                 'percy': false,
             }
 
-            const finishExpectedEventData = {
-                ...expectedEventData,
-                event_type: 'SDKTestSuccessful',
-                event_properties: {
-                    ...expectedEventData.event_properties,
-                    productMap: {
-                        'observability': true,
-                        'accessibility': false,
-                        'percy': false,
-                        'automate': true,
-                        'app_automate': false
-                    },
-                    product: expect.arrayContaining(['observability', 'automate']),
-                    productUsage: expect.objectContaining({
-                        testObservability: expect.any(Object)
-                    })
-                },
-            }
-
             await sendFinish(finishConfig as any)
             expect(fetch).toHaveBeenCalledWith(FUNNEL_INSTRUMENTATION_URL, expect.objectContaining({
                 method: 'POST',
