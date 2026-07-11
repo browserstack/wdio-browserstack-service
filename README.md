@@ -1,119 +1,50 @@
-# @browserstack/wdio-browserstack-service
+# wdio-browserstack-service
 
-![npm](https://img.shields.io/npm/v/@browserstack/wdio-browserstack-service)
-![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+Home of [`@wdio/browserstack-service`](https://www.npmjs.com/package/@wdio/browserstack-service) — the BrowserStack WebdriverIO integration, maintained by BrowserStack.
 
-Core SDK for BrowserStack integration used by the WebdriverIO BrowserStack Service.
-For user configuration and service options, see the official service README:
-[https://github.com/webdriverio/webdriverio/blob/main/packages/wdio-browserstack-service/README.md](https://github.com/webdriverio/webdriverio/blob/main/packages/wdio-browserstack-service/README.md)
+| Package | npm | What it is |
+|---|---|---|
+| [`packages/browserstack-service`](./packages/browserstack-service) | [`@wdio/browserstack-service`](https://www.npmjs.com/package/@wdio/browserstack-service) | The WebdriverIO service users add via `services: ['browserstack']`. Its gRPC/protobuf client is generated from the bundled `.proto` files at build time. |
 
-## Table of Contents
-1. [Overview](#overview)
-2. [Code Generation](#code-generation)
-3. [Development](#development)
-4. [Contributing](#contributing)
-5. [License](#license)
+## Usage (for end users)
 
-## Overview
-This package provides the TypeScript-based gRPC client and Protobuf definitions
-used internally by the `@wdio/browserstack-service` plugin for WebdriverIO.
-It includes:
-- Generated TypeScript types and clients from Protobuf definitions.
-- Message factory constructors for backward compatibility.
+Nothing changes — install the service and add it to your WebdriverIO config:
 
-## Installation
-This module is included as a dependency of the `@wdio/browserstack-service` package.
-Users should install and configure the service as documented in the linked README above.
-
-## Setup & Configuration
-Add the service to your WebdriverIO configuration (`wdio.conf.js`):
-<!-- Usage is provided by @wdio/browserstack-service. -->
-```
-export BROWSERSTACK_USERNAME=your_username
-export BROWSERSTACK_ACCESS_KEY=your_access_key
+```sh
+npm i -D @wdio/browserstack-service
 ```
 
-## Usage
-Import and use the gRPC client and message constructors:
-```ts
-import { SDKClient, StartBinSessionRequestConstructor } from '@browserstack/wdio-browserstack-service';
-import path from 'path';
-import process from 'process';
-import { CLIUtils } from '@browserstack/cli-utils'; // example import, adjust if needed
-import { version as packageVersion } from './package.json'; // adjust to your setup
-
-// Initialize the client (uses default insecure credentials unless overridden)
-const client = new SDKClient('grpc.browserstack.com:443');
-
-// Collect framework details
-const automationFrameworkDetail = CLIUtils.getAutomationFrameworkDetail();
-const testFrameworkDetail = CLIUtils.getTestFrameworkDetail();
-
-const frameworkVersions = {
-  ...automationFrameworkDetail.version,
-  ...testFrameworkDetail.version
-};
-
-// Build StartBinSessionRequest
-const startReq = StartBinSessionRequestConstructor.create({
-  binSessionId: 'your-session-id', // replace with actual session id
-  sdkLanguage: CLIUtils.getSdkLanguage(),
-  sdkVersion: packageVersion,
-  pathProject: process.cwd(),
-  pathConfig: path.resolve(process.cwd(), 'browserstack.yml'),
-  cliArgs: process.argv.slice(2),
-  frameworks: [automationFrameworkDetail.name, testFrameworkDetail.name],
-  frameworkVersions,
-  language: CLIUtils.getSdkLanguage(),
-  testFramework: testFrameworkDetail.name,
-  wdioConfig: {}, // provide your WDIO config if applicable
-});
-
-// Start a session
-client.startBinSession(startReq).then(response => {
-  console.log('Started session:', response.binSessionId);
-}).catch(err => {
-  console.error('Failed to start session:', err);
-});
+```js
+// wdio.conf.js
+export const config = {
+  services: ['browserstack'],
+  // ...
+}
 ```
 
-## Code Generation
-This project uses [Buf](https://docs.buf.build/) and `ts-proto` to
-generate TypeScript code from Protobuf definitions.
-
-### Prerequisites
-- [Buf CLI](https://docs.buf.build/installation)
-- Node.js ≥16
-
-### Generate & Build
-```bash
-# Clean previously generated files
-npm run clean
-
-# Generate from .proto files
-npm run generate
-
-# Compile to JS and declaration files
-npm run build
-```
-
-Generated files appear under `dist/` and should be published to npm.
+See the [service README](./packages/browserstack-service/README.md) for full configuration.
 
 ## Development
-Clone the repository and install dependencies:
-```bash
-git clone https://github.com/browserstack/wdio-browserstack-service.git
-cd wdio-browserstack-service
-npm install
+
+This is an npm workspace with a single published package.
+
+```sh
+npm ci              # install
+npm run build       # generate the gRPC client from proto, then compile
+npm test            # run the service test suite
 ```
 
-Run generation and build:
-```bash
-npm run build
-```
+- `npm run generate` (inside the package) runs `buf generate` to emit the gRPC/protobuf client into `src/grpc/generated` from the `.proto` files under `src/proto`. `npm run build` runs this automatically before compiling, so the generated code is never committed.
+- The service is compiled with `tsc` (TypeScript declarations included).
 
-## Contributing
-Contributions are welcome! Please open issues or pull requests in the [GitHub repository](https://github.com/browserstack/wdio-browserstack-service).
+## Releases
 
-## License
-MIT © BrowserStack
+`@wdio/browserstack-service` is versioned and published with [Changesets](https://github.com/changesets/changesets)
+on BrowserStack's own cadence (independent of WebdriverIO core's release schedule):
+
+- `main` → `latest` dist-tag (v9 line)
+- `v8` branch → `v8` dist-tag (v8 line)
+
+Publishing uses **npm OIDC trusted publishing** (no long-lived token; provenance-signed). The gRPC/protobuf
+client is generated inline at build time from the `.proto` files in this repo — there is no separately
+published core package.
