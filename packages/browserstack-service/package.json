@@ -63,13 +63,13 @@
     "tar": "^6.1.15",
     "uuid": "^10.0.0",
     "winston-transport": "^4.5.0",
-    "yauzl": "^3.0.0"
+    "yauzl": "^3.0.0",
+    "@wdio/logger": "8.38.0",
+    "@wdio/reporter": "8.43.0",
+    "@wdio/types": "8.41.0"
   },
   "peerDependencies": {
     "@wdio/cli": "^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0",
-    "@wdio/logger": "^8.0.0",
-    "@wdio/reporter": "^8.0.0",
-    "@wdio/types": "^8.0.0",
     "webdriverio": "^8.0.0"
   },
   "devDependencies": {
