@@ -699,7 +699,10 @@ class _InsightsHandler {
         } else if (test.description && test.fullName) {
             // for Jasmine
             value.push(test.description)
-            value.push(test.fullName.replace(new RegExp(' ' + test.description + '$'), ''))
+            // Strip the trailing " <description>" suffix without building a regex from
+            // a variable (avoids ReDoS and regex-metacharacter mismatches in descriptions).
+            const descSuffix = ` ${test.description}`
+            value.push(test.fullName.endsWith(descSuffix) ? test.fullName.slice(0, -descSuffix.length) : test.fullName)
         }
         return value.reverse()
     }
