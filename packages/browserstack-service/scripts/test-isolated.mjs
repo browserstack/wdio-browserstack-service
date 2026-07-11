@@ -37,10 +37,13 @@ function findTestFiles(dir) {
 
 /** Decide a file's result from vitest's captured output (independent of exit cleanliness). */
 function classify(output) {
-    if (/\bFAIL\b/.test(output) || /Tests\s+\d+ failed/.test(output) || /\d+ failed \|/.test(output)) {
+    // CI (CI=true) makes vitest force ANSI colour even when piped, which would break the
+    // summary regexes below (colour codes sit between "Tests" and the count). Strip them first.
+    const clean = output.replace(new RegExp(String.fromCharCode(27) + '\[[0-9;]*m', 'g'), '')
+    if (/\bFAIL\b/.test(clean) || /Tests\s+\d+ failed/.test(clean) || /\d+ failed \|/.test(clean)) {
         return 'failed'
     }
-    if (/Tests\s+\d+ passed/.test(output) || /Tests\s+no tests/.test(output)) {
+    if (/Tests\s+\d+ passed/.test(clean) || /Tests\s+no tests/.test(clean)) {
         return 'passed'
     }
     return 'no-summary'
@@ -60,7 +63,8 @@ for (const file of files) {
     const res = spawnSync('vitest', ['run', file], {
         encoding: 'utf8',
         timeout: PER_FILE_TIMEOUT_MS,
-        killSignal: 'SIGKILL'
+        killSignal: 'SIGKILL',
+        env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }
     })
     const output = `${res.stdout || ''}${res.stderr || ''}`
     const verdict = classify(output)
