@@ -6,6 +6,7 @@ import logger from '@wdio/logger'
 import BrowserstackService from '../src/service.js'
 import * as utils from '../src/util.js'
 import InsightsHandler from '../src/insights-handler.js'
+import { BrowserstackCLI } from '../src/cli/index.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
@@ -2330,5 +2331,52 @@ describe('ignoreHooksStatus feature', () => {
                 })
             })
         })
+    })
+})
+
+describe('beforeHook (CLI hook reporting)', () => {
+    const hookTest = { title: '"before all" hook for "spec"' } as any
+    let getInstanceSpy: ReturnType<typeof vi.spyOn>
+
+    // Restore only our own spy so the suite's shared mocks stay intact.
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+    })
+
+    it('routes the hook to the CLI TestFramework tracker when the CLI is running', async () => {
+        const trackEvent = vi.fn().mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => ({ trackEvent })
+        } as any)
+        service['_insightsHandler'] = { beforeHook: vi.fn() } as any
+
+        await service.beforeHook(hookTest, {})
+
+        expect(trackEvent).toHaveBeenCalledTimes(1)
+        expect(service['_insightsHandler']!.beforeHook).not.toHaveBeenCalled()
+    })
+
+    it('degrades quietly (no throw, no legacy fallback) when the CLI is running but the tracker is null', async () => {
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => null
+        } as any)
+        service['_insightsHandler'] = { beforeHook: vi.fn() } as any
+
+        await expect(service.beforeHook(hookTest, {})).resolves.toBeUndefined()
+        expect(service['_insightsHandler']!.beforeHook).not.toHaveBeenCalled()
+    })
+
+    it('falls back to the legacy insights handler when the CLI is not running', async () => {
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => false,
+            getTestFramework: () => null
+        } as any)
+        service['_insightsHandler'] = { beforeHook: vi.fn() } as any
+
+        await service.beforeHook(hookTest, {})
+
+        expect(service['_insightsHandler']!.beforeHook).toHaveBeenCalledTimes(1)
     })
 })
