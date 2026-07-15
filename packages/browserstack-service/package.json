@@ -1,0 +1,101 @@
+{
+  "name": "@wdio/browserstack-service",
+  "version": "9.29.1",
+  "description": "WebdriverIO service for better Browserstack integration",
+  "author": "BrowserStack <support@browserstack.com>",
+  "homepage": "https://github.com/browserstack/wdio-browserstack-service",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.20.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/browserstack/wdio-browserstack-service.git",
+    "directory": "packages/browserstack-service"
+  },
+  "keywords": [
+    "webdriverio",
+    "wdio",
+    "browserstack",
+    "wdio-service"
+  ],
+  "bugs": {
+    "url": "https://github.com/browserstack/wdio-browserstack-service/issues"
+  },
+  "type": "module",
+  "types": "./build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "import": "./build/index.js"
+    },
+    "./cleanup": {
+      "types": "./build/cleanup.d.ts",
+      "import": "./build/cleanup.js",
+      "source": "./src/cleanup.ts"
+    }
+  },
+  "typeScriptVersion": "3.8.3",
+  "files": [
+    "build",
+    "src/proto/**/*.proto",
+    "browserstack-service.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "clean": "rimraf ./build src/grpc/generated",
+    "generate": "buf generate",
+    "build": "rimraf ./build src/grpc/generated && buf generate && node ./scripts/build.mjs && tsc -p tsconfig.prod.json",
+    "build:watch": "node ./scripts/build.mjs --watch",
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@browserstack/ai-sdk-node": "1.5.17",
+    "@bufbuild/protobuf": "^2.5.2",
+    "@grpc/grpc-js": "1.13.3",
+    "@percy/appium-app": "^2.0.9",
+    "@percy/selenium-webdriver": "^2.2.2",
+    "@types/gitconfiglocal": "^2.0.1",
+    "browserstack-local": "^1.5.1",
+    "chalk": "^5.3.0",
+    "csv-writer": "^1.6.0",
+    "git-repo-info": "^2.1.1",
+    "gitconfiglocal": "^2.1.0",
+    "glob": "^11.0.0",
+    "tar": "^7.5.11",
+    "undici": "^6.24.0",
+    "uuid": "^11.1.0",
+    "winston-transport": "^4.5.0",
+    "yauzl": "^3.4.0",
+    "@wdio/logger": "^9.0.0",
+    "@wdio/reporter": "^9.0.0",
+    "@wdio/types": "^9.0.0",
+    "webdriverio": "^9.0.0"
+  },
+  "peerDependencies": {
+    "@wdio/cli": "^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0 || ^9.0.0"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.55.1",
+    "@changesets/cli": "^2.27.9",
+    "@types/node": "^20.1.0",
+    "@types/tar": "^7.0.87",
+    "@types/yauzl": "^2.10.3",
+    "@wdio/globals": "^9.0.0",
+    "@wdio/logger": "^9.0.0",
+    "@wdio/reporter": "^9.0.0",
+    "@wdio/types": "^9.0.0",
+    "esbuild": "^0.27.2",
+    "rimraf": "^6.0.1",
+    "ts-proto": "^2.7.5",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "webdriverio": "^9.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

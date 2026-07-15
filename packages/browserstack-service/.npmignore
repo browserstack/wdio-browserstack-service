@@ -1,0 +1,14 @@
+# Keep the published tarball lean: only build/, README, LICENSE and the
+# root ambient types (browserstack-service.d.ts) ship. Everything dev-only below
+# is excluded.
+src
+tests
+__mocks__
+scripts
+.changeset
+.github
+coverage
+vitest.config.ts
+tsconfig.json
+tsconfig.prod.json
+EXTRACTION.md

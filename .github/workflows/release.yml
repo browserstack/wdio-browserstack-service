@@ -1,0 +1,121 @@
+name: Release
+
+# Publishes @wdio/browserstack-service to npm via OIDC Trusted Publishing
+# (no long-lived NPM_TOKEN). One-time setup by an @wdio npm org admin on npmjs.com:
+#   @wdio/browserstack-service -> Settings -> Trusted Publisher -> GitHub Actions
+#     Organization/user: browserstack
+#     Repository:        wdio-browserstack-service
+#     Workflow filename: release.yml
+#     Environment:       (leave empty)
+# Requires: PUBLIC repo (for provenance), npm >= 11.5.1, Node >= 22.14.0.
+#
+# The gRPC/protobuf client is generated inline at build time (buf generate); there is no
+# separate core package for this workflow to version or publish.
+#
+# Release model (publishing is MANUAL):
+#   * push to main / v8       -> opens/updates the "Version Packages" PR only. NEVER publishes;
+#                                merging that PR does NOT publish either.
+#   * Run workflow (publish)  -> publishes the merged version to npm (main -> `latest`,
+#                                v8 -> `v8`) with git tag + GitHub release + provenance.
+#   * Run workflow (canary)   -> snapshot prerelease to the npm `canary` dist-tag.
+
+on:
+  push:
+    branches:
+      - main   # v9 line -> opens Version PR (publish target: dist-tag "latest")
+      - v8     # v8 line -> opens Version PR (publish target: dist-tag "v8" via publishConfig.tag)
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish the merged version to npm (main -> `latest`, v8 -> `v8`). Merge the "Version Packages" PR first so there are no pending changesets.'
+        type: boolean
+        default: false
+      canary:
+        description: 'Publish a canary prerelease to the npm `canary` dist-tag (validates OIDC + provenance end-to-end; never touches `latest`). Requires at least one pending changeset.'
+        type: boolean
+        default: false
+
+# Never run main and v8 releases on top of each other.
+concurrency: release-${{ github.ref }}
+
+permissions:
+  contents: write       # commit the "Version Packages" PR + create git tags
+  pull-requests: write  # open the "Version Packages" PR
+  id-token: write       # OIDC for npm trusted publishing + provenance
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0   # Changesets needs full history/tags
+
+      - name: Setup Node
+        # NOTE: intentionally NO `registry-url:` here. setup-node's registry-url writes
+        # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into ~/.npmrc; with no
+        # NODE_AUTH_TOKEN that becomes an empty token line that can shadow OIDC Trusted
+        # Publishing at `npm publish` time. npm already defaults to registry.npmjs.org and
+        # publishConfig.access=public handles the scoped publish, so the line isn't needed.
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22            # resolves to >= 22.14 on the runner (OIDC floor)
+          cache: 'npm'
+
+      # Trusted Publishing needs npm >= 11.5.1. Pin to the 11.x line so a future
+      # npm major can never silently change publish behaviour.
+      - name: Upgrade npm to an OIDC-capable version
+        run: npm install -g npm@11
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # Version PR (push to main / v8): run changesets in VERSION-ONLY mode — open or update the
+      # "Version Packages" PR (version bump + CHANGELOG). This step NEVER publishes: with no
+      # `publish:` input, once the Version PR is merged (a push with no pending changesets) the
+      # action simply no-ops. Publishing is the separate, manual step below.
+      - name: Open/update the "Version Packages" PR
+        if: github.event_name == 'push'
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
+        with:
+          version: npm run version    # changeset version — manages the Version PR only
+          createGithubReleases: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish (manual, workflow_dispatch with publish=true): publish the already-versioned
+      # package to npm — main -> `latest`, v8 -> `v8` (via publishConfig.tag) — with git tag,
+      # GitHub release, and provenance, over the OIDC trusted publisher (no NPM_TOKEN).
+      # Merge the "Version Packages" PR first: this publishes only when there are no pending
+      # changesets. If any remain, the action safely opens/updates the Version PR instead.
+      - name: Publish to npm
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
+        with:
+          publish: npm run release     # changeset publish (honors publishConfig.tag per branch)
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No NPM_TOKEN: auth is OIDC via id-token: write above.
+          NPM_CONFIG_PROVENANCE: 'true'
+
+      # Canary (manual, workflow_dispatch with canary=true): snapshot-version the pending
+      # changesets and publish a prerelease to the `canary` dist-tag via the SAME OIDC trusted
+      # publisher. Validates OIDC + provenance end-to-end without touching `latest`.
+      # snapshot.useCalculatedVersion=true in .changeset/config.json makes the version
+      # <next>-canary-<datetime> (e.g. 9.30.0-canary-...). Requires >=1 pending changeset.
+      - name: Canary publish to `canary` dist-tag
+        if: github.event_name == 'workflow_dispatch' && inputs.canary
+        run: |
+          npx changeset version --snapshot canary
+          npx changeset publish --no-git-tag --tag canary
+        env:
+          NPM_CONFIG_PROVENANCE: 'true'
