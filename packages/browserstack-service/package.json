@@ -66,11 +66,11 @@
     "yauzl": "^3.0.0",
     "@wdio/logger": "8.38.0",
     "@wdio/reporter": "8.43.0",
-    "@wdio/types": "8.41.0"
+    "@wdio/types": "8.41.0",
+    "webdriverio": "8.46.0"
   },
   "peerDependencies": {
-    "@wdio/cli": "^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0",
-    "webdriverio": "^8.0.0"
+    "@wdio/cli": "^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0"
   },
   "devDependencies": {
     "@bufbuild/buf": "^1.55.1",
