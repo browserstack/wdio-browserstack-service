@@ -433,6 +433,43 @@ describe('afterScenario', () => {
     })
 })
 
+describe('beforeHook / afterHook (hook scans)', () => {
+    beforeEach(() => {
+        accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'mocha', true, false, accessibilityOpts)
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
+        accessibilityHandler['_sessionId'] = 'session123'
+    })
+
+    it('stamps the hook run uuid inside a supported mocha per-test hook', async () => {
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        await accessibilityHandler.beforeHook(
+            { title: '"before each" hook', parent: 'suite' } as any,
+            { currentTest: { parent: 'suite', title: 'test' } },
+            'hook-uuid-1'
+        )
+        expect(accessibilityHandler['_currentHookRunUuid']).toBe('hook-uuid-1')
+    })
+
+    it('clears the hook run uuid on afterHook so test-body scans are not stamped', async () => {
+        await accessibilityHandler.beforeHook(
+            { title: '"after each" hook', parent: 'suite' } as any,
+            { currentTest: { parent: 'suite', title: 'test' } },
+            'hook-uuid-2'
+        )
+        expect(accessibilityHandler['_currentHookRunUuid']).toBe('hook-uuid-2')
+        await accessibilityHandler.afterHook({ title: '"after each" hook' } as any, {}, { passed: true } as any, 'hook-uuid-2')
+        expect(accessibilityHandler['_currentHookRunUuid']).toBeNull()
+    })
+
+    it('does not stamp when the framework does not support hooks', async () => {
+        const jasmineHandler = new AccessibilityHandler(browser, caps, options, false, config, 'jasmine', true, false, accessibilityOpts)
+        jasmineHandler['_sessionId'] = 'session123'
+        await jasmineHandler.beforeHook({ title: '"before each" hook' } as any, {}, 'hook-uuid-3')
+        expect(jasmineHandler['_currentHookRunUuid']).toBeNull()
+    })
+})
+
 describe('beforeTest', () => {
     let executeAsyncSpy: any
     let executeSpy: any
