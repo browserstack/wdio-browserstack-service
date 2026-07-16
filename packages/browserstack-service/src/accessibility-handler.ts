@@ -450,6 +450,7 @@ class _AccessibilityHandler {
                     if (suiteTitle && typeof suiteTitle === 'object') {
                         suiteTitle = (suiteTitle as { title?: string }).title
                     }
+                    // @ts-expect-error fix type
                     shouldScan = this._autoScanning && shouldScanTestForAccessibility(suiteTitle as string | undefined, wrappedTest.title, this._accessibilityOptions)
                 }
                 AccessibilityHandler._a11yScanSessionMap[this._sessionId] = shouldScan
@@ -459,7 +460,7 @@ class _AccessibilityHandler {
         }
     }
 
-    async afterHook (_test?: Frameworks.Test, _context?: unknown, _result?: Frameworks.TestResult, _hookRunUuid?: string | null) {
+    async afterHook () {
         // Hook finished: subsequent (test-body) scans must not be stamped as hook scans.
         this._currentHookRunUuid = null
     }

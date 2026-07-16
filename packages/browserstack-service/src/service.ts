@@ -443,7 +443,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         await this._insightsHandler?.afterHook(test, result)
-        await this._accessibilityHandler?.afterHook(test as Frameworks.Test, context, result, this._insightsHandler?.getCurrentHook()?.uuid)
+        await this._accessibilityHandler?.afterHook()
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeTest' })
