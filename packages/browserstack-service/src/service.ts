@@ -762,6 +762,12 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         this._reloadHappened = true
+        if (BrowserstackCLI.getInstance().isRunning()) {
+            const instance = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
+            if (instance) {
+                AutomationFramework.setState(instance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID, newSessionId)
+            }
+        }
 
         const { setSessionName, setSessionStatus } = this._options
         const ignoreHooksStatus = this._options.testObservabilityOptions?.ignoreHooksStatus === true
