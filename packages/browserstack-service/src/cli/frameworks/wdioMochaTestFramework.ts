@@ -411,7 +411,10 @@ export default class WdioMochaTestFramework extends TestFramework {
                 // A this.skip() hook arrives as {passed: false, skipped: true} — a deliberate
                 // skip, not a failure.
                 // wdio v8's TestResult type does not declare `skipped`, but the runtime carries it
+                // wdio v8 does not set `skipped` for a this.skip() before-all — it surfaces as an
+                // error carrying mocha's sync-skip marker; treat both shapes as a deliberate skip
                 const skippedHook = (testResult as Frameworks.TestResult & { skipped?: boolean })?.skipped
+                    || !!testResult?.error?.message?.includes('sync skip; aborting execution')
                 const result = testResult
                     ? (testResult.passed ? 'passed' : (skippedHook ? 'skipped' : 'failed'))
                     : TestFrameworkConstants.DEFAULT_HOOK_RESULT
