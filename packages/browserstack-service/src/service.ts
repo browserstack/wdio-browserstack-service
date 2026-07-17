@@ -19,6 +19,8 @@ import { DEFAULT_OPTIONS, NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV } from 
 import CrashReporter from './crash-reporter.js'
 import AccessibilityHandler from './accessibility-handler.js'
 import CustomTagsHandler from './custom-tags-handler.js'
+import { classifyMochaHookTitle, setCurrentMochaHookWindow } from './customTags.js'
+import type TestHubModule from './cli/modules/testHubModule.js'
 import { BStackLogger } from './bstackLogger.js'
 import PercyHandler from './Percy/Percy-Handler.js'
 import Listener from './testOps/listener.js'
@@ -389,6 +391,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
         if (this._config.framework !== 'cucumber') {
             this._currentTest = test as Frameworks.Test // not update currentTest when this is called for cucumber step
         }
+        // Record which Mocha hook window is open so custom-tag calls made inside user
+        // hooks route to the right test (the CLI framework never sees these hooks).
+        if (this._config.framework === 'mocha') {
+            setCurrentMochaHookWindow(classifyMochaHookTitle((test as Frameworks.Test).title))
+        }
 
         // CLI flow: route hook lifecycle to the binary via the TestFramework tracker (gRPC),
         // mirroring beforeTest/afterTest. Without this, hook events fall through to the legacy
@@ -414,6 +421,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'afterHook' })
     async afterHook(test: Frameworks.Test | CucumberHook, context: unknown, result: Frameworks.TestResult) {
+        // The Mocha hook window is closed — clear the tracker (see beforeHook).
+        if (this._config.framework === 'mocha') {
+            setCurrentMochaHookWindow(null)
+        }
         // Track hook failures separately
         if (result && !result.passed) {
             const hookError = (result.error && result.error.message) || 'Hook failed'
@@ -537,6 +548,15 @@ export default class BrowserstackService implements Services.ServiceInstance {
             }
 
             if (BrowserstackCLI.getInstance().isRunning()) {
+                // Flush a test-finish event deferred past the after-each hook window — the last
+                // test of the worker has no next-test boundary to trigger the flush. Must run
+                // before worker teardown so the event isn't dropped.
+                try {
+                    const testHubModule = BrowserstackCLI.getInstance().modules.TestHubModule as TestHubModule | undefined
+                    await testHubModule?.flushPendingTestFinishEvent()
+                } catch (flushErr) {
+                    BStackLogger.debug(`Exception flushing deferred test finish in after(): ${util.format(flushErr)}`)
+                }
                 await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.EXECUTE, HookState.POST, {})
             }
 
