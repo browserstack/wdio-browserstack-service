@@ -358,7 +358,16 @@ export default class WdioMochaTestFramework extends TestFramework {
 
             if (hooksList.length > 0) {
                 const hook = hooksList.pop() as Record<string, unknown>
-                const result = testResult.status
+                // Frameworks.TestResult carries `passed`/`skipped`, not `status` — reading `.status`
+                // left hook_result at 'pending', which the binary coerces to 'passed' for any
+                // finished hook, so failed before-hooks showed green builds while CI exited 1.
+                // A this.skip() hook arrives as {passed: false, skipped: true} — a deliberate
+                // skip, not a failure.
+                // wdio v8's TestResult type does not declare `skipped`, but the runtime carries it
+                const skippedHook = (testResult as Frameworks.TestResult & { skipped?: boolean })?.skipped
+                const result = testResult
+                    ? (testResult.passed ? 'passed' : (skippedHook ? 'skipped' : 'failed'))
+                    : TestFrameworkConstants.DEFAULT_HOOK_RESULT
                 if (result !== TestFrameworkConstants.DEFAULT_HOOK_RESULT) {
                     hook[TestFrameworkConstants.KEY_HOOK_RESULT] = result
                 }
