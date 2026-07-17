@@ -415,8 +415,11 @@ export default class WdioMochaTestFramework extends TestFramework {
                 // finished hook, so failed before-hooks showed green builds while CI exited 1.
                 // A this.skip() hook arrives as {passed: false, skipped: true} — a deliberate
                 // skip, not a failure.
+                // guard the sync-skip error shape too (wdio v8 delivers this.skip() hooks without
+                // a `skipped` flag; harmless on v9, keeps the lines aligned)
+                const skippedHook = testResult?.skipped || !!testResult?.error?.message?.includes('sync skip; aborting execution')
                 const result = testResult
-                    ? (testResult.passed ? 'passed' : (testResult.skipped ? 'skipped' : 'failed'))
+                    ? (testResult.passed ? 'passed' : (skippedHook ? 'skipped' : 'failed'))
                     : TestFrameworkConstants.DEFAULT_HOOK_RESULT
                 if (result !== TestFrameworkConstants.DEFAULT_HOOK_RESULT) {
                     hook[TestFrameworkConstants.KEY_HOOK_RESULT] = result
