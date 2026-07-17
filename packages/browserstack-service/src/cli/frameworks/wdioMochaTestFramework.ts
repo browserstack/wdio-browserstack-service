@@ -44,7 +44,10 @@ export default class WdioMochaTestFramework extends TestFramework {
         }
 
         try {
-            if (CLIUtils.matchHookRegex(testFrameworkState.toString()) && hookState === HookState.PRE) {
+            // HOOK_REGEX is anchored (^BEFORE_|^AFTER_) — match the short state name; the
+            // fully-qualified `TestFrameworkState.BEFORE_ALL` never matches, so hook ids were
+            // never minted and hooks reached TRA with an empty uuid (dropped at ingestion).
+            if (CLIUtils.matchHookRegex(testFrameworkState.toString().split('.')[1]) && hookState === HookState.PRE) {
                 instance.updateMultipleEntries({
                     [TestFrameworkConstants.KEY_HOOK_ID]: uuidv4(),
                 })
