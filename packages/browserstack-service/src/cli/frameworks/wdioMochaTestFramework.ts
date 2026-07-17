@@ -93,13 +93,49 @@ export default class WdioMochaTestFramework extends TestFramework {
    * @returns {TestFrameworkInstance}
    */
     resolveInstance(testFrameworkState: State, hookState: State, args: Record<string, unknown> = {}): TestFrameworkInstance|null {
-        let instance = null
         logger.info(`resolveInstance: resolving instance for testFrameworkState=${testFrameworkState} hookState=${hookState}`)
-        if (testFrameworkState === TestFrameworkState.INIT_TEST || testFrameworkState === TestFrameworkState.NONE) {
+        const shortState = testFrameworkState.toString().split('.')[1]
+        const isHook = CLIUtils.matchHookRegex(shortState)
+        let instance = TestFramework.getTrackedInstance()
+
+        // Whether the current tracked instance has already run its test body.
+        const hasRunTest = !!(instance && TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_ID))
+
+        // New-test boundary (ports Junit5Framework.resolveInstance): the previous method was a
+        // test / after-hook (POST) and the current is a before-hook / init (PRE) — the next test
+        // is starting. At entry, getCurrentTestState()/getCurrentHookState() still hold the PREVIOUS
+        // method's state (updateInstanceState has not run yet).
+        const prevState = instance ? instance.getCurrentTestState().toString() : ''
+        const prevWasTerminal = instance ? (instance.getCurrentTestState() === TestFrameworkState.TEST || prevState.includes('AFTER')) : false
+        const isNewTestBoundary = instance ? (prevWasTerminal && instance.getCurrentHookState() === HookState.POST && hookState === HookState.PRE) : false
+
+        if (testFrameworkState === TestFrameworkState.NONE) {
             this.trackWdioMochaInstance(testFrameworkState, args)
+        } else if (testFrameworkState === TestFrameworkState.INIT_TEST) {
+            // WDIO fires `before each` BEFORE `beforeTest` (INIT_TEST). Reuse the instance a
+            // preceding before-hook already opened for this same upcoming test; only start a new
+            // one if the current instance has already run a test (or none exists).
+            if (!instance || hasRunTest) {
+                this.trackWdioMochaInstance(testFrameworkState, args)
+            }
+        } else if (isHook && hookState === HookState.PRE) {
+            // Suite-level (`before all`) and the first `before each` fire before any INIT_TEST, so
+            // no instance exists yet — create one. Also, a BEFORE hook right after a completed test
+            // (new-test boundary) starts a new test. The boundary restriction must be limited to
+            // BEFORE hooks: `after each`/`after all` also fire at a POST->PRE boundary (afterTest
+            // emits TEST POST just before `after each`), but they belong to the just-finished test.
+            // Creating a fresh (uuid-less) instance for them would drop test_run_id and orphan the
+            // hook from TestRunFinished.hooks — so let after-hooks reuse the finished test's instance.
+            if (!instance || (isNewTestBoundary && shortState.startsWith('BEFORE_'))) {
+                this.trackWdioMochaInstance(testFrameworkState, args)
+            }
         }
 
         instance = TestFramework.getTrackedInstance()
+        if (!instance) {
+            logger.error(`resolveInstance: unable to resolve/create instance for testFrameworkState=${testFrameworkState} hookState=${hookState}`)
+            return null
+        }
         this.updateInstanceState(instance, testFrameworkState, hookState)
 
         return instance
@@ -323,7 +359,11 @@ export default class WdioMochaTestFramework extends TestFramework {
     ) {
         const testResult = args.result as Frameworks.TestResult
         const test = args.test as Frameworks.Test
-        const key = testFrameworkState.toString()
+        // Key hooks by the short state name (e.g. BEFORE_ALL), matching how the binary looks
+        // them up via `event.test_hooks_started[request.testFrameworkState]`. `toString()` yields
+        // the fully-qualified `TestFrameworkState.BEFORE_ALL`, which never matches — hook finishes
+        // were dropped with "unable to determine hook-finished".
+        const key = testFrameworkState.toString().split('.')[1]
 
         const hooksStarted = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOKS_STARTED) as Map<string, unknown[]>
         if (!hooksStarted.has(key)) {
