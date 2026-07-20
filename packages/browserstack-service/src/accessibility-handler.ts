@@ -441,15 +441,6 @@ class _AccessibilityHandler {
 
             this._currentHookRunUuid = hookRunUuid || null
 
-            // If the hook's run uuid could not be resolved, do NOT open the scan gate for the hook
-            // window. A hook scan with no hook uuid would land as a NULL-attributed row on the
-            // backend — the exact problem this feature avoids — so leaving the gate untouched keeps
-            // behaviour unchanged for such an untracked hook (the class doc's "additive when
-            // hookRunUuid is absent").
-            if (!this._currentHookRunUuid) {
-                return
-            }
-
             if (this._framework === 'mocha' && this._sessionId) {
                 let shouldScan = this._autoScanning
                 const hookType = (test && typeof test.title === 'string') ? getHookType(test.title) : 'unknown'

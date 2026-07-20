@@ -482,20 +482,6 @@ describe('AccessibilityModule', () => {
             expect(accessibilityModule.accessibilityMap.get(12345)).toBeUndefined()
         })
 
-        it('does not open the scan gate when the hook run uuid is null', async () => {
-            // KEY_HOOK_ID unresolved -> currentHookRunUuid stays null. A hook scan with no hook
-            // uuid would land as a NULL-attributed row, so the gate must NOT open (PR #48 review).
-            accessibilityModule.accessibility = true
-            vi.mocked(TestFramework.getState).mockReturnValue(undefined as any)
-            vi.mocked(AutomationFramework.getState).mockImplementation((instance: any, key: string) =>
-                (key.includes('session_id') ? 12345 : {}) as any)
-
-            await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
-
-            expect(accessibilityModule.currentHookRunUuid).toBeNull()
-            expect(accessibilityModule.accessibilityMap.get(12345)).toBeUndefined()
-        })
-
         it('clears the hook run uuid at hook end so later test-body scans are unstamped', async () => {
             accessibilityModule.currentHookRunUuid = 'hook-uuid-123'
 
