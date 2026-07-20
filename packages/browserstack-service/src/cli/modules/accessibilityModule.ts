@@ -81,6 +81,13 @@ export default class AccessibilityModule extends BaseModule {
             if (!this.accessibility) {
                 return
             }
+            // If the hook's run uuid could not be resolved, do NOT open the scan gate for the hook
+            // window: a hook scan with no hook uuid would land as a NULL-attributed row on the
+            // backend (the problem this feature avoids). Behaviour stays unchanged for such an
+            // untracked hook — matching the accessibility-handler beforeHook guard.
+            if (!this.currentHookRunUuid) {
+                return
+            }
             // Open the scan gate for the hook window so DOM-changing commands issued inside
             // before/beforeEach/afterEach/after hooks trigger scans (web per-command path). The
             // following onBeforeTest re-computes the per-test gate, so this only affects the hook.
