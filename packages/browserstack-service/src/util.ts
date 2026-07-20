@@ -5,6 +5,7 @@ import zlib from 'node:zlib'
 import { format, promisify } from 'node:util'
 import path from 'node:path'
 import util from 'node:util'
+import { spawnSync } from 'node:child_process'
 
 import type { Capabilities, Frameworks, Options } from '@wdio/types'
 import type { BeforeCommandArgs, AfterCommandArgs } from '@wdio/reporter'
@@ -981,6 +982,90 @@ export function getCiInfo () {
     return null
 }
 
+// Branch names may only contain these characters; anything else is treated as
+// untrusted input and rejected (env vars/CI values are attacker-influenceable).
+const SAFE_BRANCH_PATTERN = /^[\w./-]+$/
+
+// CI branch env vars in priority order — covers the CI systems getCiInfo()
+// detects. In a detached-HEAD CI checkout git-repo-info can't resolve the
+// branch, but the CI system almost always exposes it via one of these.
+const CI_BRANCH_ENV_VARS = [
+    'BROWSERSTACK_GIT_BRANCH',      // explicit override (support/customer escape hatch)
+    'GITHUB_HEAD_REF',              // GitHub Actions (PR)
+    'GITHUB_REF_NAME',              // GitHub Actions (push/tag)
+    'CI_COMMIT_REF_NAME',           // GitLab
+    'CI_COMMIT_BRANCH',             // GitLab
+    'CIRCLE_BRANCH',                // CircleCI
+    'TRAVIS_PULL_REQUEST_BRANCH',   // Travis (PR)
+    'TRAVIS_BRANCH',                // Travis
+    'BITBUCKET_BRANCH',             // Bitbucket
+    'DRONE_COMMIT_BRANCH',          // Drone
+    'DRONE_BRANCH',                 // Drone
+    'SEMAPHORE_GIT_BRANCH',         // Semaphore
+    'BUILDKITE_BRANCH',             // Buildkite
+    'BUILD_SOURCEBRANCHNAME',       // Azure DevOps / VSTS (clean name)
+    'BUILD_SOURCEBRANCH',           // Azure DevOps / VSTS (refs/heads/...)
+    'APPVEYOR_REPO_BRANCH',         // Appveyor
+    'CODEBUILD_WEBHOOK_HEAD_REF',   // AWS CodeBuild
+    'bamboo_planRepository_branchName', // Bamboo
+    'bamboo_repository_branch_name',    // Bamboo
+    'WERCKER_GIT_BRANCH',           // Wercker
+    'VERCEL_GIT_COMMIT_REF',        // Vercel
+    'BRANCH',                       // Netlify / generic
+    'GIT_LOCAL_BRANCH',             // Jenkins git plugin (clean)
+    'BRANCH_NAME',                  // Jenkins multibranch
+    'GIT_BRANCH',                   // Jenkins (often origin/<name>)
+]
+
+// Strip refs/heads|tags and a leading origin/, reject HEAD and unsafe values.
+export function normalizeBranchName (raw?: string | null): string | undefined {
+    if (!raw) {
+        return undefined
+    }
+    const branch = raw.trim()
+        .replace(/^refs\/(heads|tags)\//, '')
+        .replace(/^origin\//, '')
+    if (!branch || branch === 'HEAD' || !SAFE_BRANCH_PATTERN.test(branch)) {
+        return undefined
+    }
+    return branch
+}
+
+function getBranchFromCIEnv (): string | undefined {
+    for (const key of CI_BRANCH_ENV_VARS) {
+        const val = normalizeBranchName(process.env[key])
+        if (val) {
+            return val
+        }
+    }
+    return undefined
+}
+
+// Best-effort CI-agnostic fallback: the branch whose tip is the checked-out
+// commit. Resolves detached-HEAD checkouts where the commit is a branch tip
+// (the common merge-to-master → CI-builds-master case). Never throws.
+function getBranchFromGit (cwd?: string): string | undefined {
+    try {
+        const result = spawnSync(
+            'git',
+            ['for-each-ref', '--points-at', 'HEAD', '--format=%(refname:short)', 'refs/heads', 'refs/remotes'],
+            { cwd, encoding: 'utf-8', timeout: 5000 }
+        )
+        if (result.status !== 0 || !result.stdout) {
+            return undefined
+        }
+        for (const line of result.stdout.split('\n')) {
+            const branch = normalizeBranchName(line)
+            if (branch) {
+                return branch
+            }
+        }
+    } catch {
+        // best-effort — degrade silently
+    }
+    return undefined
+}
+
 export async function getGitMetaData () {
     const info: GitRepoInfo = gitRepoInfo()
     if (!info.commonGitDir) {
@@ -989,11 +1074,20 @@ export async function getGitMetaData () {
     const { remote } = await pGitconfig(info.commonGitDir)
     const remotes = remote ? Object.keys(remote).map(remoteName =>  ({ name: remoteName, url: remote[remoteName].url })) : []
 
+    // git-repo-info reads branch from .git/HEAD; on a detached HEAD (the default
+    // for most CI checkouts, e.g. `git checkout <sha>`) it returns no branch.
+    // Fall back to CI env vars, then to the branch whose tip is HEAD, so builds
+    // don't drop out of branch-based dashboards/filters. Ref: SDK-7009.
+    let branch = info.branch
+    if (!branch) {
+        branch = getBranchFromCIEnv() ?? getBranchFromGit(info.root) ?? info.branch
+    }
+
     let gitMetaData : GitMetaData = {
         name: 'git',
         sha: info.sha,
         short_sha: info.abbreviatedSha,
-        branch: info.branch,
+        branch: branch,
         tag: info.tag,
         committer: info.committer,
         committer_date: info.committerDate,

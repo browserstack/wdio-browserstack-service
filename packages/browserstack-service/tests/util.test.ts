@@ -68,6 +68,11 @@ const log = logger('test')
 
 vi.mock('fetch')
 vi.mock('git-repo-info')
+// getGitMetaData promisifies gitconfiglocal; the repo also mocks `fs`, so the
+// real gitconfiglocal cannot read a config file. Resolve it with no remotes.
+vi.mock('gitconfiglocal', () => ({
+    default: (_dir: string, cb: (err: Error | null, config: unknown) => void) => cb(null, { remote: {} })
+}))
 // Fake only Date (not `performance`): these tests need a deterministic system
 // clock but never advance timers. Faking `performance` too makes performance.now()
 // negative under the 2020 system time, which Node 18's perf_hooks rejects with
@@ -957,6 +962,32 @@ describe('getGitMetaData', () => {
         } catch (e) {
             //
         }
+    })
+
+    // SDK-7009: git-repo-info returns no branch on a detached HEAD (the default
+    // for CI checkouts). getGitMetaData must fall back to CI env vars so the
+    // build's version_control still reports the branch.
+    it('uses git-repo-info branch when present (no fallback)', async () => {
+        delete process.env.BROWSERSTACK_GIT_BRANCH
+        vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: 'develop', sha: 'sha1' } as any)
+        const result: any = await getGitMetaData()
+        expect(result.branch).toEqual('develop')
+    })
+
+    it('falls back to CI branch env var on detached HEAD', async () => {
+        process.env.BROWSERSTACK_GIT_BRANCH = 'master'
+        vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: undefined, sha: 'sha1' } as any)
+        const result: any = await getGitMetaData()
+        expect(result.branch).toEqual('master')
+        delete process.env.BROWSERSTACK_GIT_BRANCH
+    })
+
+    it('normalizes CI env branch (strips refs/heads/ and origin/)', async () => {
+        process.env.BROWSERSTACK_GIT_BRANCH = 'refs/heads/release/1.2'
+        vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: undefined, sha: 'sha1' } as any)
+        const result: any = await getGitMetaData()
+        expect(result.branch).toEqual('release/1.2')
+        delete process.env.BROWSERSTACK_GIT_BRANCH
     })
 })
 
