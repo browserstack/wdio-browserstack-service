@@ -12,6 +12,8 @@
  * node-agent quote-aware tokenizer (helper.js `parseCommaSeparatedValues`).
  */
 
+import { getHookType } from './util.js'
+
 export interface CustomMetadataEntry {
     field_type: 'multi_dropdown'
     values: string[]
@@ -154,25 +156,30 @@ export type MochaHookWindow = 'before_each' | 'after_each' | 'before_all' | 'aft
 
 let currentMochaHookWindow: MochaHookWindow = null
 
-/** Classify a Mocha hook title (e.g. '"before each" hook: setup') into a window type. */
+/**
+ * Classify a Mocha hook title (e.g. '"before each" hook: setup') into a window type.
+ * Derives from getHookType so this and the tracked hook-state — both computed from the
+ * same hook title in service.beforeHook — can never disagree. getHookType anchors on
+ * Mocha's generated '"before each"' prefix (startsWith), so a hook with a custom name
+ * that merely contains another window's phrase (e.g. afterEach('reset before each run'))
+ * is NOT misrouted, unlike a substring match.
+ */
 export function classifyMochaHookTitle(title: string | undefined | null): MochaHookWindow {
     if (!title) {
         return null
     }
-    const t = title.toLowerCase()
-    if (t.includes('before each')) {
+    switch (getHookType(title)) {
+    case 'BEFORE_EACH':
         return 'before_each'
-    }
-    if (t.includes('after each')) {
+    case 'AFTER_EACH':
         return 'after_each'
-    }
-    if (t.includes('before all')) {
+    case 'BEFORE_ALL':
         return 'before_all'
-    }
-    if (t.includes('after all')) {
+    case 'AFTER_ALL':
         return 'after_all'
+    default:
+        return null
     }
-    return null
 }
 
 /** Set by the service's beforeHook (mocha); cleared by afterHook. */
