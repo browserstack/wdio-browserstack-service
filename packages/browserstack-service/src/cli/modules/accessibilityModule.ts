@@ -78,7 +78,6 @@ export default class AccessibilityModule extends BaseModule {
             this.currentHookRunUuid = hookRunUuid || null
 
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
-            this.logger.info(`onHookStart: hookRunUuid=${hookRunUuid} testInstance=${!!testInstance} autoInstance=${!!autoInstance}`)
             if (!testInstance || !autoInstance) {
                 return
             }
@@ -168,7 +167,6 @@ export default class AccessibilityModule extends BaseModule {
                     return
                 }
                 // If invoked from inside a hook, currentHookRunUuid stamps the scan for the hook.
-                this.logger.info(`performScan(app): currentHookRunUuid=${this.currentHookRunUuid}`)
                 return await this.performScanCli(browser, undefined, this.currentHookRunUuid)
             }
 
