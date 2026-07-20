@@ -5,7 +5,6 @@ import zlib from 'node:zlib'
 import { format, promisify } from 'node:util'
 import path from 'node:path'
 import util from 'node:util'
-import { execFile } from 'node:child_process'
 
 import type { Capabilities, Frameworks, Options } from '@wdio/types'
 import type { BeforeCommandArgs, AfterCommandArgs } from '@wdio/reporter'
@@ -59,7 +58,6 @@ import AccessibilityScripts from './scripts/accessibility-scripts.js'
 import { _fetch as fetch } from './fetchWrapper.js'
 
 const pGitconfig = promisify(gitconfig)
-const pExecFile = promisify(execFile)
 
 export type GitMetaData = {
     name: string;
@@ -1065,13 +1063,16 @@ function getBranchFromCIEnv (): string | undefined {
 
 // Async (non-blocking) — a synchronous subprocess on getGitMetaData's hot path
 // would stall the event loop. execFile takes an argv array (no shell), so the
-// ref args cannot be interpreted by a shell.
+// ref args cannot be interpreted by a shell. child_process is imported lazily
+// (inside the try) so module load never touches it — keeps every test that
+// partial-mocks node:child_process working, and degrades to [] if it's absent.
 async function gitForEachRef (args: string[]): Promise<string[]> {
     try {
+        const { execFile } = await import('node:child_process')
         // No explicit cwd → runs in process.cwd(), the actual checkout the SDK
         // is instrumenting. (git-repo-info's `.root` can point at the main repo
         // dir under a git worktree, which would resolve the wrong branch.)
-        const { stdout } = await pExecFile('git', ['for-each-ref', '--points-at', 'HEAD', ...args], {
+        const { stdout } = await promisify(execFile)('git', ['for-each-ref', '--points-at', 'HEAD', ...args], {
             encoding: 'utf-8', timeout: 3000
         })
         return stdout.split('\n').map(s => s.trim()).filter(Boolean)
