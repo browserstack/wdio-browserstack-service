@@ -67,16 +67,22 @@ export default class AccessibilityModule extends BaseModule {
     async onHookStart(args: Record<string, unknown>) {
         try {
             const testInstance: TestFrameworkInstance = (args?.instance as TestFrameworkInstance) || TestFramework.getTrackedInstance()
+            // KEY_HOOK_ID is stamped on the instance at hook PRE (wdioMochaTestFramework.trackEvent)
+            // and is the SAME uuid reported to TestHub as the hook run, so a scan tagged with it can
+            // be self-joined onto the wrapping test in BTCER. Capture it FIRST — it needs only the
+            // test instance. The automation-framework instance (below) is required solely for the web
+            // per-command scan gate; on the app CLI path an explicit performScan() carries the uuid
+            // regardless, and autoInstance is not always resolvable at hook time — so gating the
+            // capture on autoInstance would silently drop app hook-scan stamping.
+            const hookRunUuid = testInstance ? (TestFramework.getState(testInstance, TestFrameworkConstants.KEY_HOOK_ID) as string | undefined) : undefined
+            this.currentHookRunUuid = hookRunUuid || null
+
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
+            this.logger.info(`onHookStart: hookRunUuid=${hookRunUuid} testInstance=${!!testInstance} autoInstance=${!!autoInstance}`)
             if (!testInstance || !autoInstance) {
                 return
             }
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
-            // KEY_HOOK_ID is stamped on the instance at hook PRE (wdioMochaTestFramework.trackEvent)
-            // and is the SAME uuid reported to TestHub as the hook run, so a scan tagged with it can
-            // be self-joined onto the wrapping test in BTCER.
-            const hookRunUuid = TestFramework.getState(testInstance, TestFrameworkConstants.KEY_HOOK_ID) as string | undefined
-            this.currentHookRunUuid = hookRunUuid || null
 
             if (!this.accessibility) {
                 return
@@ -162,6 +168,7 @@ export default class AccessibilityModule extends BaseModule {
                     return
                 }
                 // If invoked from inside a hook, currentHookRunUuid stamps the scan for the hook.
+                this.logger.info(`performScan(app): currentHookRunUuid=${this.currentHookRunUuid}`)
                 return await this.performScanCli(browser, undefined, this.currentHookRunUuid)
             }
 
