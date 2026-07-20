@@ -5,7 +5,7 @@ import zlib from 'node:zlib'
 import { format, promisify } from 'node:util'
 import path from 'node:path'
 import util from 'node:util'
-import { spawnSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 
 import type { Capabilities, Frameworks, Options } from '@wdio/types'
 import type { BeforeCommandArgs, AfterCommandArgs } from '@wdio/reporter'
@@ -59,6 +59,7 @@ import AccessibilityScripts from './scripts/accessibility-scripts.js'
 import { _fetch as fetch } from './fetchWrapper.js'
 
 const pGitconfig = promisify(gitconfig)
+const pExecFile = promisify(execFile)
 
 export type GitMetaData = {
     name: string;
@@ -1062,43 +1063,49 @@ function getBranchFromCIEnv (): string | undefined {
     return undefined
 }
 
-function gitForEachRef (args: string[], cwd?: string): string[] {
+// Async (non-blocking) — a synchronous subprocess on getGitMetaData's hot path
+// would stall the event loop. execFile takes an argv array (no shell), so the
+// ref args cannot be interpreted by a shell.
+async function gitForEachRef (args: string[]): Promise<string[]> {
     try {
-        const result = spawnSync('git', ['for-each-ref', '--points-at', 'HEAD', ...args], {
-            cwd, encoding: 'utf-8', timeout: 5000
+        // No explicit cwd → runs in process.cwd(), the actual checkout the SDK
+        // is instrumenting. (git-repo-info's `.root` can point at the main repo
+        // dir under a git worktree, which would resolve the wrong branch.)
+        const { stdout } = await pExecFile('git', ['for-each-ref', '--points-at', 'HEAD', ...args], {
+            encoding: 'utf-8', timeout: 3000
         })
-        if (result.status !== 0 || !result.stdout) {
-            return []
-        }
-        return result.stdout.split('\n').map(s => s.trim()).filter(Boolean)
+        return stdout.split('\n').map(s => s.trim()).filter(Boolean)
     } catch {
-        // best-effort — degrade silently
+        // best-effort — degrade silently (git missing, not a repo, timeout, …)
         return []
     }
 }
 
-// Best-effort CI-agnostic fallback: the branch whose tip is the checked-out
-// commit. Resolves detached-HEAD checkouts where the commit is a branch tip
-// (the common merge-to-master → CI-builds-master case). Never throws.
-// Local heads are queried before remotes; each format strips the ref prefix so
-// the value is a bare branch name regardless of the remote (lstrip handles any
-// remote, not just `origin`). git orders its own output alphabetically, so the
-// two separate calls — not the refspec argument order — control heads-first.
-function getBranchFromGit (cwd?: string): string | undefined {
-    const candidates = [
-        ...gitForEachRef(['--format=%(refname:lstrip=2)', 'refs/heads'], cwd),
-        ...gitForEachRef(['--format=%(refname:lstrip=3)', 'refs/remotes'], cwd),
-    ]
-    for (const candidate of candidates) {
-        if (candidate === 'HEAD') {
+const pickBranch = (lines: string[]): string | undefined => {
+    for (const line of lines) {
+        if (line === 'HEAD') {
             continue    // refs/remotes/<remote>/HEAD → skip the symbolic pointer
         }
-        const branch = normalizeBranchName(candidate)
+        const branch = normalizeBranchName(line)
         if (branch) {
             return branch
         }
     }
     return undefined
+}
+
+// Best-effort CI-agnostic fallback: the branch whose tip is the checked-out
+// commit. Resolves detached-HEAD checkouts where the commit is a branch tip
+// (the common merge-to-master → CI-builds-master case). Never throws.
+// Local heads are queried (and returned) before remotes; each format strips the
+// ref prefix via lstrip so the value is a bare branch name for ANY remote, not
+// just `origin`. Lazy — the remotes query only runs if no local head matched.
+async function getBranchFromGit (): Promise<string | undefined> {
+    const fromHeads = pickBranch(await gitForEachRef(['--format=%(refname:lstrip=2)', 'refs/heads']))
+    if (fromHeads) {
+        return fromHeads
+    }
+    return pickBranch(await gitForEachRef(['--format=%(refname:lstrip=3)', 'refs/remotes']))
 }
 
 export async function getGitMetaData () {
@@ -1117,7 +1124,7 @@ export async function getGitMetaData () {
     // in branch-based dashboards/filters. Ref: SDK-7009.
     let branch = normalizeBranchName(process.env.BROWSERSTACK_GIT_BRANCH) || info.branch
     if (!branch) {
-        branch = getBranchFromCIEnv() ?? getBranchFromGit(info.root) ?? info.branch
+        branch = getBranchFromCIEnv() ?? (await getBranchFromGit()) ?? info.branch
     }
 
     let gitMetaData : GitMetaData = {

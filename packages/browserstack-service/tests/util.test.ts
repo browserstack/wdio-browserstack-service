@@ -3,7 +3,7 @@ import type { LaunchResponse } from '../src/types.js'
 
 import { describe, expect, it, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest'
 import gitRepoInfo from 'git-repo-info'
-import { spawnSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import CrashReporter from '../src/crash-reporter.js'
 import logger from '@wdio/logger'
 import * as utils from '../src/util.js'
@@ -74,11 +74,11 @@ vi.mock('git-repo-info')
 vi.mock('gitconfiglocal', () => ({
     default: (_dir: string, cb: (err: Error | null, config: unknown) => void) => cb(null, { remote: {} })
 }))
-// Mock only spawnSync (getGitMetaData's git for-each-ref backstop); keep the
-// rest of node:child_process real so unrelated imports are unaffected.
+// Mock only execFile (getGitMetaData's async git for-each-ref backstop); keep
+// the rest of node:child_process real so unrelated imports are unaffected.
 vi.mock('node:child_process', async (importActual) => {
     const actual = await importActual<Record<string, unknown>>()
-    return { ...actual, spawnSync: vi.fn() }
+    return { ...actual, execFile: vi.fn() }
 })
 // Fake only Date (not `performance`): these tests need a deterministic system
 // clock but never advance timers. Faking `performance` too makes performance.now()
@@ -988,18 +988,44 @@ describe('getGitMetaData', () => {
         'WERCKER_GIT_BRANCH', 'VERCEL_GIT_COMMIT_REF', 'CF_BRANCH',
         'GIT_LOCAL_BRANCH', 'BRANCH_NAME', 'GIT_BRANCH', 'BRANCH',
     ]
+    // CI-detection markers getCiInfo() keys on. Cleared too, so getCiInfo() is
+    // null unless a test opts a specific CI in — the generic-var gate
+    // (`getCiInfo() !== null`) is otherwise non-deterministic under ambient CI.
+    const CI_MARKER_KEYS = [
+        'CI', 'GITHUB_ACTIONS', 'JENKINS_URL', 'JENKINS_HOME', 'CIRCLECI', 'TRAVIS', 'GITLAB_CI',
+        'BITBUCKET_BUILD_NUMBER', 'DRONE', 'SEMAPHORE', 'BUILDKITE', 'TF_BUILD', 'APPVEYOR',
+        'AZURE_HTTP_USER_AGENT', 'CODEBUILD_BUILD_ID', 'bamboo_buildNumber', 'WERCKER', 'NETLIFY',
+        'VERCEL', 'TEAMCITY_VERSION', 'CF_BUILD_ID', 'GO_JOB_NAME',
+    ]
+    const ALL_ENV_KEYS = [...BRANCH_ENV_KEYS, ...CI_MARKER_KEYS]
     const withEnv = async (overrides: Record<string, string | undefined>, fn: () => Promise<void>) => {
         const saved: Record<string, string | undefined> = {}
-        for (const k of BRANCH_ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k] }
+        for (const k of ALL_ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k] }
         for (const [k, v] of Object.entries(overrides)) {
             if (v === undefined) { delete process.env[k] } else { process.env[k] = v }
         }
         try { await fn() } finally {
-            for (const k of BRANCH_ENV_KEYS) {
+            for (const k of ALL_ENV_KEYS) {
                 if (saved[k] === undefined) { delete process.env[k] } else { process.env[k] = saved[k] }
             }
         }
     }
+    // Mock the async git backstop (promisify(execFile) → resolves {stdout,stderr}).
+    // A per-call queue lets a test feed the heads query then the remotes query.
+    const mockGitRefs = (...outputs: string[]) => {
+        let i = 0
+        vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
+            const cb = args[args.length - 1] as (e: unknown, r: unknown) => void
+            const out = i < outputs.length ? outputs[i] : ''
+            i += 1
+            cb(null, { stdout: out, stderr: '' })
+            return {} as any
+        }) as any)
+    }
+
+    // Default: resolve the git backstop with empty output so any test reaching it
+    // (without calling mockGitRefs) never hangs on the unresolved-callback mock.
+    beforeEach(() => mockGitRefs())
 
     it('uses git-repo-info branch when present (no fallback)', async () => {
         await withEnv({}, async () => {
@@ -1035,22 +1061,59 @@ describe('getGitMetaData', () => {
 
     it('falls back to the git for-each-ref backstop when no branch env is set', async () => {
         await withEnv({}, async () => {
-            // No CI branch env → getBranchFromGit runs. Mock the git backstop to
-            // report the branch whose tip is HEAD (local heads queried first).
-            vi.mocked(spawnSync).mockReturnValueOnce({ status: 0, stdout: 'master\n', stderr: '' } as any)
+            // No CI branch env → getBranchFromGit runs. Local heads query resolves
+            // the branch whose tip is HEAD.
+            mockGitRefs('master\n')
             vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: undefined, root: '/tmp', sha: 'sha1' } as any)
             const result: any = await getGitMetaData()
             expect(result.branch).toEqual('master')
-            expect(vi.mocked(spawnSync)).toHaveBeenCalledWith('git', expect.arrayContaining(['for-each-ref', '--points-at', 'HEAD']), expect.anything())
+            expect(vi.mocked(execFile)).toHaveBeenCalledWith('git', expect.arrayContaining(['for-each-ref', '--points-at', 'HEAD']), expect.anything(), expect.anything())
+        })
+    })
+
+    it('git backstop falls through to remotes (bare name) when no local head matches', async () => {
+        await withEnv({}, async () => {
+            // heads query empty → remotes query returns a lstrip-3 bare name for a
+            // non-origin remote (must not leak the remote prefix).
+            mockGitRefs('', 'main\n')
+            vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: undefined, root: '/tmp', sha: 'sha1' } as any)
+            const result: any = await getGitMetaData()
+            expect(result.branch).toEqual('main')
         })
     })
 
     it('leaves branch undefined when detached HEAD has no env and no branch tip', async () => {
         await withEnv({}, async () => {
-            vi.mocked(spawnSync).mockReturnValue({ status: 0, stdout: '', stderr: '' } as any)
+            mockGitRefs('', '')
             vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: undefined, root: '/tmp', sha: 'sha1' } as any)
             const result: any = await getGitMetaData()
             expect(result.branch).toBeUndefined()
+        })
+    })
+
+    it('ignores a generic BRANCH env var when NOT in a recognised CI', async () => {
+        // A stray local `BRANCH` export must not be misreported as the branch.
+        await withEnv({ BRANCH: 'stray-local-value' }, async () => {
+            mockGitRefs('', '')   // no CI marker set → getCiInfo() is null; backstop also empty
+            vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: undefined, root: '/tmp', sha: 'sha1' } as any)
+            const result: any = await getGitMetaData()
+            expect(result.branch).toBeUndefined()
+        })
+    })
+
+    it('uses a generic GIT_BRANCH var only inside a recognised CI (Jenkins), stripping origin/', async () => {
+        await withEnv({ JENKINS_URL: 'http://jenkins.local', GIT_BRANCH: 'origin/main' }, async () => {
+            vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: undefined, root: '/tmp', sha: 'sha1' } as any)
+            const result: any = await getGitMetaData()
+            expect(result.branch).toEqual('main')
+        })
+    })
+
+    it('prefers a CI-specific env var over a generic one', async () => {
+        await withEnv({ GITHUB_ACTIONS: 'true', GITHUB_REF_NAME: 'feature/x', BRANCH: 'generic-loser' }, async () => {
+            vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: undefined, root: '/tmp', sha: 'sha1' } as any)
+            const result: any = await getGitMetaData()
+            expect(result.branch).toEqual('feature/x')
         })
     })
 })
