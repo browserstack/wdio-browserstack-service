@@ -1064,11 +1064,11 @@ export function getCloudProvider(browser: WebdriverIO.Browser | WebdriverIO.Mult
         // Loop through all instances
         for (const instanceName of browser.instances) {
             const instance = (browser as any)[instanceName] as WebdriverIO.Browser
-            if (instance.options && instance.options.hostname && instance.options.hostname.includes('browserstack')) {
+            if (instance.options && instance.options.hostname && (instance.options.hostname.includes('browserstack') || instance.options.hostname.includes('bsstag'))) {
                 return 'browserstack'
             }
         }
-    } else if (browser.options && browser.options.hostname && browser.options.hostname.includes('browserstack')) { // Single browser instance
+    } else if (browser.options && browser.options.hostname && (browser.options.hostname.includes('browserstack') || browser.options.hostname.includes('bsstag'))) { // Single browser instance
         return 'browserstack'
     }
     return 'unknown_grid'
@@ -1177,7 +1177,7 @@ export function isBrowserstackInfra(config: BrowserstackConfig & Options.Testrun
     // In case hostname is not present anywhere in the config, it returns true by default as hostname is not a mandatory parameter in the config
 
     const isBrowserstack = (str: string ): boolean => {
-        return str === 'browserstack.com' || str.endsWith('.browserstack.com')
+        return str === 'browserstack.com' || str.endsWith('.browserstack.com') || str.endsWith('.bsstag.com')
     }
 
     if ((config.hostname) && !isBrowserstack(config.hostname)) {
