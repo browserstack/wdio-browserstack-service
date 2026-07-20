@@ -988,14 +988,20 @@ describe('getGitMetaData', () => {
         'WERCKER_GIT_BRANCH', 'VERCEL_GIT_COMMIT_REF', 'CF_BRANCH',
         'GIT_LOCAL_BRANCH', 'BRANCH_NAME', 'GIT_BRANCH', 'BRANCH',
     ]
-    // CI-detection markers getCiInfo() keys on. Cleared too, so getCiInfo() is
-    // null unless a test opts a specific CI in — the generic-var gate
+    // Every env var getCiInfo() gates a non-null return on. Cleared so getCiInfo()
+    // is null unless a test opts a specific CI in — the generic-var gate
     // (`getCiInfo() !== null`) is otherwise non-deterministic under ambient CI.
+    // Kept exhaustive against src/util.ts getCiInfo(); the getCiInfo()-null/non-null
+    // guard asserts in the tests below fail loudly if this list ever drifts.
     const CI_MARKER_KEYS = [
-        'CI', 'GITHUB_ACTIONS', 'JENKINS_URL', 'JENKINS_HOME', 'CIRCLECI', 'TRAVIS', 'GITLAB_CI',
-        'BITBUCKET_BUILD_NUMBER', 'DRONE', 'SEMAPHORE', 'BUILDKITE', 'TF_BUILD', 'APPVEYOR',
-        'AZURE_HTTP_USER_AGENT', 'CODEBUILD_BUILD_ID', 'bamboo_buildNumber', 'WERCKER', 'NETLIFY',
-        'VERCEL', 'TEAMCITY_VERSION', 'CF_BUILD_ID', 'GO_JOB_NAME',
+        'CI', 'CIRCLECI', 'TRAVIS', 'CI_NAME', 'DRONE', 'SEMAPHORE', 'GITLAB_CI', 'BUILDKITE', 'VERCEL',
+        'JENKINS_URL', 'JENKINS_HOME', 'BITBUCKET_COMMIT', 'BITBUCKET_BUILD_NUMBER',
+        'TF_BUILD', 'TF_BUILD_BUILDNUMBER', 'APPVEYOR', 'AZURE_HTTP_USER_AGENT',
+        'CODEBUILD_BUILD_ID', 'CODEBUILD_RESOLVED_SOURCE_VERSION', 'CODEBUILD_SOURCE_VERSION',
+        'bamboo_buildNumber', 'WERCKER', 'WERCKER_MAIN_PIPELINE_STARTED',
+        'GCP_PROJECT', 'GCLOUD_PROJECT', 'GOOGLE_CLOUD_PROJECT', 'SHIPPABLE', 'NETLIFY',
+        'GITHUB_ACTIONS', 'TEAMCITY_VERSION', 'CONCOURSE', 'CONCOURSE_URL', 'CONCOURSE_USERNAME',
+        'CONCOURSE_TEAM', 'GO_JOB_NAME', 'CF_BUILD_ID',
     ]
     const ALL_ENV_KEYS = [...BRANCH_ENV_KEYS, ...CI_MARKER_KEYS]
     const withEnv = async (overrides: Record<string, string | undefined>, fn: () => Promise<void>) => {
@@ -1094,7 +1100,11 @@ describe('getGitMetaData', () => {
     it('ignores a generic BRANCH env var when NOT in a recognised CI', async () => {
         // A stray local `BRANCH` export must not be misreported as the branch.
         await withEnv({ BRANCH: 'stray-local-value' }, async () => {
-            mockGitRefs('', '')   // no CI marker set → getCiInfo() is null; backstop also empty
+            // Guard: assert the real detector actually sees "no CI" here — if a
+            // CI marker leaks past CI_MARKER_KEYS this fails loudly instead of
+            // silently exercising the in-CI branch.
+            expect(utils.getCiInfo()).toBeNull()
+            mockGitRefs('', '')   // backstop also empty
             vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: undefined, root: '/tmp', sha: 'sha1' } as any)
             const result: any = await getGitMetaData()
             expect(result.branch).toBeUndefined()
@@ -1103,6 +1113,7 @@ describe('getGitMetaData', () => {
 
     it('uses a generic GIT_BRANCH var only inside a recognised CI (Jenkins), stripping origin/', async () => {
         await withEnv({ JENKINS_URL: 'http://jenkins.local', GIT_BRANCH: 'origin/main' }, async () => {
+            expect(utils.getCiInfo()).not.toBeNull()   // guard: detector sees Jenkins
             vi.mocked(gitRepoInfo).mockReturnValue({ commonGitDir: '/tmp', worktreeGitDir: '/tmp', branch: undefined, root: '/tmp', sha: 'sha1' } as any)
             const result: any = await getGitMetaData()
             expect(result.branch).toEqual('main')
