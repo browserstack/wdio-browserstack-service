@@ -982,19 +982,22 @@ export function getCiInfo () {
     return null
 }
 
-// Branch names may only contain these characters; anything else is treated as
-// untrusted input and rejected (env vars/CI values are attacker-influenceable).
-const SAFE_BRANCH_PATTERN = /^[\w./-]+$/
+// Reject anything a git ref can't legally be OR that is unsafe to propagate:
+// whitespace/control chars, the git-forbidden set (~ ^ : ? * [ \), and `..`.
+// This is a denylist (git ref names are otherwise permissive — `#`, `+`, `/`,
+// `-`, `_`, `.` are all valid), so a legal branch name is never dropped.
+// eslint-disable-next-line no-control-regex -- control chars (\x00-\x1f) are exactly what we reject
+const UNSAFE_BRANCH_PATTERN = /[\x00-\x20~^:?*[\\]/
 
-// CI branch env vars in priority order — covers the CI systems getCiInfo()
-// detects. In a detached-HEAD CI checkout git-repo-info can't resolve the
-// branch, but the CI system almost always exposes it via one of these.
-const CI_BRANCH_ENV_VARS = [
-    'BROWSERSTACK_GIT_BRANCH',      // explicit override (support/customer escape hatch)
-    'GITHUB_HEAD_REF',              // GitHub Actions (PR)
-    'GITHUB_REF_NAME',              // GitHub Actions (push/tag)
-    'CI_COMMIT_REF_NAME',           // GitLab
-    'CI_COMMIT_BRANCH',             // GitLab
+// CI-specific, namespaced branch env vars in priority order. These are unique
+// to their CI provider, so reading them unconditionally is safe. Values from a
+// recognised CI's own variable are trusted even when getCiInfo() can't classify
+// the run (some providers set the branch var but not the marker getCiInfo keys on).
+const CI_SPECIFIC_BRANCH_ENV = [
+    'GITHUB_HEAD_REF',              // GitHub Actions (PR — source branch)
+    'GITHUB_REF_NAME',              // GitHub Actions (push)
+    'CI_COMMIT_BRANCH',             // GitLab (branch pipelines only — empty on tag pipelines)
+    'CI_COMMIT_REF_NAME',           // GitLab (also set to the tag name on tag pipelines)
     'CIRCLE_BRANCH',                // CircleCI
     'TRAVIS_PULL_REQUEST_BRANCH',   // Travis (PR)
     'TRAVIS_BRANCH',                // Travis
@@ -1011,57 +1014,89 @@ const CI_BRANCH_ENV_VARS = [
     'bamboo_repository_branch_name',    // Bamboo
     'WERCKER_GIT_BRANCH',           // Wercker
     'VERCEL_GIT_COMMIT_REF',        // Vercel
-    'BRANCH',                       // Netlify / generic
+    'CF_BRANCH',                    // CodeFresh
+]
+
+// Generic, non-namespaced branch env vars. These collide with unrelated
+// variables a developer might have exported locally, so they are only trusted
+// when getCiInfo() confirms we are actually inside a recognised CI run.
+const CI_GENERIC_BRANCH_ENV = [
     'GIT_LOCAL_BRANCH',             // Jenkins git plugin (clean)
     'BRANCH_NAME',                  // Jenkins multibranch
     'GIT_BRANCH',                   // Jenkins (often origin/<name>)
+    'BRANCH',                       // Netlify / generic
 ]
 
-// Strip refs/heads|tags and a leading origin/, reject HEAD and unsafe values.
-export function normalizeBranchName (raw?: string | null): string | undefined {
+// Strip a leading refs/heads|tags/ or origin/ prefix (Jenkins GIT_BRANCH is
+// `origin/<name>`), reject HEAD and anything that isn't a legal/safe ref.
+function normalizeBranchName (raw?: string | null): string | undefined {
     if (!raw) {
         return undefined
     }
     const branch = raw.trim()
         .replace(/^refs\/(heads|tags)\//, '')
         .replace(/^origin\//, '')
-    if (!branch || branch === 'HEAD' || !SAFE_BRANCH_PATTERN.test(branch)) {
+    if (!branch || branch.length > 256 || branch === 'HEAD' || branch.includes('..') || UNSAFE_BRANCH_PATTERN.test(branch)) {
         return undefined
     }
     return branch
 }
 
 function getBranchFromCIEnv (): string | undefined {
-    for (const key of CI_BRANCH_ENV_VARS) {
+    for (const key of CI_SPECIFIC_BRANCH_ENV) {
         const val = normalizeBranchName(process.env[key])
         if (val) {
             return val
         }
     }
+    // Generic names are only trusted inside a recognised CI — otherwise a stray
+    // local `BRANCH`/`GIT_BRANCH` export would be misreported as the git branch.
+    if (getCiInfo() !== null) {
+        for (const key of CI_GENERIC_BRANCH_ENV) {
+            const val = normalizeBranchName(process.env[key])
+            if (val) {
+                return val
+            }
+        }
+    }
     return undefined
+}
+
+function gitForEachRef (args: string[], cwd?: string): string[] {
+    try {
+        const result = spawnSync('git', ['for-each-ref', '--points-at', 'HEAD', ...args], {
+            cwd, encoding: 'utf-8', timeout: 5000
+        })
+        if (result.status !== 0 || !result.stdout) {
+            return []
+        }
+        return result.stdout.split('\n').map(s => s.trim()).filter(Boolean)
+    } catch {
+        // best-effort — degrade silently
+        return []
+    }
 }
 
 // Best-effort CI-agnostic fallback: the branch whose tip is the checked-out
 // commit. Resolves detached-HEAD checkouts where the commit is a branch tip
 // (the common merge-to-master → CI-builds-master case). Never throws.
+// Local heads are queried before remotes; each format strips the ref prefix so
+// the value is a bare branch name regardless of the remote (lstrip handles any
+// remote, not just `origin`). git orders its own output alphabetically, so the
+// two separate calls — not the refspec argument order — control heads-first.
 function getBranchFromGit (cwd?: string): string | undefined {
-    try {
-        const result = spawnSync(
-            'git',
-            ['for-each-ref', '--points-at', 'HEAD', '--format=%(refname:short)', 'refs/heads', 'refs/remotes'],
-            { cwd, encoding: 'utf-8', timeout: 5000 }
-        )
-        if (result.status !== 0 || !result.stdout) {
-            return undefined
+    const candidates = [
+        ...gitForEachRef(['--format=%(refname:lstrip=2)', 'refs/heads'], cwd),
+        ...gitForEachRef(['--format=%(refname:lstrip=3)', 'refs/remotes'], cwd),
+    ]
+    for (const candidate of candidates) {
+        if (candidate === 'HEAD') {
+            continue    // refs/remotes/<remote>/HEAD → skip the symbolic pointer
         }
-        for (const line of result.stdout.split('\n')) {
-            const branch = normalizeBranchName(line)
-            if (branch) {
-                return branch
-            }
+        const branch = normalizeBranchName(candidate)
+        if (branch) {
+            return branch
         }
-    } catch {
-        // best-effort — degrade silently
     }
     return undefined
 }
@@ -1076,9 +1111,11 @@ export async function getGitMetaData () {
 
     // git-repo-info reads branch from .git/HEAD; on a detached HEAD (the default
     // for most CI checkouts, e.g. `git checkout <sha>`) it returns no branch.
-    // Fall back to CI env vars, then to the branch whose tip is HEAD, so builds
-    // don't drop out of branch-based dashboards/filters. Ref: SDK-7009.
-    let branch = info.branch
+    // Precedence: explicit BROWSERSTACK_GIT_BRANCH override (wins even over a
+    // git-repo-info-resolved branch, so it can correct a mis-resolved one) →
+    // git-repo-info → CI branch env vars → branch whose tip is HEAD. Keeps builds
+    // in branch-based dashboards/filters. Ref: SDK-7009.
+    let branch = normalizeBranchName(process.env.BROWSERSTACK_GIT_BRANCH) || info.branch
     if (!branch) {
         branch = getBranchFromCIEnv() ?? getBranchFromGit(info.root) ?? info.branch
     }
