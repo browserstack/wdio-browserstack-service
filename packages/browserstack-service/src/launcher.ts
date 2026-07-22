@@ -439,6 +439,16 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
         this.browserStackConfig.accessibility = this._accessibilityAutomation
 
+        // Mirror the accessibility fold-back above for observability: if observability was
+        // requested but the classic build-start was blocked/failed (BROWSERSTACK_OBSERVABILITY
+        // !== 'true'), fold that outcome into config so the session's buildProductMap reports
+        // observability:false instead of the originally-requested value. buildStartResponse is
+        // null when the CLI/gRPC flow owns the build-start, so this stays scoped to the classic flow.
+        const observabilityBuildStartBlocked = Boolean(buildStartResponse) && Boolean(this._options.testObservability) && !isTrue(process.env[BROWSERSTACK_OBSERVABILITY])
+        if (observabilityBuildStartBlocked) {
+            this.browserStackConfig.testObservability.enabled = false
+        }
+
         if (this._accessibilityAutomation && this._options.accessibilityOptions) {
             // SDK-3737: coerce stringified booleans (e.g. autoScanning: 'false') to real
             // booleans so boolean-typed accessibility options are honoured instead of
@@ -473,7 +483,14 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }
         }
 
-        this._updateCaps(capabilities as Capabilities.TestrunnerCapabilities, 'testhubBuildUuid')
+        // Skip stamping testhubBuildUuid only when the observability build-start was blocked
+        // and no other TestHub product (accessibility) succeeded — otherwise the Automate
+        // session gets orphan-linked to a TestHub build that was never created (a blocked
+        // build-start still returns a build_hashed_id), keeping it counted as an SDK
+        // observability session. Every other case keeps the prior behavior.
+        if (!(observabilityBuildStartBlocked && !this._accessibilityAutomation)) {
+            this._updateCaps(capabilities as Capabilities.TestrunnerCapabilities, 'testhubBuildUuid')
+        }
         this._updateCaps(capabilities as Capabilities.TestrunnerCapabilities, 'buildProductMap')
 
         if (isValidEnabledValue(this._options.testOrchestrationOptions?.runSmartSelection?.enabled)){

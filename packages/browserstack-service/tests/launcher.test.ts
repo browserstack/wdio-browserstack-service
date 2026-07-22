@@ -121,6 +121,38 @@ describe('onPrepare', () => {
         expect(capabilities.samsungGalaxy.capabilities).toEqual({ 'appium:app': 'bs://<app-id>', 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId } })
     })
 
+    it('folds a blocked observability build-start into caps: buildProductMap.observability=false and no testhubBuildUuid stamped', async () => {
+        // Classic-flow build-start blocked (unsupported framework): launchTestSession turns the
+        // observability env flag off and returns a truthy response.
+        vi.spyOn(utils, 'launchTestSession').mockImplementation((() => {
+            process.env.BROWSERSTACK_OBSERVABILITY = 'false'
+            return {} as any
+        }) as any)
+        // Derive buildProductMap from config so the fold-back into config is observable in caps.
+        vi.spyOn(thUtils, 'getProductMap').mockImplementation((cfg: any) => ({
+            observability: cfg.testObservability.enabled,
+            accessibility: !!cfg.accessibility,
+            percy: cfg.percy,
+            automate: cfg.automate,
+            app_automate: cfg.appAutomate
+        }))
+
+        const service = new BrowserstackLauncher({ testObservability: true } as any, caps, config)
+        const capabilities: any = [{ 'bstack:options': {} }]
+        await service.onPrepare(config, capabilities)
+
+        // observability outcome folded into config -> buildProductMap reports observability:false
+        expect((service as any).browserStackConfig.testObservability.enabled).toBe(false)
+        expect(capabilities[0]['bstack:options'].buildProductMap.observability).toBe(false)
+        // session is not orphan-linked to a TestHub build that was never created
+        expect(capabilities[0]['bstack:options'].testhubBuildUuid).toBeUndefined()
+
+        // restore the describe-level mocks + env so later tests are unaffected
+        vi.spyOn(utils, 'launchTestSession').mockImplementation(() => {})
+        vi.spyOn(thUtils, 'getProductMap').mockImplementation(() => productMap)
+        delete process.env.BROWSERSTACK_OBSERVABILITY
+    })
+
     it('should add the "appium:app" property to a multiremote capability if "bstack:options" present', async () => {
         const options: BrowserstackConfig = { app: 'bs://<app-id>' }
         const service = new BrowserstackLauncher(options as any, caps, config)
