@@ -138,20 +138,28 @@ export default class AccessibilityModule extends BaseModule {
                 return
             }
 
-            // Web command wrapping (overwriteCommand) only applies to the web a11y
-            // flow. App Automate a11y scans run via the performScan/test-lifecycle
-            // path, and appium drivers don't register these commands, so
-            // overwriteCommand would throw and abort onBeforeExecute.
-            if (!this.isAppAccessibility && 'overwriteCommand' in browser && Array.isArray(this.scriptInstance.commandsToWrap)) {
+            // Per-command wrapping (overwriteCommand) drives auto-scanning on both the web and the
+            // App Automate a11y flows. App sessions were previously skipped (isAppAccessibility gate)
+            // out of a concern that appium drivers don't register these commands, so overwriteCommand
+            // would throw and abort onBeforeExecute — but that skip disabled per-command auto-scan for
+            // app entirely, so app a11y scans only fired via an explicit performScan()/lifecycle.
+            // Instead, wrap for every flow and guard EACH overwriteCommand individually: a command the
+            // driver doesn't register just skips (logged) rather than aborting the whole wrap loop, so
+            // the commands appium DOES register (click, setValue, ...) still auto-scan on app.
+            if ('overwriteCommand' in browser && Array.isArray(this.scriptInstance.commandsToWrap)) {
                 this.scriptInstance.commandsToWrap
                     .filter((command) => command.name && command.class)
                     .forEach((command) => {
-                        browser.overwriteCommand(
-                            // @ts-expect-error fix type
-                            command.name,
-                            this.commandWrapper.bind(this, command),
-                            command.class === 'Element'
-                        )
+                        try {
+                            browser.overwriteCommand(
+                                // @ts-expect-error fix type
+                                command.name,
+                                this.commandWrapper.bind(this, command),
+                                command.class === 'Element'
+                            )
+                        } catch (wrapError) {
+                            this.logger.debug(`Skipping command wrap for ${command.name}: ${wrapError}`)
+                        }
                     })
             }
 

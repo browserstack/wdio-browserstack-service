@@ -369,10 +369,12 @@ describe('AccessibilityModule', () => {
         })
     })
 
-    // SDK-3813: App Automate + App Accessibility sessions were mis-routed onto the
-    // web a11y path (Chrome-only gate + overwriteCommand on commands absent from the
-    // appium driver), so App A11y scans never ran. The CLI module must detect app
-    // sessions from caps (like the classic flow) and skip web command wrapping.
+    // SDK-3813 (+ follow-up APPA11Y-5542): App Automate + App Accessibility sessions are detected
+    // from caps (like the classic flow) and take the app validation/scan path (not the Chrome-only
+    // web gate). Unlike the original SDK-3813 fix, per-command wrapping is NOT skipped for app: it is
+    // applied with each overwriteCommand individually guarded, so the commands appium DOES register
+    // (click, setValue, ...) auto-scan, while a command the driver doesn't register is skipped
+    // instead of aborting onBeforeExecute. This restores per-command app auto-scanning.
     describe('onBeforeExecute - App Automate (SDK-3813)', () => {
         const appGetState = (instance: any, key: string) => {
             if (key.includes('input_capabilities')) {
@@ -391,7 +393,7 @@ describe('AccessibilityModule', () => {
             accessibilityScripts.commandsToWrap = []
         })
 
-        it('detects app session from caps and skips web command-overwrite', async () => {
+        it('detects app session from caps and wraps commands for per-command auto-scan', async () => {
             // binary flag is false; caps say app -> module must still take app path
             vi.mocked(validateCapsWithAppA11y).mockReturnValue(true)
             vi.mocked(validateCapsWithA11y).mockReturnValue(true)
@@ -404,9 +406,9 @@ describe('AccessibilityModule', () => {
             await accessibilityModule.onBeforeExecute()
 
             expect(accessibilityModule.isAppAccessibility).toBe(true)
-            // Symptom 1: no web command-overwrite attempted on an app session
-            expect(mockBrowser.overwriteCommand).not.toHaveBeenCalled()
-            // Symptom 2: Chrome-only web gate never consulted; app validation used
+            // App sessions wrap commands too, so DOM commands (click, ...) auto-scan per-command.
+            expect(mockBrowser.overwriteCommand).toHaveBeenCalled()
+            // Chrome-only web gate never consulted; app validation used
             expect(validateCapsWithAppA11y).toHaveBeenCalled()
             expect(validateCapsWithA11y).not.toHaveBeenCalled()
         })
@@ -425,7 +427,7 @@ describe('AccessibilityModule', () => {
             expect(result).toEqual({ scanned: true })
         })
 
-        it('does not abort onBeforeExecute when web command wrapping would throw', async () => {
+        it('does not abort onBeforeExecute when an individual command wrap throws', async () => {
             vi.mocked(validateCapsWithAppA11y).mockReturnValue(true)
             vi.mocked(validateCapsWithA11y).mockReturnValue(true)
             accessibilityScripts.commandsToWrap = [{ name: 'startA11yScanning', class: 'Browser' }]
@@ -437,7 +439,10 @@ describe('AccessibilityModule', () => {
 
             await accessibilityModule.onBeforeExecute()
 
-            expect(mockBrowser.overwriteCommand).not.toHaveBeenCalled()
+            // The wrap IS attempted (and throws for this unregistered command), but the per-command
+            // try/catch swallows it so the wrap loop and onBeforeExecute complete without hitting the
+            // outer error handler.
+            expect(mockBrowser.overwriteCommand).toHaveBeenCalled()
             expect(errorSpy).not.toHaveBeenCalledWith(
                 expect.stringContaining('Error in onBeforeExecute')
             )
