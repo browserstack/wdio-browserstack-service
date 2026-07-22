@@ -2,7 +2,7 @@
 import { BROWSERSTACK_PERCY, BROWSERSTACK_OBSERVABILITY, BROWSERSTACK_ACCESSIBILITY } from '../constants.js'
 import type BrowserStackConfig from '../config.js'
 import { BStackLogger } from '../bstackLogger.js'
-import { isTrue, isLoadTestingSession } from '../util.js'
+import { getCentralUser, isTrue, isLoadTestingSession } from '../util.js'
 
 interface ErrorType {
     key: string
@@ -31,7 +31,7 @@ export const getProductMap = (config: BrowserStackConfig): { [key: string]: bool
     if (lts) {
         entries.push(['lts', true])
     }
-    return Object.fromEntries(entries.filter(([, v]) => v !== null)) as { [key: string]: boolean }
+    return { ...Object.fromEntries(entries.filter(([, v]) => v !== null)), ...getCentralUser() } as { [key: string]: boolean }
 }
 
 export const shouldProcessEventForTesthub = (eventType: string): boolean => {
@@ -113,5 +113,5 @@ export const getProductMapForBuildStartCall = (config: BrowserStackConfig, acces
     if (lts) {
         entries.push(['lts', true])
     }
-    return Object.fromEntries(entries.filter(([, v]) => v !== null)) as { [key: string]: boolean }
+    return { ...Object.fromEntries(entries.filter(([, v]) => v !== null)), ...getCentralUser() } as { [key: string]: boolean }
 }
