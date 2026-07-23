@@ -1,5 +1,12 @@
 # @wdio/browserstack-service
 
+## 9.30.2
+
+### Patch Changes
+
+- a43e534: - Fixed skipped tests (`it.skip`, `this.skip()` in before/beforeEach hooks) and suites aborted by a failed before hook not being reported to Test Observability when using the CLI.
+  - Fixed Automate sessions from skipped/aborted spec files not being linked to the Test Observability build.
+
 ## 9.30.1
 
 ### Patch Changes
