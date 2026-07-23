@@ -7,6 +7,8 @@ import BrowserstackService from '../src/service.js'
 import * as utils from '../src/util.js'
 import InsightsHandler from '../src/insights-handler.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
+import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
+import { HookState } from '../src/cli/states/hookState.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import AutomationFramework from '../src/cli/frameworks/automationFramework.js'
 import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
@@ -2413,5 +2415,107 @@ describe('beforeHook (CLI hook reporting)', () => {
         await service.beforeHook(hookTest, {})
 
         expect(service['_insightsHandler']!.beforeHook).toHaveBeenCalledTimes(1)
+    })
+})
+
+describe('afterHook (CLI hook reporting)', () => {
+    let getInstanceSpy: ReturnType<typeof vi.spyOn>
+
+    const failResult = { passed: false, error: { message: 'boom' } } as any
+    const makeChild = (title: string, state: string | undefined) => ({ title, state } as any)
+    // A hook test whose ctx.test.parent is the given suite tree — this is what the CLI branch
+    // walks to synthesise skipped children.
+    const hookWithParent = (title: string, parent: unknown) =>
+        ({ title, ctx: { test: { parent } } } as any)
+
+    const cliRunning = (trackEvent: unknown) => {
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => ({ trackEvent })
+        } as any)
+    }
+
+    const callsForState = (trackEvent: { mock: { calls: any[] } }, state: unknown) =>
+        trackEvent.mock.calls.filter((c: any[]) => c[0] === state)
+
+    // Restore only our own spy so the suite's shared mocks stay intact.
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+    })
+
+    it('emits the skipped sequence for every not-yet-run child when a BEFORE_ALL hook fails', async () => {
+        const trackEvent = vi.fn().mockResolvedValue(undefined)
+        cliRunning(trackEvent)
+        const childA = makeChild('child a', undefined)
+        const childB = makeChild('child b', undefined)
+        // childA lives on the parent suite, childB in a nested suite — exercises the recursive walk.
+        const parent = { tests: [childA], suites: [{ tests: [childB], suites: [] }] }
+        const test = hookWithParent('"before all" hook for "spec"', parent)
+
+        await service.afterHook(test, {}, failResult)
+
+        // Hook POST fires once; then INIT_TEST/PRE + TEST/PRE + LOG_REPORT/POST + TEST/POST per child.
+        expect(callsForState(trackEvent, TestFrameworkState.BEFORE_ALL)).toHaveLength(1)
+        expect(callsForState(trackEvent, TestFrameworkState.INIT_TEST)).toHaveLength(2)
+        expect(callsForState(trackEvent, TestFrameworkState.LOG_REPORT)).toHaveLength(2)
+        expect(callsForState(trackEvent, TestFrameworkState.TEST)).toHaveLength(4)
+        expect(trackEvent).toHaveBeenCalledTimes(1 + 2 * 4)
+
+        for (const call of callsForState(trackEvent, TestFrameworkState.LOG_REPORT)) {
+            expect(call[1]).toBe(HookState.POST)
+            expect(call[2].result).toMatchObject({ passed: false, skipped: true })
+        }
+        for (const call of callsForState(trackEvent, TestFrameworkState.TEST)) {
+            if (call[1] === HookState.POST) {
+                expect(call[2].result).toMatchObject({ passed: false, skipped: true })
+            }
+        }
+        const initedTests = callsForState(trackEvent, TestFrameworkState.INIT_TEST).map((c: any[]) => c[2].test)
+        expect(initedTests).toEqual(expect.arrayContaining([childA, childB]))
+    })
+
+    it('does not re-emit a child that already ran (state !== undefined)', async () => {
+        const trackEvent = vi.fn().mockResolvedValue(undefined)
+        cliRunning(trackEvent)
+        const ranChild = makeChild('ran', 'passed')
+        const notRun = makeChild('not run', undefined)
+        const parent = { tests: [ranChild, notRun], suites: [] }
+        const test = hookWithParent('"before each" hook for "spec"', parent)
+
+        await service.afterHook(test, {}, failResult)
+
+        expect(callsForState(trackEvent, TestFrameworkState.INIT_TEST)).toHaveLength(1)
+        expect(callsForState(trackEvent, TestFrameworkState.INIT_TEST)[0][2].test).toBe(notRun)
+        expect(trackEvent).toHaveBeenCalledTimes(1 + 4)
+    })
+
+    it('does not walk children when an AFTER_ALL hook fails', async () => {
+        const trackEvent = vi.fn().mockResolvedValue(undefined)
+        cliRunning(trackEvent)
+        const child = makeChild('child', undefined)
+        const parent = { tests: [child], suites: [] }
+        const test = hookWithParent('"after all" hook for "spec"', parent)
+
+        await service.afterHook(test, {}, failResult)
+
+        // Only the hook POST fires — AFTER_ALL is excluded from the skipped-children walk.
+        expect(callsForState(trackEvent, TestFrameworkState.AFTER_ALL)).toHaveLength(1)
+        expect(callsForState(trackEvent, TestFrameworkState.INIT_TEST)).toHaveLength(0)
+        expect(trackEvent).toHaveBeenCalledTimes(1)
+    })
+
+    it('delegates to the legacy insights handler when the CLI is not running', async () => {
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => false,
+            getTestFramework: () => null
+        } as any)
+        const afterHookMock = vi.fn().mockResolvedValue(undefined)
+        service['_insightsHandler'] = { afterHook: afterHookMock } as any
+        const test = { title: '"before all" hook for "spec"' } as any
+
+        await service.afterHook(test, {}, failResult)
+
+        expect(afterHookMock).toHaveBeenCalledTimes(1)
+        expect(afterHookMock).toHaveBeenCalledWith(test, failResult)
     })
 })
