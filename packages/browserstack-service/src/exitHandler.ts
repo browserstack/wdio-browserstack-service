@@ -8,9 +8,21 @@ import PerformanceTester from './instrumentation/performance/performance-tester.
 import TestOpsConfig from './testOps/testOpsConfig.js'
 import { BStackLogger } from './bstackLogger.js'
 import { BrowserstackCLI } from './cli/index.js'
+import { BROWSERSTACK_TESTHUB_UUID } from './constants.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+function getInterruptSignals(): NodeJS.Signals[] {
+    const allSignals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP']
+    if (process.platform !== 'win32') {
+        allSignals.push('SIGABRT', 'SIGQUIT')
+    } else {
+        // For windows Ctrl+Break
+        allSignals.push('SIGBREAK')
+    }
+    return allSignals
+}
 
 export function setupExitHandlers() {
     const handleCLICleanup = () => {
@@ -54,6 +66,13 @@ export function setupExitHandlers() {
             childProcess.unref()
         }
     })
+
+    getInterruptSignals().forEach((sig) => {
+        process.on(sig, () => {
+            BStackLogger.debug(`${sig} received, setting kill signal`)
+            BrowserStackConfig.getInstance().setKillSignal(sig)
+        })
+    })
 }
 
 export function shouldCallCleanup(config: BrowserStackConfig, isCLIEnabled = false): string[] {
@@ -72,6 +91,14 @@ export function shouldCallCleanup(config: BrowserStackConfig, isCLIEnabled = fal
         process.env.PERF_TESTHUB_UUID = TestOpsConfig.getInstance().buildHashedId
         process.env.SDK_RUN_ID = config.sdkRunID
         args.push('--performanceData')
+    }
+
+    // SDK-6983: a signal-terminated run never reaches onComplete's log upload,
+    // leaving the build with no SDK-log object — rescue it from the detached
+    // cleanup process.
+    const clientBuildUuid = process.env[BROWSERSTACK_TESTHUB_UUID] || config.sdkRunID
+    if (!config.logsUploaded && config.userName && config.accessKey && clientBuildUuid) {
+        args.push('--uploadLogs', clientBuildUuid)
     }
 
     return args

@@ -26,7 +26,11 @@ async function fireFunnelTestEvent(eventType: string, config: BrowserStackConfig
         const data = buildEventData(eventType, config, isCLIEnabled)
         await fireFunnelRequest(data)
         BStackLogger.debug('Funnel event success')
-        config.sentFunnelData()
+        // Only the finish event disarms the exit-time cleanup resend — marking it
+        // on SDKTestAttempted left killed runs with no SDKTestSuccessful at all.
+        if (eventType === 'SDKTestSuccessful') {
+            config.sentFunnelData()
+        }
     } catch (error) {
         BStackLogger.debug(`Exception in sending funnel data: ${format(error)}`)
     }
@@ -163,6 +167,11 @@ function buildEventData(eventType: string, config: BrowserStackConfig, isCLIEnab
         const reloadHappened = workerData.some((worker) => (worker as WorkerRecord).reloadHappened === true)
         if (reloadHappened) {
             eventProperties.finishedMetadata = { reason: 'session_reloaded' }
+        }
+        // SDK-6983: a signal-terminated run must be query-detectable — kill wins
+        // over reload as the finish reason.
+        if (config.killSignal) {
+            eventProperties.finishedMetadata = { reason: 'user_killed', signal: config.killSignal }
         }
     }
 

@@ -1,4 +1,4 @@
-import { getErrorString, stopBuildUpstream } from './util.js'
+import { getErrorString, stopBuildUpstream, uploadLogs } from './util.js'
 import { finalizeOrphanedRuns } from './testOps/openRunsJournal.js'
 import { BStackLogger } from './bstackLogger.js'
 import fs from 'node:fs'
@@ -19,6 +19,10 @@ export default class BStackCleanup {
                 const filePath = process.argv[index + 1]
                 funnelData = BStackCleanup.getFunnelDataFromFile(filePath)
             }
+            // Snapshot before sendFunnelData — fireFunnelRequest redacts the
+            // credentials in place.
+            const funnelUser = funnelData?.userName
+            const funnelKey = funnelData?.accessKey
 
             if (process.argv.includes('--observability') && funnelData) {
                 await this.executeObservabilityCleanup(funnelData)
@@ -26,6 +30,12 @@ export default class BStackCleanup {
 
             if (funnelDataCleanup && funnelData) {
                 await this.sendFunnelData(funnelData)
+            }
+
+            // SDK-6983: rescue the SDK-log upload for runs whose launcher never
+            // reached onComplete (signal termination) — after events, before exit.
+            if (process.argv.includes('--uploadLogs')) {
+                await this.executeLogsUpload(funnelUser, funnelKey)
             }
         } catch (err) {
             const error = err as string
@@ -38,6 +48,23 @@ export default class BStackCleanup {
             }
         } catch (er) {
             BStackLogger.debug(`Error in sending events data ${util.format(er)}`)
+        }
+    }
+
+    static async executeLogsUpload(funnelUser?: string, funnelKey?: string) {
+        try {
+            const index = process.argv.indexOf('--uploadLogs')
+            const clientBuildUuid = process.argv[index + 1]
+            const user = funnelUser || process.env.BROWSERSTACK_USERNAME
+            const key = funnelKey || process.env.BROWSERSTACK_ACCESS_KEY
+            if (!clientBuildUuid || !user || !key) {
+                BStackLogger.debug('Skipping logs upload in cleanup: missing uuid or credentials')
+                return
+            }
+            BStackLogger.debug(`Uploading SDK logs from cleanup for ${clientBuildUuid}`)
+            await uploadLogs(user, key, clientBuildUuid)
+        } catch (e: unknown) {
+            BStackLogger.error('Error uploading SDK logs in cleanup: ' + getErrorString(e))
         }
     }
     static async executeObservabilityCleanup(funnelData: FunnelData) {
