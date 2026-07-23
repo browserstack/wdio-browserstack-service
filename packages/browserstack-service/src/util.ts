@@ -1257,7 +1257,13 @@ export async function batchAndPostEvents (eventUrl: string, kind: string, data: 
             },
             body: JSON.stringify(data)
         })
-        BStackLogger.debug(`[${kind}] Success response: ${JSON.stringify(await response.json())}`)
+        // read as text first: error responses (401/5xx) and empty bodies are not JSON, and a blind
+        // response.json() surfaced them as a misleading "Unexpected end of JSON input"
+        const responseBody = await response.text()
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status} ${response.statusText}${responseBody ? ` — ${responseBody.slice(0, 300)}` : ' (empty body)'}`)
+        }
+        BStackLogger.debug(`[${kind}] Success response: ${responseBody}`)
     } catch (error) {
         BStackLogger.debug(`[${kind}] EXCEPTION IN ${kind} REQUEST TO TEST REPORTING AND ANALYTICS : ${error}`)
         throw new Error('Exception in request ' + error)

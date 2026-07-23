@@ -30,6 +30,7 @@ import PerformanceTester from './instrumentation/performance/performance-tester.
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import { EVENTS } from './instrumentation/performance/constants.js'
 import { BrowserstackCLI } from './cli/index.js'
+import { markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
 import { CLIUtils } from './cli/cliUtils.js'
 
 import { _fetch as fetch } from './fetchWrapper.js'
@@ -435,6 +436,14 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 if (hookFrameworkState) {
                     await framework.trackEvent(hookFrameworkState, HookState.POST, { test, result })
                 }
+                // a failed (or skipping) before/each hook silently drops the suite's remaining
+                // tests in mocha — report them as skipped so they surface on the dashboard and
+                // attribute their Automate session (port of the legacy insights-handler cascade)
+                const hookType = getHookType((test as Frameworks.Test).title)
+                const suite = (test as Frameworks.Test).ctx?.test?.parent
+                if (result && !result.passed && ['BEFORE_ALL', 'BEFORE_EACH', 'AFTER_EACH'].includes(hookType) && suite) {
+                    await reportSuiteSkipped(framework, suite)
+                }
             }
             return
         }
@@ -467,6 +476,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
             if (this._config.framework === 'mocha' && uuid) {
                 this._cliTestUuids.set(getUniqueIdentifier(test, this._config.framework), uuid as string)
             }
+            // this test reports its own finish (incl. runtime `this.skip()`), so the
+            // skip reporter must never re-report it from onTestSkip
+            markTestStarted(getUniqueIdentifier(test, this._config.framework))
             this._insightsHandler?.setTestData(test, uuid)
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
             return
