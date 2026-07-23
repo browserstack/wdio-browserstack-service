@@ -410,10 +410,17 @@ export default class WdioMochaTestFramework extends TestFramework {
 
             if (hooksList.length > 0) {
                 const hook = hooksList.pop() as Record<string, unknown>
-                const result = testResult.status
-                if (result !== TestFrameworkConstants.DEFAULT_HOOK_RESULT) {
-                    hook[TestFrameworkConstants.KEY_HOOK_RESULT] = result
+                // Derive the hook result from `passed`/`skipped` (mirroring loadTestResult) rather
+                // than `testResult.status`. WebdriverIO's hook wrapper populates { passed, error,
+                // skipped } but NOT `status`, so reading `.status` yielded undefined → the value was
+                // dropped on the wire (JSON.stringify) and the binary defaulted HookRunFinished.result
+                // to 'passed', hiding failed setup/teardown hooks. (SDK-7047)
+                const { passed, skipped } = testResult
+                let result = 'passed'
+                if (!passed) {
+                    result = skipped ? 'skipped' : 'failed'
                 }
+                hook[TestFrameworkConstants.KEY_HOOK_RESULT] = result
                 hook[TestFrameworkConstants.KEY_EVENT_ENDED_AT] = new Date().toISOString()
                 hooksFinished.get(key)?.push(hook)
                 updates[WdioMochaTestFramework.KEY_HOOK_LAST_FINISHED] = key
