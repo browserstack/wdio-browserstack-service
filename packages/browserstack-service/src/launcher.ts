@@ -408,7 +408,8 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         const shouldSetupPercy = this._options.percy || (isUndefined(this._options.percy) && this._options.app)
 
         let buildStartResponse = null
-        if (!BrowserstackCLI.getInstance().isRunning() && (this._options.testObservability || this._accessibilityAutomation || shouldSetupPercy)) {
+        const classicBuildStartAttempted = !BrowserstackCLI.getInstance().isRunning() && Boolean(this._options.testObservability || this._accessibilityAutomation || shouldSetupPercy)
+        if (classicBuildStartAttempted) {
             BStackLogger.debug('Sending launch start event')
 
             buildStartResponse = await launchTestSession(this._options, this._config, {
@@ -439,12 +440,14 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
         this.browserStackConfig.accessibility = this._accessibilityAutomation
 
-        // Mirror the accessibility fold-back above for observability: if observability was
-        // requested but the classic build-start was blocked/failed (BROWSERSTACK_OBSERVABILITY
-        // !== 'true'), fold that outcome into config so the session's buildProductMap reports
-        // observability:false instead of the originally-requested value. buildStartResponse is
-        // null when the CLI/gRPC flow owns the build-start, so this stays scoped to the classic flow.
-        const observabilityBuildStartBlocked = Boolean(buildStartResponse) && Boolean(this._options.testObservability) && !isTrue(process.env[BROWSERSTACK_OBSERVABILITY])
+        // Mirror the accessibility fold-back above for observability: if the classic build-start
+        // was attempted with observability requested but observability did not succeed
+        // (BROWSERSTACK_OBSERVABILITY !== 'true' — an explicit block sets 'false', a transport/parse
+        // failure leaves it unset because launchTestSession's error handler returns null), fold that
+        // outcome into config so the session's buildProductMap reports observability:false. Keying on
+        // the attempt (not on buildStartResponse being truthy) also covers the null-on-error case. The
+        // CLI/gRPC flow owns its own build-start, so classicBuildStartAttempted stays false there.
+        const observabilityBuildStartBlocked = classicBuildStartAttempted && Boolean(this._options.testObservability) && !isTrue(process.env[BROWSERSTACK_OBSERVABILITY])
         if (observabilityBuildStartBlocked) {
             this.browserStackConfig.testObservability.enabled = false
         }
