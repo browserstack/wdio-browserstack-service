@@ -5,7 +5,7 @@
 <!-- Add associated JIRA links -->
 
 ## Release (mandatory for every PR — required for the `ready-for-review` label)
-<!-- CI gates the `ready-for-review` label on the **version bump** and the **internal release notes** below. Customer-facing notes + type are optional but strongly encouraged for the daily release. -->
+<!-- CI gates the `ready-for-review` label on the **version bump** and the **internal release notes** below. Customer-facing notes + type are optional but strongly encouraged for the daily release. The changeset is generated automatically from this section (`.changeset/pr-<number>.md`) — you do NOT need to run `npx changeset`. Label the PR `skip-changeset` for CI/docs/chore PRs that shouldn't be released. -->
 
 **Version bump:** *(required — tick exactly one)*
 <!-- minor = ANY new feature/capability (backwards-compatible). patch = bug fix or trivial change only. New features mislabeled as patch is the common mistake — when unsure, choose minor. -->
