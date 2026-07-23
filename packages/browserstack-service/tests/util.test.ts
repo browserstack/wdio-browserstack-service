@@ -2255,3 +2255,30 @@ describe('isMultiRemoteCaps', () => {
         expect(isMultiRemoteCaps(capsWithNull as any)).toBe(false)
     })
 })
+
+describe('getCentralUser', () => {
+    const originalCentralUser = process.env.BROWSERSTACK_CENTRAL_USER
+
+    afterEach(() => {
+        if (originalCentralUser === undefined) {
+            delete process.env.BROWSERSTACK_CENTRAL_USER
+        } else {
+            process.env.BROWSERSTACK_CENTRAL_USER = originalCentralUser
+        }
+    })
+
+    it('returns { app_lcnc: true } when the central user is app_lcnc', () => {
+        process.env.BROWSERSTACK_CENTRAL_USER = 'app_lcnc'
+        expect(utils.getCentralUser()).toEqual({ app_lcnc: true })
+    })
+
+    it('returns { app_lcnc: false } when the central user env var is unset', () => {
+        delete process.env.BROWSERSTACK_CENTRAL_USER
+        expect(utils.getCentralUser()).toEqual({ app_lcnc: false })
+    })
+
+    it('returns { app_lcnc: false } for an unrecognised central user', () => {
+        process.env.BROWSERSTACK_CENTRAL_USER = 'some_other_user'
+        expect(utils.getCentralUser()).toEqual({ app_lcnc: false })
+    })
+})
