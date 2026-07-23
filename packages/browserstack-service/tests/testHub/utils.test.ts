@@ -27,7 +27,8 @@ describe('getProductMap', () => {
             'accessibility': false,
             'percy': false,
             'automate': true,
-            'app_automate': false
+            'app_automate': false,
+            'app_lcnc': false
         }
         expect(productMap).toEqual(expectedProductMap)
     })
