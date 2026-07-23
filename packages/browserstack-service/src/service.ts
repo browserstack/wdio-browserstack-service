@@ -431,9 +431,50 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // degrades quietly instead of throwing inside this awaited hook.
             const framework = BrowserstackCLI.getInstance().getTestFramework()
             if (framework) {
-                const hookFrameworkState = TestFrameworkState[getHookType((test as Frameworks.Test).title) as keyof typeof TestFrameworkState]
+                const hookType = getHookType((test as Frameworks.Test).title)
+                const hookFrameworkState = TestFrameworkState[hookType as keyof typeof TestFrameworkState]
                 if (hookFrameworkState) {
                     await framework.trackEvent(hookFrameworkState, HookState.POST, { test, result })
+                }
+
+                // A failed before-all / before-each / after-each hook makes mocha skip the
+                // remaining tests in the suite WITHOUT firing test:skip (mochajs/mocha#4392).
+                // In the legacy (HTTP listener) flow insights-handler.afterHook synthesises a
+                // TestRunSkipped for each such child; that listener path is inert in the CLI/v2
+                // pipeline, so those children would vanish from every dashboard bucket. Mirror the
+                // synthesis here over gRPC so the skipped children stay visible in the Skipped
+                // bucket, at parity with the legacy flow. (SDK-7047)
+                if (result && !result.passed &&
+                    (hookType === 'BEFORE_ALL' || hookType === 'BEFORE_EACH' || hookType === 'AFTER_EACH')) {
+                    try {
+                        const suiteTitle = this._suiteTitle
+                        const skippedResult = { passed: false, skipped: true } as unknown as Frameworks.TestResult
+                        const emitChildSkipped = async (child: Frameworks.Test) => {
+                            // Only children mocha never started (state === undefined) are the skipped ones;
+                            // passed/failed children already emitted their own TEST events.
+                            if ((child as unknown as { state?: string }).state === undefined) {
+                                await framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test: child })
+                                await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test: child, suiteTitle })
+                                // LOG_REPORT/POST is required — loadTestResult maps { skipped:true } → 'skipped' only here.
+                                await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: child, result: skippedResult })
+                                await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: child, result: skippedResult, suiteTitle })
+                            }
+                        }
+                        const walkSuite = async (suite: { tests: Frameworks.Test[], suites: unknown[] }) => {
+                            for (const childTest of suite.tests) {
+                                await emitChildSkipped(childTest)
+                            }
+                            for (const childSuite of suite.suites) {
+                                await walkSuite(childSuite as { tests: Frameworks.Test[], suites: unknown[] })
+                            }
+                        }
+                        const parent = (test as unknown as { ctx?: { test?: { parent?: { tests: Frameworks.Test[], suites: unknown[] } } } }).ctx?.test?.parent
+                        if (parent) {
+                            await walkSuite(parent)
+                        }
+                    } catch (skipErr) {
+                        BStackLogger.debug(`afterHook: failed to emit skipped children for a failed hook (CLI flow): ${util.format(skipErr)}`)
+                    }
                 }
             }
             return
