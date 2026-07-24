@@ -433,6 +433,82 @@ describe('afterScenario', () => {
     })
 })
 
+describe('beforeHook / afterHook (hook scans)', () => {
+    beforeEach(() => {
+        accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'mocha', true, false, accessibilityOpts)
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
+        accessibilityHandler['_sessionId'] = 'session123'
+    })
+
+    it('stamps the hook run uuid inside a supported mocha per-test hook', async () => {
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        await accessibilityHandler.beforeHook(
+            { title: '"before each" hook', parent: 'suite' } as any,
+            { currentTest: { parent: 'suite', title: 'test' } },
+            'hook-uuid-1'
+        )
+        expect(accessibilityHandler['_currentHookRunUuid']).toBe('hook-uuid-1')
+    })
+
+    it('clears the hook run uuid on afterHook so test-body scans are not stamped', async () => {
+        await accessibilityHandler.beforeHook(
+            { title: '"after each" hook', parent: 'suite' } as any,
+            { currentTest: { parent: 'suite', title: 'test' } },
+            'hook-uuid-2'
+        )
+        expect(accessibilityHandler['_currentHookRunUuid']).toBe('hook-uuid-2')
+        await accessibilityHandler.afterHook({ title: '"after each" hook' } as any, {}, { passed: true } as any, 'hook-uuid-2')
+        expect(accessibilityHandler['_currentHookRunUuid']).toBeNull()
+    })
+
+    it('does not stamp when the framework does not support hooks', async () => {
+        const jasmineHandler = new AccessibilityHandler(browser, caps, options, false, config, 'jasmine', true, false, accessibilityOpts)
+        jasmineHandler['_sessionId'] = 'session123'
+        await jasmineHandler.beforeHook({ title: '"before each" hook' } as any, {}, 'hook-uuid-3')
+        expect(jasmineHandler['_currentHookRunUuid']).toBeNull()
+    })
+
+    it('actually PASSES the hook uuid to performA11yScan for a scan fired inside a hook', async () => {
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        // enter a hook window -> sets the scan gate + _currentHookRunUuid
+        await accessibilityHandler.beforeHook(
+            { title: '"before each" hook', parent: 'suite' } as any,
+            { currentTest: { parent: 'suite', title: 'test' } },
+            'hook-uuid-42'
+        )
+        // simulate a wrapped DOM-changing command running inside the hook
+        const orig = vi.fn().mockResolvedValue('ok')
+        await accessibilityHandler['commandWrapper']({ name: 'click', class: 'Element' } as any, undefined as any, orig, 'arg')
+        expect(scanSpy).toHaveBeenCalled()
+        const lastCall = scanSpy.mock.calls[scanSpy.mock.calls.length - 1]
+        // performA11yScan(isAppAutomate, browser, isBS, isA11y, commandName, testName, hookRunUuid)
+        expect(lastCall[lastCall.length - 1]).toBe('hook-uuid-42')
+    })
+
+    it('does NOT stamp a hook uuid on a test-body scan (afterHook cleared it)', async () => {
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        await accessibilityHandler.beforeHook(
+            { title: '"before each" hook', parent: 'suite' } as any,
+            { currentTest: { parent: 'suite', title: 'test' } },
+            'hook-uuid-77'
+        )
+        await accessibilityHandler.afterHook() // hook ends -> uuid cleared, gate remains on
+        const orig = vi.fn().mockResolvedValue('ok')
+        await accessibilityHandler['commandWrapper']({ name: 'click', class: 'Element' } as any, undefined as any, orig, 'arg')
+        expect(scanSpy).toHaveBeenCalled()
+        const lastCall = scanSpy.mock.calls[scanSpy.mock.calls.length - 1]
+        expect(lastCall[lastCall.length - 1]).toBeNull()
+    })
+
+    it('_getParamsForAppAccessibility puts the hook uuid on the scan payload as thHookRunUuid', () => {
+        expect(utils._getParamsForAppAccessibility('click', 'testName', 'hook-uuid-9').thHookRunUuid).toBe('hook-uuid-9')
+        expect(utils._getParamsForAppAccessibility('click', 'testName').thHookRunUuid).toBeUndefined()
+    })
+})
+
 describe('beforeTest', () => {
     let executeAsyncSpy: any
     let executeSpy: any

@@ -28,6 +28,20 @@ export default class TestHubModule extends BaseModule {
     static MODULE_NAME = 'TestHubModule'
 
     /**
+     * Mocha-only: the TEST/POST (TestRunFinished) send deferred past the after-each hook
+     * window. WDIO fires `afterTest` (which triggers TEST/POST) BEFORE the user's
+     * `afterEach` hooks run, so custom tags set in `afterEach` would otherwise miss the
+     * event. The payload (`eventJson`) is serialized from the instance's live data map at
+     * SEND time, so deferring the send picks up those late merges; uuid / started_at /
+     * ended_at are already stamped in the data and do not drift. The stashed
+     * `args.instance` is the finished test's OWN object — INIT_TEST replaces the tracked
+     * slot with a fresh instance for the next test — so it stays valid across tests.
+     * Flushed at the next test's first event (INIT_TEST / TEST PRE) or, for the worker's
+     * last test, from service.after() via flushPendingTestFinishEvent().
+     */
+    private pendingTestFinish: { args: Record<string, unknown> } | null = null
+
+    /**
      * Create a new TestHubModule
      */
     constructor(testhubConfig: unknown) {
@@ -66,6 +80,13 @@ export default class TestHubModule extends BaseModule {
         const testState = instance.getCurrentTestState()
         const hookState = instance.getCurrentHookState()
         const keyTestDeferred = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_DEFERRED)
+
+        // A NEW test is starting (INIT_TEST minted a fresh instance) — the previous test's
+        // after-each hook window is definitively over, so flush its deferred finish first
+        // (payload build is synchronous, so gRPC send order is preserved).
+        if (this.pendingTestFinish && (testState === TestFrameworkState.INIT_TEST || (testState === TestFrameworkState.TEST && hookState === HookState.PRE))) {
+            this.flushPendingTestFinishEvent()
+        }
         if (testState === TestFrameworkState.LOG) {
             this.logger.debug(`onAllTestEvents: TestFrameworkState.LOG - ${testState}`)
             const logEntries = WdioMochaTestFramework.getLogEntries(instance, testState, hookState)
@@ -94,11 +115,41 @@ export default class TestHubModule extends BaseModule {
         }
 
         if (testState === TestFrameworkState.TEST || CLIUtils.matchHookRegex(testState.toString().split('.')[1])) {
-            this.sendTestFrameworkEvent(args)
+            const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
+            if (testState === TestFrameworkState.TEST && hookState === HookState.POST && frameworkName.toLowerCase().includes('mocha')) {
+                // Defer the TestRunFinished send past the Mocha after-each hook window so
+                // custom tags set in `afterEach` still make the payload (see field docs).
+                // If a previous finish is somehow still pending for a DIFFERENT test, flush
+                // it first; a re-stash for the same instance just replaces the stash.
+                if (this.pendingTestFinish && (this.pendingTestFinish.args.instance as TestFrameworkInstance) !== instance) {
+                    this.flushPendingTestFinishEvent()
+                }
+                this.pendingTestFinish = { args }
+                this.logger.debug('onAllTestEvents: deferred TEST/POST send past the after-each hook window')
+            } else {
+                this.sendTestFrameworkEvent(args)
+            }
         }
     }
 
-    async sendTestFrameworkEvent(args: Record<string, unknown>) {
+    /**
+     * Send a deferred TEST/POST (TestRunFinished) event, if one is pending. The instance's
+     * CURRENT state may have moved on (e.g. LOG events during afterEach), so the send uses
+     * an explicit TEST/POST state override; the payload data itself is read fresh from the
+     * instance so late custom-tag merges are included. Called from onAllTestEvents at the
+     * next test's boundary and from service.after() at worker end.
+     */
+    flushPendingTestFinishEvent(): Promise<void> | undefined {
+        if (!this.pendingTestFinish) {
+            return undefined
+        }
+        const { args } = this.pendingTestFinish
+        this.pendingTestFinish = null
+        this.logger.debug('flushPendingTestFinishEvent: sending deferred TEST/POST event')
+        return this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST' })
+    }
+
+    async sendTestFrameworkEvent(args: Record<string, unknown>, stateOverride?: { testFrameworkState: string, testHookState: string }) {
         try {
             const testArgs = args as { test: Frameworks.Test, instance: TestFrameworkInstance }
             const instance = testArgs.instance as TestFrameworkInstance
@@ -108,8 +159,8 @@ export default class TestHubModule extends BaseModule {
             const testFrameworkVersion = testData.get(TestFrameworkConstants.KEY_TEST_FRAMEWORK_VERSION) || ''
             const startedAt = testData.get(TestFrameworkConstants.KEY_TEST_STARTED_AT) || ''
             const endedAt = testData.get(TestFrameworkConstants.KEY_TEST_ENDED_AT) || ''
-            const testFrameworkState = instance.getCurrentTestState().toString().split('.')[1]
-            const testHookState = instance.getCurrentHookState().toString().split('.')[1]
+            const testFrameworkState = stateOverride?.testFrameworkState || instance.getCurrentTestState().toString().split('.')[1]
+            const testHookState = stateOverride?.testHookState || instance.getCurrentHookState().toString().split('.')[1]
 
             this.logger.debug(`sendTestFrameworkEvent for testState: ${testFrameworkState} hookState: ${testHookState}`)
             const platformIndex = process.env.WDIO_WORKER_ID ? parseInt(process.env.WDIO_WORKER_ID.split('-')[0]) : 0

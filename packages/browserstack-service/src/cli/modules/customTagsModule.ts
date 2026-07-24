@@ -7,10 +7,11 @@ import type AutomationFrameworkInstance from '../instances/automationFrameworkIn
 import type TestFrameworkInstance from '../instances/testFrameworkInstance.js'
 import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
+import { TestFrameworkState } from '../states/testFrameworkState.js'
 import { TestFrameworkConstants } from '../frameworks/constants/testFrameworkConstants.js'
 import { CLIUtils } from '../cliUtils.js'
 import WdioMochaTestFramework from '../frameworks/wdioMochaTestFramework.js'
-import { mergeIntoTags, parseCommaSeparatedValues } from '../../customTags.js'
+import { mergeIntoTags, parseCommaSeparatedValues, getCurrentMochaHookWindow } from '../../customTags.js'
 import type { CustomMetadata } from '../../customTags.js'
 
 /**
@@ -33,10 +34,20 @@ export default class CustomTagsModule extends BaseModule {
     name: string
     static MODULE_NAME = 'CustomTagsModule'
 
+    /**
+     * Tags set before a per-test context exists — e.g. from a `beforeEach` hook, which
+     * WDIO runs BEFORE `beforeTest` tracks the test instance. Buffered here and flushed
+     * into the test at test start (onBeforeTest), then reset per-test, so hook-set tags
+     * land on the test (parity with Java @Before). Process-local (one module per worker)
+     * and Mocha runs tests serially, so a plain object is safe.
+     */
+    private pendingTestLevelTags: CustomMetadata = {}
+
     constructor() {
         super()
         this.name = 'CustomTagsModule'
         AutomationFramework.registerObserver(AutomationFrameworkState.CREATE, HookState.POST, this.onBeforeExecute.bind(this))
+        TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
     }
 
     getModuleName() {
@@ -64,15 +75,26 @@ export default class CustomTagsModule extends BaseModule {
                         return
                     }
 
-                    const testInstance: TestFrameworkInstance = TestFramework.getTrackedInstance()
-                    if (!testInstance) {
-                        this.logger.warn('setCustomTags called outside of a resolvable test context; ignoring')
-                        return
-                    }
-
                     const values = parseCommaSeparatedValues(value)
                     if (values.length === 0) {
                         this.logger.warn(`setCustomTags: no usable values parsed from "${value}"; ignoring call`)
+                        return
+                    }
+
+                    // Route by the open Mocha hook window (recorded by the service layer —
+                    // the CLI framework never sees Mocha's beforeEach/afterEach):
+                    //   - before-each / before-all → the tag belongs to the UPCOMING test.
+                    //     The tracked instance is absent (first test) or still the PREVIOUS
+                    //     test here, so buffer and flush at test start (onBeforeTest).
+                    //   - after-each / after-all / in-test → the CURRENT tracked test. Its
+                    //     TestRunFinished send is deferred past the after-each window
+                    //     (TestHubModule), so late merges still make the payload.
+                    const hookWindow = getCurrentMochaHookWindow()
+                    const isPreTestWindow = hookWindow === 'before_each' || hookWindow === 'before_all'
+                    const testInstance: TestFrameworkInstance = TestFramework.getTrackedInstance()
+                    if (!testInstance || isPreTestWindow) {
+                        mergeIntoTags(this.pendingTestLevelTags, key, values)
+                        this.logger.debug(`setCustomTags: buffered pre-test tag key=${key} values=${JSON.stringify(values)} (window=${hookWindow ?? 'none'}; will flush at test start)`)
                         return
                     }
 
@@ -94,6 +116,39 @@ export default class CustomTagsModule extends BaseModule {
             }
         } catch (error) {
             this.logger.error(`Error in CustomTagsModule.onBeforeExecute: ${error}`)
+        }
+    }
+
+    /**
+     * At each test start (TEST/PRE — after beforeTest tracks the instance), flush any
+     * tags buffered before the test had a context (e.g. set in a `beforeEach` hook — see
+     * the setCustomTags closure) into the tracked instance's custom_metadata via the SAME
+     * merge path as explicit setCustomTags, then reset the buffer for the next test — so
+     * hook-set tags union onto the test (parity with Java @Before).
+     */
+    async onBeforeTest(args: Record<string, unknown>) {
+        try {
+            // Prefer the tracked instance (the SAME one the explicit setCustomTags closure
+            // reads/writes) so buffered and programmatic tags all union.
+            const testInstance = TestFramework.getTrackedInstance() || (args.instance as TestFrameworkInstance)
+            if (!testInstance) {
+                return
+            }
+
+            // Flush tags buffered before this test had a context (e.g. from beforeEach).
+            if (Object.keys(this.pendingTestLevelTags).length > 0) {
+                const buffered = (TestFramework.getState(testInstance, TestFrameworkConstants.KEY_CUSTOM_TAGS) as CustomMetadata) || {}
+                for (const [k, entry] of Object.entries(this.pendingTestLevelTags)) {
+                    mergeIntoTags(buffered, k, entry.values)
+                }
+                testInstance.updateMultipleEntries({
+                    [TestFrameworkConstants.KEY_CUSTOM_TAGS]: buffered
+                })
+                this.logger.debug(`setCustomTags: flushed buffered pre-test tags ${JSON.stringify(Object.keys(this.pendingTestLevelTags))} into test`)
+                this.pendingTestLevelTags = {}
+            }
+        } catch (error) {
+            this.logger.debug(`setCustomTags: error flushing buffered pre-test tags: ${error}`)
         }
     }
 
