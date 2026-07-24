@@ -12,6 +12,8 @@
  * node-agent quote-aware tokenizer (helper.js `parseCommaSeparatedValues`).
  */
 
+import { getHookType } from './util.js'
+
 export interface CustomMetadataEntry {
     field_type: 'multi_dropdown'
     values: string[]
@@ -130,4 +132,62 @@ export class CustomTagAccumulator {
             this.store.delete(testUuid)
         }
     }
+}
+
+/* --------------------------------------------------------------------------
+ * Mocha hook-window tracking.
+ *
+ * WDIO's Mocha runner fires user hooks OUTSIDE the SDK's test-tracking span:
+ * `beforeEach` runs before `beforeTest` (which creates/tracks the per-test
+ * instance), and `afterEach` runs after `afterTest` (which finishes the test).
+ * The CLI framework never sees these hooks, so a `setCustomTags` call made
+ * inside one cannot be routed by instance state alone — during the NEXT test's
+ * `beforeEach` the tracked instance is still the PREVIOUS test.
+ *
+ * The service layer (which does see WDIO's beforeHook/afterHook callbacks)
+ * records which Mocha hook window is currently open; the CLI CustomTagsModule
+ * reads it to route tags: before-each / before-all → buffer for the upcoming
+ * test; after-each / after-all → the current (tracked) test, whose
+ * TestRunFinished send is deferred past the hook window (see TestHubModule).
+ * Process-local; Mocha runs tests serially within a worker.
+ * ------------------------------------------------------------------------ */
+
+export type MochaHookWindow = 'before_each' | 'after_each' | 'before_all' | 'after_all' | null
+
+let currentMochaHookWindow: MochaHookWindow = null
+
+/**
+ * Classify a Mocha hook title (e.g. '"before each" hook: setup') into a window type.
+ * Derives from getHookType so this and the tracked hook-state — both computed from the
+ * same hook title in service.beforeHook — can never disagree. getHookType anchors on
+ * Mocha's generated '"before each"' prefix (startsWith), so a hook with a custom name
+ * that merely contains another window's phrase (e.g. afterEach('reset before each run'))
+ * is NOT misrouted, unlike a substring match.
+ */
+export function classifyMochaHookTitle(title: string | undefined | null): MochaHookWindow {
+    if (!title) {
+        return null
+    }
+    switch (getHookType(title)) {
+    case 'BEFORE_EACH':
+        return 'before_each'
+    case 'AFTER_EACH':
+        return 'after_each'
+    case 'BEFORE_ALL':
+        return 'before_all'
+    case 'AFTER_ALL':
+        return 'after_all'
+    default:
+        return null
+    }
+}
+
+/** Set by the service's beforeHook (mocha); cleared by afterHook. */
+export function setCurrentMochaHookWindow(window: MochaHookWindow): void {
+    currentMochaHookWindow = window
+}
+
+/** Read by the CLI CustomTagsModule to route setCustomTags calls made inside hooks. */
+export function getCurrentMochaHookWindow(): MochaHookWindow {
+    return currentMochaHookWindow
 }

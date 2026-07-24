@@ -19,6 +19,8 @@ import { DEFAULT_OPTIONS, NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV } from 
 import CrashReporter from './crash-reporter.js'
 import AccessibilityHandler from './accessibility-handler.js'
 import CustomTagsHandler from './custom-tags-handler.js'
+import { classifyMochaHookTitle, setCurrentMochaHookWindow } from './customTags.js'
+import type TestHubModule from './cli/modules/testHubModule.js'
 import { BStackLogger } from './bstackLogger.js'
 import PercyHandler from './Percy/Percy-Handler.js'
 import Listener from './testOps/listener.js'
@@ -30,6 +32,7 @@ import PerformanceTester from './instrumentation/performance/performance-tester.
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import { EVENTS } from './instrumentation/performance/constants.js'
 import { BrowserstackCLI } from './cli/index.js'
+import { markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
 import { CLIUtils } from './cli/cliUtils.js'
 
 import { _fetch as fetch } from './fetchWrapper.js'
@@ -389,6 +392,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
         if (this._config.framework !== 'cucumber') {
             this._currentTest = test as Frameworks.Test // not update currentTest when this is called for cucumber step
         }
+        // Record which Mocha hook window is open so custom-tag calls made inside user
+        // hooks route to the right test (the CLI framework never sees these hooks).
+        if (this._config.framework === 'mocha') {
+            setCurrentMochaHookWindow(classifyMochaHookTitle((test as Frameworks.Test).title))
+        }
 
         // CLI flow: route hook lifecycle to the binary via the TestFramework tracker (gRPC),
         // mirroring beforeTest/afterTest. Without this, hook events fall through to the legacy
@@ -410,10 +418,17 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         await this._insightsHandler?.beforeHook(test, context)
+        // Reuse the exact hook UUID InsightsHandler just reported to TestHub (HookRunStarted)
+        // so a11y hook scans carry a hook_run_uuid that matches the hook's BTCER row.
+        await this._accessibilityHandler?.beforeHook(test as Frameworks.Test, context, this._insightsHandler?.getCurrentHook()?.uuid)
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'afterHook' })
     async afterHook(test: Frameworks.Test | CucumberHook, context: unknown, result: Frameworks.TestResult) {
+        // The Mocha hook window is closed — clear the tracker (see beforeHook).
+        if (this._config.framework === 'mocha') {
+            setCurrentMochaHookWindow(null)
+        }
         // Track hook failures separately
         if (result && !result.passed) {
             const hookError = (result.error && result.error.message) || 'Hook failed'
@@ -435,11 +450,20 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 if (hookFrameworkState) {
                     await framework.trackEvent(hookFrameworkState, HookState.POST, { test, result })
                 }
+                // a failed (or skipping) before/each hook silently drops the suite's remaining
+                // tests in mocha — report them as skipped so they surface on the dashboard and
+                // attribute their Automate session (port of the legacy insights-handler cascade)
+                const hookType = getHookType((test as Frameworks.Test).title)
+                const suite = (test as Frameworks.Test).ctx?.test?.parent
+                if (result && !result.passed && ['BEFORE_ALL', 'BEFORE_EACH', 'AFTER_EACH'].includes(hookType) && suite) {
+                    await reportSuiteSkipped(framework, suite)
+                }
             }
             return
         }
 
         await this._insightsHandler?.afterHook(test, result)
+        await this._accessibilityHandler?.afterHook()
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeTest' })
@@ -467,6 +491,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
             if (this._config.framework === 'mocha' && uuid) {
                 this._cliTestUuids.set(getUniqueIdentifier(test, this._config.framework), uuid as string)
             }
+            // this test reports its own finish (incl. runtime `this.skip()`), so the
+            // skip reporter must never re-report it from onTestSkip
+            markTestStarted(getUniqueIdentifier(test, this._config.framework))
             this._insightsHandler?.setTestData(test, uuid)
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
             return
@@ -537,6 +564,15 @@ export default class BrowserstackService implements Services.ServiceInstance {
             }
 
             if (BrowserstackCLI.getInstance().isRunning()) {
+                // Flush a test-finish event deferred past the after-each hook window — the last
+                // test of the worker has no next-test boundary to trigger the flush. Must run
+                // before worker teardown so the event isn't dropped.
+                try {
+                    const testHubModule = BrowserstackCLI.getInstance().modules.TestHubModule as TestHubModule | undefined
+                    await testHubModule?.flushPendingTestFinishEvent()
+                } catch (flushErr) {
+                    BStackLogger.debug(`Exception flushing deferred test finish in after(): ${util.format(flushErr)}`)
+                }
                 await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.EXECUTE, HookState.POST, {})
             }
 
@@ -762,6 +798,12 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         this._reloadHappened = true
+        if (BrowserstackCLI.getInstance().isRunning()) {
+            const instance = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
+            if (instance) {
+                AutomationFramework.setState(instance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID, newSessionId)
+            }
+        }
 
         const { setSessionName, setSessionStatus } = this._options
         const ignoreHooksStatus = this._options.testObservabilityOptions?.ignoreHooksStatus === true

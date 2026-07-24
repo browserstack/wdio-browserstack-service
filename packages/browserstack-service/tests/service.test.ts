@@ -8,6 +8,8 @@ import * as utils from '../src/util.js'
 import InsightsHandler from '../src/insights-handler.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
 import * as bstackLogger from '../src/bstackLogger.js'
+import AutomationFramework from '../src/cli/frameworks/automationFramework.js'
+import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
@@ -205,6 +207,39 @@ describe('onReload()', () => {
             status: 'passed',
         })
         expect(service['_suiteTitle']).toEqual('my suite title')
+    })
+
+    it('should update framework session id on tracked instance when CLI is running', async () => {
+        const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({ isRunning: () => true } as any)
+        const trackedInstance = {} as any
+        const getTrackedInstanceSpy = vi.spyOn(AutomationFramework, 'getTrackedInstance').mockReturnValue(trackedInstance)
+        const setStateSpy = vi.spyOn(AutomationFramework, 'setState').mockImplementation(() => {})
+        const updateSpy = vi.spyOn(service, '_update').mockResolvedValue(undefined as any)
+        const printSpy = vi.spyOn(service, '_printSessionURL').mockResolvedValue(undefined as any)
+        service['_browser'] = browser
+
+        await service.onReload('1', '2')
+        expect(setStateSpy).toHaveBeenCalledWith(trackedInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID, '2')
+
+        getInstanceSpy.mockRestore()
+        getTrackedInstanceSpy.mockRestore()
+        setStateSpy.mockRestore()
+        updateSpy.mockRestore()
+        printSpy.mockRestore()
+    })
+
+    it('should not update framework session id when CLI is not running', async () => {
+        const setStateSpy = vi.spyOn(AutomationFramework, 'setState').mockImplementation(() => {})
+        const updateSpy = vi.spyOn(service, '_update').mockResolvedValue(undefined as any)
+        const printSpy = vi.spyOn(service, '_printSessionURL').mockResolvedValue(undefined as any)
+        service['_browser'] = browser
+
+        await service.onReload('1', '2')
+        expect(setStateSpy).not.toHaveBeenCalled()
+
+        setStateSpy.mockRestore()
+        updateSpy.mockRestore()
+        printSpy.mockRestore()
     })
 })
 
