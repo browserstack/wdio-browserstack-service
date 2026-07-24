@@ -8,7 +8,7 @@ import PerformanceTester from './instrumentation/performance/performance-tester.
 import TestOpsConfig from './testOps/testOpsConfig.js'
 import { BStackLogger } from './bstackLogger.js'
 import { BrowserstackCLI } from './cli/index.js'
-import { BROWSERSTACK_TESTHUB_UUID } from './constants.js'
+import { BROWSERSTACK_TESTHUB_UUID, BROWSERSTACK_KILL_SIGNAL } from './constants.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -71,6 +71,7 @@ export function setupExitHandlers() {
         process.on(sig, () => {
             BStackLogger.debug(`${sig} received, setting kill signal`)
             BrowserStackConfig.getInstance().setKillSignal(sig)
+            process.env[BROWSERSTACK_KILL_SIGNAL] = sig
         })
     })
 }
