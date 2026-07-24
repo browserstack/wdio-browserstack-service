@@ -571,9 +571,12 @@ export const formatString = (template: (string | null), ...values: (string | nul
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const _getParamsForAppAccessibility = ( commandName?: string, testName?: string ): { thTestRunUuid: any, thBuildUuid: any, thJwtToken: any, authHeader: any, scanTimestamp: number, method: string | undefined, testName: string | undefined  } => {
+export const _getParamsForAppAccessibility = ( commandName?: string, testName?: string, hookRunUuid?: string | null ): { thTestRunUuid: any, thHookRunUuid: any, thBuildUuid: any, thJwtToken: any, authHeader: any, scanTimestamp: number, method: string | undefined, testName: string | undefined  } => {
     return {
         'thTestRunUuid': process.env.TEST_ANALYTICS_ID,
+        // Present only when the scan fires inside a hook (dropped by JSON.stringify when undefined,
+        // so in-test scans are unchanged). SeleniumHub appAllyHandler relays this as `hook_run_uuid`.
+        'thHookRunUuid': hookRunUuid || undefined,
         'thBuildUuid': process.env.BROWSERSTACK_TESTHUB_UUID,
         'thJwtToken': process.env.BROWSERSTACK_TESTHUB_JWT,
         'authHeader': process.env.BSTACK_A11Y_JWT,
@@ -584,7 +587,7 @@ export const _getParamsForAppAccessibility = ( commandName?: string, testName?: 
 }
 
 /* eslint-disable  @typescript-eslint/no-explicit-any */
-export const performA11yScan = async (isAppAutomate: boolean, browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, isBrowserStackSession?: boolean, isAccessibility?: boolean | string,  commandName?: string, testName?: string,) : Promise<{ [key: string]: any; } | undefined> => {
+export const performA11yScan = async (isAppAutomate: boolean, browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, isBrowserStackSession?: boolean, isAccessibility?: boolean | string,  commandName?: string, testName?: string, hookRunUuid?: string | null,) : Promise<{ [key: string]: any; } | undefined> => {
 
     if (!isAccessibilityAutomationSession(isAccessibility)) {
         BStackLogger.warn('Not an Accessibility Automation session, cannot perform Accessibility scan.')
@@ -593,7 +596,7 @@ export const performA11yScan = async (isAppAutomate: boolean, browser: Webdriver
 
     try {
         if (isAppAccessibilityAutomationSession(isAccessibility, isAppAutomate)) {
-            const results: unknown = await (browser as WebdriverIO.Browser).execute(formatString(AccessibilityScripts.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName))) as string, {})
+            const results: unknown = await (browser as WebdriverIO.Browser).execute(formatString(AccessibilityScripts.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName, hookRunUuid))) as string, {})
             BStackLogger.debug(util.format(results as string))
             return ( results as { [key: string]: any; } | undefined )
         }
@@ -1257,7 +1260,13 @@ export async function batchAndPostEvents (eventUrl: string, kind: string, data: 
             },
             body: JSON.stringify(data)
         })
-        BStackLogger.debug(`[${kind}] Success response: ${JSON.stringify(await response.json())}`)
+        // read as text first: error responses (401/5xx) and empty bodies are not JSON, and a blind
+        // response.json() surfaced them as a misleading "Unexpected end of JSON input"
+        const responseBody = await response.text()
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status} ${response.statusText}${responseBody ? ` — ${responseBody.slice(0, 300)}` : ' (empty body)'}`)
+        }
+        BStackLogger.debug(`[${kind}] Success response: ${responseBody}`)
     } catch (error) {
         BStackLogger.debug(`[${kind}] EXCEPTION IN ${kind} REQUEST TO TEST REPORTING AND ANALYTICS : ${error}`)
         throw new Error('Exception in request ' + error)
