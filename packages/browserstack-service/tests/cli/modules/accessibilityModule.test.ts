@@ -51,7 +51,7 @@ vi.mock('../../../src/cli/grpcClient.js', () => ({
 }))
 
 import AccessibilityModule from '../../../src/cli/modules/accessibilityModule.js'
-import { validateCapsWithA11y, validateCapsWithAppA11y } from '../../../src/util.js'
+import { validateCapsWithA11y, validateCapsWithAppA11y, _getParamsForAppAccessibility } from '../../../src/util.js'
 import accessibilityScripts from '../../../src/scripts/accessibility-scripts.js'
 import TestFramework from '../../../src/cli/frameworks/testFramework.js'
 import AutomationFramework from '../../../src/cli/frameworks/automationFramework.js'
@@ -446,6 +446,73 @@ describe('AccessibilityModule', () => {
             expect(errorSpy).not.toHaveBeenCalledWith(
                 expect.stringContaining('Error in onBeforeExecute')
             )
+        })
+    })
+
+    // APPA11Y-5542: scans fired inside test hooks must carry the hook's run uuid
+    // (thHookRunUuid) so the backend (SeleniumHub appAllyScan -> hook_run_uuid) can
+    // reconcile them onto the wrapping test. onHookStart captures the uuid + opens the
+    // scan gate for the hook window; onHookEnd clears it so test-body scans are unstamped.
+    describe('onHookStart / onHookEnd (hook scans)', () => {
+        it('registers hook observers for every hook lifecycle state (PRE + POST)', () => {
+            for (const state of [
+                TestFrameworkState.BEFORE_ALL,
+                TestFrameworkState.BEFORE_EACH,
+                TestFrameworkState.AFTER_EACH,
+                TestFrameworkState.AFTER_ALL
+            ]) {
+                expect(TestFramework.registerObserver).toHaveBeenCalledWith(state, HookState.PRE, expect.any(Function))
+                expect(TestFramework.registerObserver).toHaveBeenCalledWith(state, HookState.POST, expect.any(Function))
+            }
+        })
+
+        it('captures the hook run uuid and opens the scan gate at hook start', async () => {
+            vi.mocked(TestFramework.getState).mockReturnValue('hook-uuid-123')
+            vi.mocked(AutomationFramework.getState).mockImplementation((instance: any, key: string) =>
+                (key.includes('session_id') ? 12345 : {}) as any)
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
+
+            expect(accessibilityModule.currentHookRunUuid).toBe('hook-uuid-123')
+            expect(accessibilityModule.accessibilityMap.get(12345)).toBe(true)
+        })
+
+        it('does not open the scan gate when accessibility is disabled', async () => {
+            accessibilityModule.accessibility = false
+            vi.mocked(TestFramework.getState).mockReturnValue('hook-uuid-123')
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
+
+            expect(accessibilityModule.currentHookRunUuid).toBe('hook-uuid-123')
+            expect(accessibilityModule.accessibilityMap.get(12345)).toBeUndefined()
+        })
+
+        it('clears the hook run uuid at hook end so later test-body scans are unstamped', async () => {
+            accessibilityModule.currentHookRunUuid = 'hook-uuid-123'
+
+            await accessibilityModule.onHookEnd()
+
+            expect(accessibilityModule.currentHookRunUuid).toBeNull()
+        })
+
+        it('threads the hook run uuid into the app scan payload (thHookRunUuid)', async () => {
+            accessibilityModule.accessibility = true
+            accessibilityModule.isAppAccessibility = true
+            mockBrowser.execute.mockResolvedValue({ scanned: true })
+
+            await (accessibilityModule as any).performScanCli(mockBrowser, 'click', 'hook-uuid-99')
+
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99')
+        })
+
+        it('passes no hook uuid for an ordinary (non-hook) app scan', async () => {
+            accessibilityModule.accessibility = true
+            accessibilityModule.isAppAccessibility = true
+            mockBrowser.execute.mockResolvedValue({ scanned: true })
+
+            await (accessibilityModule as any).performScanCli(mockBrowser, 'click')
+
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined)
         })
     })
 })

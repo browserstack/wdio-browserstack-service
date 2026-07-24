@@ -228,8 +228,8 @@ class Listener {
                     await batchAndPostEvents(DATA_BATCH_ENDPOINT, 'BATCH_DATA', data)
                     BStackLogger.debug('callback: marking events success ' + data.length)
                     this.eventsSuccess(data)
-                } catch {
-                    BStackLogger.debug('callback: marking events failed ' + data.length)
+                } catch (err) {
+                    BStackLogger.debug(`callback: marking events failed ${data.length} reason: ${err}`)
                     this.eventsFailed(data)
                 } finally {
                     this.pendingUploads -= 1

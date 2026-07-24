@@ -1,5 +1,28 @@
 # @wdio/browserstack-service
 
+## 9.32.0
+
+### Minor Changes
+
+- 9b80e47: Add a `skipAppOverride` service option for App Automate (Appium) runs. With `skipAppOverride: true` the service classifies the session as App Automate even when no `app` option is set, does not upload an app, and does not inject an `appium:app` capability — the user supplies the app reference themselves (e.g. a pre-uploaded `bs://` hash as a driver capability or via `BROWSERSTACK_APP_ID`). Setting it together with an `app` option logs a conflict warning and ignores the `app` option; `skipAppOverride: false` with no `app` fails fast with a configuration error before any session starts. Unset keeps existing behaviour unchanged.
+
+## 9.31.0
+
+### Minor Changes
+
+- bebf0f1: - App Accessibility scans triggered inside test hooks (`before`/`after`, `beforeEach`/`afterEach`) are now correctly attributed to the wrapping test instead of being dropped.
+- 517d64d: - Custom tags (`browser.setCustomTags`) set inside Mocha `beforeEach` / `afterEach` hooks now reliably land on the intended test's custom metadata, unioning and deduping with tags set in the test body (parity with Java `@Before` / `@After`).
+- 05fe529: Custom tags (`browser.setCustomTags`) set inside Mocha `beforeEach` / `afterEach` hooks now reliably land on the intended test's custom metadata. WDIO's Mocha runner fires user hooks outside the SDK's per-test tracking span — `beforeEach` runs before the test instance is tracked and `afterEach` runs after it is finished — so tags set in those hooks previously either attached to the wrong test or were dropped from the payload.
+
+  Tags set in `beforeEach` are now buffered and flushed onto the test at its start, and the test-finished event is deferred past the `afterEach` window so late tags still make the payload. Values set across `beforeEach`, the test body, and `afterEach` union and dedupe onto the test (parity with Java `@Before` / `@After`).
+
+## 9.30.2
+
+### Patch Changes
+
+- a43e534: - Fixed skipped tests (`it.skip`, `this.skip()` in before/beforeEach hooks) and suites aborted by a failed before hook not being reported to Test Observability when using the CLI.
+  - Fixed Automate sessions from skipped/aborted spec files not being linked to the Test Observability build.
+
 ## 9.30.1
 
 ### Patch Changes

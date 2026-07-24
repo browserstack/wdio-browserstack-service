@@ -571,9 +571,12 @@ export const formatString = (template: (string | null), ...values: (string | nul
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const _getParamsForAppAccessibility = ( commandName?: string, testName?: string ): { thTestRunUuid: any, thBuildUuid: any, thJwtToken: any, authHeader: any, scanTimestamp: number, method: string | undefined, testName: string | undefined  } => {
+export const _getParamsForAppAccessibility = ( commandName?: string, testName?: string, hookRunUuid?: string | null ): { thTestRunUuid: any, thHookRunUuid: any, thBuildUuid: any, thJwtToken: any, authHeader: any, scanTimestamp: number, method: string | undefined, testName: string | undefined  } => {
     return {
         'thTestRunUuid': process.env.TEST_ANALYTICS_ID,
+        // Present only when the scan fires inside a hook (dropped by JSON.stringify when undefined,
+        // so in-test scans are unchanged). SeleniumHub appAllyHandler relays this as `hook_run_uuid`.
+        'thHookRunUuid': hookRunUuid || undefined,
         'thBuildUuid': process.env.BROWSERSTACK_TESTHUB_UUID,
         'thJwtToken': process.env.BROWSERSTACK_TESTHUB_JWT,
         'authHeader': process.env.BSTACK_A11Y_JWT,
@@ -584,7 +587,7 @@ export const _getParamsForAppAccessibility = ( commandName?: string, testName?: 
 }
 
 /* eslint-disable  @typescript-eslint/no-explicit-any */
-export const performA11yScan = async (isAppAutomate: boolean, browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, isBrowserStackSession?: boolean, isAccessibility?: boolean | string,  commandName?: string, testName?: string,) : Promise<{ [key: string]: any; } | undefined> => {
+export const performA11yScan = async (isAppAutomate: boolean, browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, isBrowserStackSession?: boolean, isAccessibility?: boolean | string,  commandName?: string, testName?: string, hookRunUuid?: string | null,) : Promise<{ [key: string]: any; } | undefined> => {
 
     if (!isAccessibilityAutomationSession(isAccessibility)) {
         BStackLogger.warn('Not an Accessibility Automation session, cannot perform Accessibility scan.')
@@ -593,7 +596,7 @@ export const performA11yScan = async (isAppAutomate: boolean, browser: Webdriver
 
     try {
         if (isAppAccessibilityAutomationSession(isAccessibility, isAppAutomate)) {
-            const results: unknown = await (browser as WebdriverIO.Browser).execute(formatString(AccessibilityScripts.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName))) as string, {})
+            const results: unknown = await (browser as WebdriverIO.Browser).execute(formatString(AccessibilityScripts.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName, hookRunUuid))) as string, {})
             BStackLogger.debug(util.format(results as string))
             return ( results as { [key: string]: any; } | undefined )
         }
@@ -1257,7 +1260,13 @@ export async function batchAndPostEvents (eventUrl: string, kind: string, data: 
             },
             body: JSON.stringify(data)
         })
-        BStackLogger.debug(`[${kind}] Success response: ${JSON.stringify(await response.json())}`)
+        // read as text first: error responses (401/5xx) and empty bodies are not JSON, and a blind
+        // response.json() surfaced them as a misleading "Unexpected end of JSON input"
+        const responseBody = await response.text()
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status} ${response.statusText}${responseBody ? ` — ${responseBody.slice(0, 300)}` : ' (empty body)'}`)
+        }
+        BStackLogger.debug(`[${kind}] Success response: ${responseBody}`)
     } catch (error) {
         BStackLogger.debug(`[${kind}] EXCEPTION IN ${kind} REQUEST TO TEST REPORTING AND ANALYTICS : ${error}`)
         throw new Error('Exception in request ' + error)
@@ -1365,6 +1374,53 @@ export function isTrue(value?: unknown) {
 
 export function isFalse(value?: unknown) {
     return (value + '').toLowerCase() === 'false'
+}
+
+/**
+ * skipAppOverride validation chokepoint — ported from the Node SDK's
+ * validateSkipAppOverride (helper.js) / Java BrowserStackJavaAgent.processAppOptions.
+ * Called ONCE from the launcher (main process, pre-session). Emits the fixed warning,
+ * handles the three edge cases, and clears the app on conflict so it is neither uploaded
+ * nor injected. There is NO Tier-2 branch: every WebdriverIO test framework
+ * (mocha/jasmine/cucumber) supports App Automate.
+ *
+ * The standard warning and the edge-2 error are verbatim with the other BrowserStack SDKs
+ * (BrowserStackJavaAgent#processAppOptions). The edge-1 conflict warning is INTENTIONALLY adapted for
+ * WebdriverIO — it says "browserstack service options" (where WDIO reads `app`), not "browserstack.yml" —
+ * so please do NOT "fix" it back to the yml wording to match the other SDKs.
+ * Graceful: never throws except the deliberate edge-2 config error (explicit false + no app),
+ * which fires pre-session so the run aborts cleanly.
+ *
+ * Mutates `options.app` (edge-1). 3-state via isTrue/isFalse — never `!options.skipAppOverride`.
+ */
+export function validateSkipAppOverride(options?: BrowserstackConfig & BrowserstackOptions) {
+    if (isUndefined(options)) {
+        return
+    }
+
+    const skipAppOverride = (options as BrowserstackConfig).skipAppOverride
+    const alreadyWarned = isTrue(process.env.BROWSERSTACK_SKIP_APP_OVERRIDE_WARNED)
+
+    // Standard warning — fires whenever skipAppOverride is true, before any edge return.
+    if (isTrue(skipAppOverride) && !alreadyWarned) {
+        BStackLogger.warn('[BrowserStack] \'skipAppOverride: true\' is set. The SDK will treat this session as App Automate and will NOT manage app upload or inject app capabilities. If you intended to run an Automate (browser/website) session, remove \'skipAppOverride\' — leaving it set will cause Automate sessions to behave incorrectly.')
+        process.env.BROWSERSTACK_SKIP_APP_OVERRIDE_WARNED = 'true'
+    }
+
+    // Edge 1: app specified + skipAppOverride:true → warn, clear the app so it is not
+    // uploaded/injected, proceed App Automate.
+    if (isTrue(skipAppOverride) && !isUndefined((options as BrowserstackConfig).app)) {
+        BStackLogger.warn('Conflict detected. skipAppOverride: true is active; ignoring the app provided in the browserstack service options.')
+        ;(options as BrowserstackConfig).app = undefined
+        return
+    }
+
+    // Edge 2: app not specified + skipAppOverride explicitly false → pre-session config error.
+    if (isFalse(skipAppOverride) && isUndefined((options as BrowserstackConfig).app)) {
+        throw new Error('App capability is missing. When skipAppOverride is set to \'false\', a valid app capability (hash/shareable id/path/custom_id) must be provided.')
+    }
+
+    // Edge 3 (and default): unset + no app → unchanged behavior (no-op).
 }
 
 export function frameworkSupportsHook(hook: string, framework?: string) {
