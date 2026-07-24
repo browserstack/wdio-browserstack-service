@@ -148,18 +148,18 @@ jobs:
       - name: Notify Slack on gate failure
         if: steps.gate.outputs.applicable == 'true' && steps.gate.outputs.green != 'true'
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_PR_SLA_WEBHOOK }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_PR_DM_WEBHOOK }}
           PR_URL: "${{ github.server_url }}/${{ github.repository }}/pull/${{ steps.gate.outputs.pr_number }}"
           PR_REF: "${{ github.repository }}#${{ steps.gate.outputs.pr_number }}"
           REASON: ${{ steps.gate.outputs.reason }}
           AUTHOR: ${{ steps.gate.outputs.author }}
         run: |
           if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "SLACK_PR_SLA_WEBHOOK not configured — skipping Slack notification"
+            echo "SLACK_PR_DM_WEBHOOK not configured — skipping Slack notification"
             exit 0
           fi
           text=":no_entry: sdk-pr-review-gate is red on ${PR_REF} (author: ${AUTHOR}) — ${REASON} ${PR_URL}"
-          payload=$(jq -n --arg text "$text" '{text: $text}')
+          payload=$(jq -n --arg text "$text" --arg github_username "$AUTHOR" '{text: $text, github_username: $github_username}')
           curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
             -d "$payload" "$SLACK_WEBHOOK_URL" \
             || echo "Slack notify failed (non-fatal)"
