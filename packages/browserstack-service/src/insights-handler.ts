@@ -203,6 +203,12 @@ class _InsightsHandler {
         }
     }
 
+    /* Exposes the current hook run so other handlers (e.g. AccessibilityHandler) can
+       stamp the same hook UUID we report to TestHub as HookRunStarted. */
+    getCurrentHook(): CurrentRunInfo {
+        return this._currentHook
+    }
+
     async sendScenarioObjectSkipped(scenario: Scenario, feature: Feature, uri: string) {
         const testMetaData: TestMeta = {
             uuid: uuidv4(),

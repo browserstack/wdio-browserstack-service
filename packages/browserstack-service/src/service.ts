@@ -411,6 +411,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         await this._insightsHandler?.beforeHook(test, context)
+        // Reuse the exact hook UUID InsightsHandler just reported to TestHub (HookRunStarted)
+        // so a11y hook scans carry a hook_run_uuid that matches the hook's BTCER row.
+        await this._accessibilityHandler?.beforeHook(test as Frameworks.Test, context, this._insightsHandler?.getCurrentHook()?.uuid)
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'afterHook' })
@@ -449,6 +452,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         await this._insightsHandler?.afterHook(test, result)
+        await this._accessibilityHandler?.afterHook()
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeTest' })
