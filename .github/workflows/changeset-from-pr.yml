@@ -1,0 +1,102 @@
+name: Changeset from PR template
+
+# Auto-generates the changeset for a PR from its "## Release" section (the same
+# section the ready-for-review gate enforces), so engineers never hand-run
+# `npx changeset`. Reads the ticked version bump (minor/patch) + the release notes
+# and commits `.changeset/pr-<number>.md` to the PR branch. Idempotent: re-runs on
+# every body edit and only commits when the derived changeset actually changes, so
+# the bot's own push (which re-fires `synchronize`) settles in one no-op pass.
+#
+# Scope: skips forks (no write token — they add a changeset manually), the
+# changesets "Version Packages" PR (head `changeset-release/*`), and PRs labelled
+# `skip-changeset` (CI/docs/chore). The ready-for-review gate still independently
+# REQUIRES the bump + internal notes; this workflow only GENERATES when they're valid.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+
+concurrency:
+  group: changeset-from-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    if: >-
+      github.event.pull_request.state == 'open' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !startsWith(github.event.pull_request.head.ref, 'changeset-release/') &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-changeset')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Derive + commit the changeset from the Release section
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const PKG = '@wdio/browserstack-service';
+            const pr = context.payload.pull_request;
+            const body = pr.body || '';
+            const head = pr.head.ref;
+
+            // --- isolate the "## Release" block (mirrors ready-for-review-label.yml) ---
+            const releaseBlock = body.split(/(?=^## )/m)
+              .find(s => /^##[ \t]*Release[ \t]*(\(|$)/m.test(s)) || '';
+            if (!releaseBlock) {
+              core.info('No "## Release" section in the PR body — the ready-for-review gate flags this. Skipping changeset generation.');
+              return;
+            }
+
+            // Count bump ticks only BEFORE the first "Release notes (" header, so a
+            // checkbox-looking bullet inside the notes can never be mistaken for a bump.
+            const bumpRegion = releaseBlock.split(/^\*\*Release notes \(/m)[0];
+            const bumps = [...bumpRegion.matchAll(/- \[[xX]\]\s*(minor|patch)(?=\s|\(|$)/g)].map(m => m[1].toLowerCase());
+            if (bumps.length !== 1) {
+              core.info(`Expected exactly one version-bump tick (minor|patch), found ${bumps.length}. Skipping (ready-for-review gate flags this).`);
+              return;
+            }
+            const bump = bumps[0];
+
+            // Extract non-empty bullets under a "**Release notes (<label>):**" header,
+            // stopping at the next bold header; strip the header-line remainder + HTML comments.
+            const extractNotes = (label) => {
+              const parts = releaseBlock.split(new RegExp('^\\*\\*Release notes \\(' + label + '\\):\\*\\*', 'm'));
+              if (parts.length < 2) return '';
+              const region = parts[1].replace(/^[^\n]*\n?/, '').split(/^\*\*/m)[0].replace(/<!--[\s\S]*?-->/g, '');
+              return region.split('\n').map(l => l.trim())
+                .filter(l => /^[-*]\s+\S/.test(l))
+                .map(l => l.replace(/^[-*]\s+/, '- '))
+                .join('\n');
+            };
+            // Public CHANGELOG prefers the customer-facing notes; fall back to the
+            // (required) internal notes, then the PR title as a last resort.
+            const summary = extractNotes('customer-facing') || extractNotes('internal') || `- ${pr.title}`;
+
+            const content = `---\n"${PKG}": ${bump}\n---\n\n${summary}\n`;
+            const filePath = `.changeset/pr-${pr.number}.md`;
+
+            // Idempotent: only write when the derived changeset differs from what's on the branch.
+            let sha;
+            try {
+              const cur = await github.rest.repos.getContent({ ...context.repo, path: filePath, ref: head });
+              sha = cur.data.sha;
+              const existing = Buffer.from(cur.data.content, 'base64').toString('utf8');
+              if (existing === content) {
+                core.info('Changeset already up to date — no commit.');
+                return;
+              }
+            } catch (e) {
+              if (e.status !== 404) throw e; // 404 = file not yet present
+            }
+
+            await github.rest.repos.createOrUpdateFileContents({
+              ...context.repo,
+              path: filePath,
+              branch: head,
+              message: `chore(changeset): auto-generate from PR template (${bump})`,
+              content: Buffer.from(content).toString('base64'),
+              ...(sha ? { sha } : {}),
+            });
+            core.notice(`Wrote ${filePath} — bump: ${bump}\n${summary}`);
