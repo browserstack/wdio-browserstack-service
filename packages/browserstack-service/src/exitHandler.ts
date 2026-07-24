@@ -94,9 +94,8 @@ export function shouldCallCleanup(config: BrowserStackConfig, isCLIEnabled = fal
         args.push('--performanceData')
     }
 
-    // SDK-6983: a signal-terminated run never reaches onComplete's log upload,
-    // leaving the build with no SDK-log object — rescue it from the detached
-    // cleanup process.
+    // A signal-terminated run never reaches onComplete's log upload, leaving the
+    // build with no SDK-log object — rescue it from the detached cleanup process.
     const clientBuildUuid = process.env[BROWSERSTACK_TESTHUB_UUID] || config.sdkRunID
     if (!config.logsUploaded && config.userName && config.accessKey && clientBuildUuid) {
         args.push('--uploadLogs', clientBuildUuid)

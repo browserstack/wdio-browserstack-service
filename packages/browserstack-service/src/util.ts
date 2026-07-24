@@ -733,8 +733,8 @@ export const stopBuildUpstream = PerformanceTester.measureWrapper(PERFORMANCE_SD
     const data: Record<string, unknown> = {
         'stop_time': (new Date()).toISOString()
     }
-    // SDK-6983: stamp the kill reason onto the build record so terminated runs
-    // are identifiable server-side, not only via the analytics funnel.
+    // Stamp the kill reason onto the build record so terminated runs are
+    // identifiable server-side, not only via the analytics funnel.
     const killSignal = process.env[BROWSERSTACK_KILL_SIGNAL]
     if (killSignal) {
         data.finished_metadata = [{ reason: 'user_killed', signal: killSignal }]

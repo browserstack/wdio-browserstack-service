@@ -32,8 +32,8 @@ export default class BStackCleanup {
                 await this.sendFunnelData(funnelData)
             }
 
-            // SDK-6983: rescue the SDK-log upload for runs whose launcher never
-            // reached onComplete (signal termination) — after events, before exit.
+            // Rescue the SDK-log upload for runs whose launcher never reached
+            // onComplete (signal termination) — after events, before exit.
             if (process.argv.includes('--uploadLogs')) {
                 await this.executeLogsUpload(funnelUser, funnelKey)
             }

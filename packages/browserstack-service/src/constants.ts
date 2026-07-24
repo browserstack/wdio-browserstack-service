@@ -100,8 +100,8 @@ export const TESTOPS_SCREENSHOT_ENV = 'BS_TESTOPS_ALLOW_SCREENSHOTS'
 
 // To store build hashed id
 export const BROWSERSTACK_TESTHUB_UUID = 'BROWSERSTACK_TESTHUB_UUID'
-// SDK-6983: interrupt signal, propagated via env so the detached cleanup child
-// and gRPC stop path can stamp the kill reason onto the build stop.
+// Interrupt signal, propagated via env so the detached cleanup child and gRPC
+// stop path can stamp the kill reason onto the build stop.
 export const BROWSERSTACK_KILL_SIGNAL = 'BROWSERSTACK_SDK_KILL_SIGNAL'
 
 // To store test run uuid

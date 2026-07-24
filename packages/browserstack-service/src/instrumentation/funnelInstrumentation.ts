@@ -168,8 +168,8 @@ function buildEventData(eventType: string, config: BrowserStackConfig, isCLIEnab
         if (reloadHappened) {
             eventProperties.finishedMetadata = { reason: 'session_reloaded' }
         }
-        // SDK-6983: a signal-terminated run must be query-detectable — kill wins
-        // over reload as the finish reason.
+        // A signal-terminated run must be query-detectable — kill wins over
+        // reload as the finish reason.
         if (config.killSignal) {
             eventProperties.finishedMetadata = { reason: 'user_killed', signal: config.killSignal }
         }

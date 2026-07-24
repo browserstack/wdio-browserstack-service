@@ -261,7 +261,7 @@ export class GrpcClient {
             }
 
             const clientWorkerId = CLIUtils.getClientWorkerId()
-            // SDK-6983: forward the interrupt signal so the binary stamps
+            // Forward the interrupt signal so the binary stamps
             // finished_metadata on the build stop.
             const killSignal = process.env.BROWSERSTACK_SDK_KILL_SIGNAL
             const request = StopBinSessionRequestConstructor.create({
