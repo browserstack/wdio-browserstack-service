@@ -750,6 +750,11 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
         await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_UPLOAD_LOGS, async () => {
             const response = await uploadLogs(getBrowserStackUser(this._config), getBrowserStackKey(this._config), clientBuildUuid)
+            if (response) {
+                // A delivered upload must not be repeated by the exit-time
+                // cleanup rescue (SDK-6983).
+                this.browserStackConfig.logsUploaded = true
+            }
             BStackLogger.logToFile(`Response - ${format(response)}`, 'debug')
         })()
     }

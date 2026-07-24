@@ -3,7 +3,7 @@ import path from 'node:path'
 import BrowserStackConfig from './config.js'
 import { saveFunnelData } from './instrumentation/funnelInstrumentation.js'
 import { fileURLToPath } from 'node:url'
-import { BROWSERSTACK_TESTHUB_JWT } from './constants.js'
+import { BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_TESTHUB_UUID, BROWSERSTACK_KILL_SIGNAL } from './constants.js'
 import { BStackLogger } from './bstackLogger.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import TestOpsConfig from './testOps/testOpsConfig.js'
@@ -83,6 +83,7 @@ export function setupExitHandlers() {
         process.on(sig, () => {
             BStackLogger.debug(`${sig} received, setting kill signal`)
             BrowserStackConfig.getInstance().setKillSignal(sig)
+            process.env[BROWSERSTACK_KILL_SIGNAL] = sig
         })
     })
 
@@ -105,6 +106,14 @@ export function shouldCallCleanup(config: BrowserStackConfig, isCLIEnabled = fal
         process.env.PERF_TESTHUB_UUID = TestOpsConfig.getInstance().buildHashedId
         process.env.PERF_SDK_RUN_ID = config.sdkRunID
         args.push('--performanceData')
+    }
+
+    // SDK-6983: a signal-terminated run never reaches onComplete's log upload,
+    // leaving the build with no SDK-log object — rescue it from the detached
+    // cleanup process.
+    const clientBuildUuid = process.env[BROWSERSTACK_TESTHUB_UUID] || config.sdkRunID
+    if (!config.logsUploaded && config.userName && config.accessKey && clientBuildUuid) {
+        args.push('--uploadLogs', clientBuildUuid)
     }
 
     return args
