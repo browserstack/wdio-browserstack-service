@@ -752,7 +752,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             const response = await uploadLogs(getBrowserStackUser(this._config), getBrowserStackKey(this._config), clientBuildUuid)
             if (response) {
                 // A delivered upload must not be repeated by the exit-time
-                // cleanup rescue (SDK-6983).
+                // cleanup rescue.
                 this.browserStackConfig.logsUploaded = true
             }
             BStackLogger.logToFile(`Response - ${format(response)}`, 'debug')
