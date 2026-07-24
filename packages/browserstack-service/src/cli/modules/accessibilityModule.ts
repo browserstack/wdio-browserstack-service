@@ -18,6 +18,7 @@ import PerformanceTester from '../../instrumentation/performance/performance-tes
 import * as PERFORMANCE_SDK_EVENTS from '../../instrumentation/performance/constants.js'
 import type { FetchDriverExecuteParamsEventRequest, FetchDriverExecuteParamsEventResponse } from '../../grpc/index.js'
 import { GrpcClient } from '../grpcClient.js'
+import { TestFrameworkConstants } from '../frameworks/constants/testFrameworkConstants.js'
 
 export default class AccessibilityModule extends BaseModule {
 
@@ -34,6 +35,10 @@ export default class AccessibilityModule extends BaseModule {
     LOG_DISABLED_SHOWN: Map<number, boolean>
     testMetadata: Record<string, { [key: string]: unknown; }> = {}
     currentTestName: string | null = null
+    // The run uuid of the hook currently executing (set at hook PRE, cleared at hook POST).
+    // Any scan fired while this is set is stamped with it as thHookRunUuid so the backend
+    // (SeleniumHub appAllyScan → hook_run_uuid) can reconcile the scan onto the wrapping test.
+    currentHookRunUuid: string | null = null
 
     constructor(accessibilityConfig: Accessibility, isNonBstackA11y: boolean) {
         super()
@@ -42,6 +47,13 @@ export default class AccessibilityModule extends BaseModule {
         AutomationFramework.registerObserver(AutomationFrameworkState.CREATE, HookState.POST, this.onBeforeExecute.bind(this))
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.POST, this.onAfterTest.bind(this))
+        // Track the hook window for every hook state the framework supports. PRE captures the
+        // hook's run uuid + opens the scan gate; POST clears the uuid so later test-body scans
+        // are not mis-stamped as hook scans.
+        for (const hookFrameworkState of [TestFrameworkState.BEFORE_ALL, TestFrameworkState.BEFORE_EACH, TestFrameworkState.AFTER_EACH, TestFrameworkState.AFTER_ALL]) {
+            TestFramework.registerObserver(hookFrameworkState, HookState.PRE, this.onHookStart.bind(this))
+            TestFramework.registerObserver(hookFrameworkState, HookState.POST, this.onHookEnd.bind(this))
+        }
         this.accessibility = Boolean(accessibilityConfig)
         const accessibilityOptions = (BrowserstackCLI.getInstance().options as Record<string, unknown>)?.accessibilityOptions as { [key: string]: string | boolean | undefined }
         this.autoScanning = Boolean(accessibilityOptions?.autoScanning ?? true)
@@ -50,6 +62,44 @@ export default class AccessibilityModule extends BaseModule {
         this.LOG_DISABLED_SHOWN = new Map()
         this.isAppAccessibility = accessibilityConfig.isAppAccessibility || false
         this.isNonBstackA11y = isNonBstackA11y
+    }
+
+    async onHookStart(args: Record<string, unknown>) {
+        try {
+            const testInstance: TestFrameworkInstance = (args?.instance as TestFrameworkInstance) || TestFramework.getTrackedInstance()
+            // KEY_HOOK_ID is stamped on the instance at hook PRE (wdioMochaTestFramework.trackEvent)
+            // and is the SAME uuid reported to TestHub as the hook run, so a scan tagged with it can
+            // be self-joined onto the wrapping test in BTCER. Capture it FIRST — it needs only the
+            // test instance. The automation-framework instance (below) is required solely for the web
+            // per-command scan gate; on the app CLI path an explicit performScan() carries the uuid
+            // regardless, and autoInstance is not always resolvable at hook time — so gating the
+            // capture on autoInstance would silently drop app hook-scan stamping.
+            const hookRunUuid = testInstance ? (TestFramework.getState(testInstance, TestFrameworkConstants.KEY_HOOK_ID) as string | undefined) : undefined
+            this.currentHookRunUuid = hookRunUuid || null
+
+            const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
+            if (!testInstance || !autoInstance) {
+                return
+            }
+            const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
+
+            if (!this.accessibility) {
+                return
+            }
+            // Open the scan gate for the hook window so DOM-changing commands issued inside
+            // before/beforeEach/afterEach/after hooks trigger scans (web per-command path). The
+            // following onBeforeTest re-computes the per-test gate, so this only affects the hook.
+            if (this.autoScanning && sessionId !== undefined && sessionId !== null) {
+                this.accessibilityMap.set(sessionId, true)
+            }
+        } catch (error) {
+            this.logger.error(`Exception in accessibility onHookStart: ${error}`)
+        }
+    }
+
+    async onHookEnd() {
+        // Hook finished: subsequent (test-body) scans must not be stamped with the hook uuid.
+        this.currentHookRunUuid = null
     }
 
     async onBeforeExecute() {
@@ -116,7 +166,8 @@ export default class AccessibilityModule extends BaseModule {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
-                return await this.performScanCli(browser)
+                // If invoked from inside a hook, currentHookRunUuid stamps the scan for the hook.
+                return await this.performScanCli(browser, undefined, this.currentHookRunUuid)
             }
 
             (browser as WebdriverIO.Browser).startA11yScanning = async () => {
@@ -174,7 +225,7 @@ export default class AccessibilityModule extends BaseModule {
                     !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
                 ) {
                     try {
-                        await this.performScanCli(browser, command.name)
+                        await this.performScanCli(browser, command.name, this.currentHookRunUuid)
                         this.logger.debug(`Accessibility scan performed after ${command.name} command`)
                     } catch (scanError) {
                         this.logger.debug(`Error performing accessibility scan after ${command.name}: ${scanError}`)
@@ -244,7 +295,7 @@ export default class AccessibilityModule extends BaseModule {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
-                const results = await this.performScanCli(browser)
+                const results = await this.performScanCli(browser, undefined, this.currentHookRunUuid)
                 if (results){
                     const testIdentifier = String(testInstance.getContext().getId())
                     this.testMetadata[testIdentifier] = {
@@ -387,7 +438,8 @@ export default class AccessibilityModule extends BaseModule {
 
     private async performScanCli(
         browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser,
-        commandName?: string
+        commandName?: string,
+        hookRunUuid?: string | null
     ): Promise<Record<string, unknown> | undefined> {
         return await PerformanceTester.measureWrapper(
             PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.PERFORM_SCAN,
@@ -400,7 +452,7 @@ export default class AccessibilityModule extends BaseModule {
                     if (this.isAppAccessibility) {
                         const testName=this.currentTestName || undefined
                         const results: unknown = await (browser as WebdriverIO.Browser).execute(
-                            formatString(this.scriptInstance.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName))) as string,
+                            formatString(this.scriptInstance.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName, hookRunUuid))) as string,
                             {}
                         )
                         BStackLogger.debug(util.format(results as string))
