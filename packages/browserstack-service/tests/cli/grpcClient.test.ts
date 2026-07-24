@@ -129,6 +129,31 @@ describe('GrpcClient', () => {
 
             await expect(grpcClient.stopBinSession()).resolves.toBeUndefined()
         })
+
+        it('stamps exitSignal and user_killed reason when the kill-signal env is set', async () => {
+            process.env.BROWSERSTACK_SDK_KILL_SIGNAL = 'SIGINT'
+            const mockStopBinSession = vi.fn().mockImplementation((req, cb) => cb(null, {}))
+            grpcClient.client = { stopBinSession: mockStopBinSession } as any
+
+            await grpcClient.stopBinSession()
+
+            const request = mockStopBinSession.mock.calls[0][0]
+            expect(request.exitSignal).toBe('SIGINT')
+            expect(request.exitReason).toBe('user_killed')
+            delete process.env.BROWSERSTACK_SDK_KILL_SIGNAL
+        })
+
+        it('omits exit metadata when the kill-signal env is unset', async () => {
+            delete process.env.BROWSERSTACK_SDK_KILL_SIGNAL
+            const mockStopBinSession = vi.fn().mockImplementation((req, cb) => cb(null, {}))
+            grpcClient.client = { stopBinSession: mockStopBinSession } as any
+
+            await grpcClient.stopBinSession()
+
+            const request = mockStopBinSession.mock.calls[0][0]
+            expect(request.exitSignal).toBe('')
+            expect(request.exitReason).toBe('')
+        })
     })
 
     describe('connectBinSession', () => {
