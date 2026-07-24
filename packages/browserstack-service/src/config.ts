@@ -2,7 +2,7 @@ import type { AppConfig, BrowserstackConfig } from './types.js'
 import type { Capabilities, Options } from '@wdio/types'
 import { v4 as uuidv4 } from 'uuid'
 import TestOpsConfig from './testOps/testOpsConfig.js'
-import { isUndefined } from './util.js'
+import { isTrue, isUndefined } from './util.js'
 import { BStackLogger } from './bstackLogger.js'
 
 const APP_AUTOMATE_CAP_KEYS = ['appium:app', 'appium:bundleId', 'appium:appPackage', 'appium:appActivity'] as const
@@ -102,7 +102,10 @@ class BrowserStackConfig {
         this.percy = options.percy || false
         this.accessibility = options.accessibility
         this.app = options.app
-        this.appAutomate = !isUndefined(options.app) || detectAppAutomate(capabilities)
+        // `skipAppOverride: true` marks an App Automate run even when no `app` is set — the user
+        // supplies the app themselves via the appium:app driver capability, so classification must not
+        // depend on an app value being present. Mirrors isAppAutomateSession() in the Node SDK.
+        this.appAutomate = !isUndefined(options.app) || isTrue(options.skipAppOverride) || detectAppAutomate(capabilities)
         this.automate = !this.appAutomate
         this.buildIdentifier = options.buildIdentifier
         this.sdkRunID = uuidv4()
