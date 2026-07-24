@@ -1253,8 +1253,10 @@ export async function batchAndPostEvents (eventUrl: string, kind: string, data: 
                 limit: 3,
                 methods: ['GET', 'POST']
             }
-        }).json()
-        BStackLogger.debug(`[${kind}] Success response: ${JSON.stringify(response)}`)
+        })
+        // .json() threw a misleading "Unexpected end of JSON input" on empty 2xx bodies;
+        // non-2xx already surfaces as got's HTTPError with the status code
+        BStackLogger.debug(`[${kind}] Success response: ${response.body}`)
     } catch (error) {
         BStackLogger.debug(`[${kind}] EXCEPTION IN ${kind} REQUEST TO TEST Reporting and Analytics : ${error}`)
         throw new Error('Exception in request ' + error)

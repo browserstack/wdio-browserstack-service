@@ -44,7 +44,10 @@ export default class WdioMochaTestFramework extends TestFramework {
         }
 
         try {
-            if (CLIUtils.matchHookRegex(testFrameworkState.toString()) && hookState === HookState.PRE) {
+            // HOOK_REGEX is anchored (^BEFORE_|^AFTER_) — match the short state name; the
+            // fully-qualified `TestFrameworkState.BEFORE_ALL` never matches, so hook ids were
+            // never minted and hooks reached TRA with an empty uuid (dropped at ingestion).
+            if (CLIUtils.matchHookRegex(testFrameworkState.toString().split('.')[1]) && hookState === HookState.PRE) {
                 instance.updateMultipleEntries({
                     [TestFrameworkConstants.KEY_HOOK_ID]: uuidv4(),
                 })
@@ -93,13 +96,49 @@ export default class WdioMochaTestFramework extends TestFramework {
    * @returns {TestFrameworkInstance}
    */
     resolveInstance(testFrameworkState: State, hookState: State, args: Record<string, unknown> = {}): TestFrameworkInstance|null {
-        let instance = null
         logger.info(`resolveInstance: resolving instance for testFrameworkState=${testFrameworkState} hookState=${hookState}`)
-        if (testFrameworkState === TestFrameworkState.INIT_TEST || testFrameworkState === TestFrameworkState.NONE) {
+        const shortState = testFrameworkState.toString().split('.')[1]
+        const isHook = CLIUtils.matchHookRegex(shortState)
+        let instance = TestFramework.getTrackedInstance()
+
+        // Whether the current tracked instance has already run its test body.
+        const hasRunTest = !!(instance && TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_ID))
+
+        // New-test boundary (ports Junit5Framework.resolveInstance): the previous method was a
+        // test / after-hook (POST) and the current is a before-hook / init (PRE) — the next test
+        // is starting. At entry, getCurrentTestState()/getCurrentHookState() still hold the PREVIOUS
+        // method's state (updateInstanceState has not run yet).
+        const prevState = instance ? instance.getCurrentTestState().toString() : ''
+        const prevWasTerminal = instance ? (instance.getCurrentTestState() === TestFrameworkState.TEST || prevState.includes('AFTER')) : false
+        const isNewTestBoundary = instance ? (prevWasTerminal && instance.getCurrentHookState() === HookState.POST && hookState === HookState.PRE) : false
+
+        if (testFrameworkState === TestFrameworkState.NONE) {
             this.trackWdioMochaInstance(testFrameworkState, args)
+        } else if (testFrameworkState === TestFrameworkState.INIT_TEST) {
+            // WDIO fires `before each` BEFORE `beforeTest` (INIT_TEST). Reuse the instance a
+            // preceding before-hook already opened for this same upcoming test; only start a new
+            // one if the current instance has already run a test (or none exists).
+            if (!instance || hasRunTest) {
+                this.trackWdioMochaInstance(testFrameworkState, args)
+            }
+        } else if (isHook && hookState === HookState.PRE) {
+            // Suite-level (`before all`) and the first `before each` fire before any INIT_TEST, so
+            // no instance exists yet — create one. Also, a BEFORE hook right after a completed test
+            // (new-test boundary) starts a new test. The boundary restriction must be limited to
+            // BEFORE hooks: `after each`/`after all` also fire at a POST->PRE boundary (afterTest
+            // emits TEST POST just before `after each`), but they belong to the just-finished test.
+            // Creating a fresh (uuid-less) instance for them would drop test_run_id and orphan the
+            // hook from TestRunFinished.hooks — so let after-hooks reuse the finished test's instance.
+            if (!instance || (isNewTestBoundary && shortState.startsWith('BEFORE_'))) {
+                this.trackWdioMochaInstance(testFrameworkState, args)
+            }
         }
 
         instance = TestFramework.getTrackedInstance()
+        if (!instance) {
+            logger.error(`resolveInstance: unable to resolve/create instance for testFrameworkState=${testFrameworkState} hookState=${hookState}`)
+            return null
+        }
         this.updateInstanceState(instance, testFrameworkState, hookState)
 
         return instance
@@ -167,14 +206,18 @@ export default class WdioMochaTestFramework extends TestFramework {
     }
 
     loadTestResult(instance: TestFrameworkInstance, args: Record<string, unknown>) {
-        const results = args.result as Frameworks.TestResult
-        const { error, passed } = results
+        const results = args.result as Frameworks.TestResult & { skipped?: boolean }
+        const { error, passed, skipped } = results
         let result = 'passed'
         let failure: Array<unknown>|null = null
         let failureReason: string|null = null
         let failureType: string|null = null
         if (!passed) {
-            result = (error && error.message && error.message.includes('sync skip; aborting execution')) ? 'ignore' : 'failed'
+            if (skipped) {
+                result = 'skipped'
+            } else {
+                result = (error && error.message && error.message.includes('sync skip; aborting execution')) ? 'ignore' : 'failed'
+            }
             if (error && result !== 'skipped') {
                 failure = [{ backtrace: [removeAnsiColors(error.message), removeAnsiColors(error.stack || '')] }] // add all errors here
                 failureReason = removeAnsiColors(error.message)
@@ -319,7 +362,11 @@ export default class WdioMochaTestFramework extends TestFramework {
     ) {
         const testResult = args.result as Frameworks.TestResult
         const test = args.test as Frameworks.Test
-        const key = testFrameworkState.toString()
+        // Key hooks by the short state name (e.g. BEFORE_ALL), matching how the binary looks
+        // them up via `event.test_hooks_started[request.testFrameworkState]`. `toString()` yields
+        // the fully-qualified `TestFrameworkState.BEFORE_ALL`, which never matches — hook finishes
+        // were dropped with "unable to determine hook-finished".
+        const key = testFrameworkState.toString().split('.')[1]
 
         const hooksStarted = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOKS_STARTED) as Map<string, unknown[]>
         if (!hooksStarted.has(key)) {
@@ -358,7 +405,19 @@ export default class WdioMochaTestFramework extends TestFramework {
 
             if (hooksList.length > 0) {
                 const hook = hooksList.pop() as Record<string, unknown>
-                const result = testResult.status
+                // Frameworks.TestResult carries `passed`/`skipped`, not `status` — reading `.status`
+                // left hook_result at 'pending', which the binary coerces to 'passed' for any
+                // finished hook, so failed before-hooks showed green builds while CI exited 1.
+                // A this.skip() hook arrives as {passed: false, skipped: true} — a deliberate
+                // skip, not a failure.
+                // wdio v8's TestResult type does not declare `skipped`, but the runtime carries it
+                // wdio v8 does not set `skipped` for a this.skip() before-all — it surfaces as an
+                // error carrying mocha's sync-skip marker; treat both shapes as a deliberate skip
+                const skippedHook = (testResult as Frameworks.TestResult & { skipped?: boolean })?.skipped
+                    || !!testResult?.error?.message?.includes('sync skip; aborting execution')
+                const result = testResult
+                    ? (testResult.passed ? 'passed' : (skippedHook ? 'skipped' : 'failed'))
+                    : TestFrameworkConstants.DEFAULT_HOOK_RESULT
                 if (result !== TestFrameworkConstants.DEFAULT_HOOK_RESULT) {
                     hook[TestFrameworkConstants.KEY_HOOK_RESULT] = result
                 }
