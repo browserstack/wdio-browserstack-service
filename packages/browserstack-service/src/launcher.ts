@@ -637,7 +637,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.STOP, false, format(err))
             }
             if (process.env[BROWSERSTACK_OBSERVABILITY] && process.env[BROWSERSTACK_TESTHUB_UUID]) {
-                console.log(`\nVisit https://automation.browserstack.com/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]} to view build report, insights, and many more debugging information all at one place!\n`)
+                console.log(`\nVisit https://automation-rengg-lts.bsstag.com/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]} to view build report, insights, and many more debugging information all at one place!\n`)
             }
             this.browserStackConfig.testObservability.buildStopped = true
 
@@ -784,7 +784,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             Authorization: getBasicAuthHeader(this._config.user as string, this._config.key as string),
         }
 
-        const res = await fetch('https://api-cloud.browserstack.com/app-automate/upload', {
+        const res = await fetch('https://api-cloud-rengg-lts.bsstag.com/app-automate/upload', {
             method: 'POST',
             body: form,
             headers
