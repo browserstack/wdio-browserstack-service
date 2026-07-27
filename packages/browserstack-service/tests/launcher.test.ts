@@ -1388,6 +1388,27 @@ describe('_uploadServiceLogs', () => {
         delete process.env[BROWSERSTACK_TESTHUB_UUID]
     })
 
+    it('does not mark logsUploaded when the server rejects the upload', async () => {
+        vi.mocked(utils.uploadLogs).mockResolvedValueOnce({ status: 'error', message: 'File not attached' } as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+        await service._uploadServiceLogs()
+        expect((service as any).browserStackConfig.logsUploaded).toBe(false)
+    })
+
+    it('marks logsUploaded when the response status is success', async () => {
+        vi.mocked(utils.uploadLogs).mockResolvedValueOnce({ status: 'success' } as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+        await service._uploadServiceLogs()
+        expect((service as any).browserStackConfig.logsUploaded).toBe(true)
+    })
+
+    it('marks logsUploaded when the response carries no status field', async () => {
+        vi.mocked(utils.uploadLogs).mockResolvedValueOnce({ buildId: 'x' } as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+        await service._uploadServiceLogs()
+        expect((service as any).browserStackConfig.logsUploaded).toBe(true)
+    })
+
     const service = new BrowserstackLauncher(options as any, caps, config)
 })
 

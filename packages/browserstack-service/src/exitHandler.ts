@@ -3,15 +3,17 @@ import path from 'node:path'
 import BrowserStackConfig from './config.js'
 import { saveFunnelData } from './instrumentation/funnelInstrumentation.js'
 import { fileURLToPath } from 'node:url'
-import { BROWSERSTACK_TESTHUB_JWT } from './constants.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import TestOpsConfig from './testOps/testOpsConfig.js'
 import { BStackLogger } from './bstackLogger.js'
 import { BrowserstackCLI } from './cli/index.js'
-import { BROWSERSTACK_TESTHUB_UUID, BROWSERSTACK_KILL_SIGNAL } from './constants.js'
+import { BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_TESTHUB_UUID, BROWSERSTACK_KILL_SIGNAL } from './constants.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+const SIGNAL_EXIT_CODES: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGABRT: 6, SIGTERM: 15, SIGBREAK: 21 }
+const FORCED_EXIT_GRACE_MS = 5000
 
 function getInterruptSignals(): NodeJS.Signals[] {
     const allSignals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP']
@@ -72,6 +74,16 @@ export function setupExitHandlers() {
             BStackLogger.debug(`${sig} received, setting kill signal`)
             BrowserStackConfig.getInstance().setKillSignal(sig)
             process.env[BROWSERSTACK_KILL_SIGNAL] = sig
+
+            // Listening on a signal suppresses Node's default termination. Give the
+            // runner's own shutdown a grace window, then force the conventional 128+n
+            // exit — a hung shutdown would otherwise live until CI's SIGKILL, which
+            // fires no 'exit' event and skips the cleanup rescue. unref() so a
+            // naturally exiting process is never held open.
+            const timer = setTimeout(() => {
+                process.exit(128 + (SIGNAL_EXIT_CODES[sig] || 0))
+            }, FORCED_EXIT_GRACE_MS)
+            timer.unref()
         })
     })
 }

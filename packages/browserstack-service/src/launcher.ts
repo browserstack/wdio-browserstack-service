@@ -811,9 +811,11 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         // measureWrapper is no longer needed here.
         const clientBuildUuid = this._getClientBuildUuid()
         const response = await uploadLogs(getBrowserStackUser(this._config), getBrowserStackKey(this._config), clientBuildUuid)
-        if (response) {
-            // A delivered upload must not be repeated by the exit-time cleanup
-            // rescue; failed/skipped uploads stay eligible for it.
+        // Treat a truthy response carrying a non-success status as a server-side
+        // rejection, not a delivery — a delivered upload must not be repeated by
+        // the exit-time cleanup rescue; failed/skipped uploads stay eligible for it.
+        const delivered = !!response && !(response.status && response.status !== 'success')
+        if (delivered) {
             this.browserStackConfig.logsUploaded = true
             BStackLogger.info(`Upload response: ${JSON.stringify(response, null, 2)}`)
             BStackLogger.logToFile(`Response - ${format(response)}`, 'debug')
