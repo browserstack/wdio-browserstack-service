@@ -9,7 +9,9 @@ vi.mock('../../../src/cli/frameworks/testFramework.js', () => ({
 
 vi.mock('../../../src/cli/frameworks/automationFramework.js', () => ({
     default: {
-        registerObserver: vi.fn()
+        registerObserver: vi.fn(),
+        getTrackedInstance: vi.fn(),
+        getState: vi.fn()
     }
 }))
 
