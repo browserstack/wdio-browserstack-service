@@ -8,6 +8,8 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import PercyHandler from '../../Percy/Percy-Handler.js'
 import type { Capabilities } from '@wdio/types'
 import { TestFrameworkConstants } from '../frameworks/constants/testFrameworkConstants.js'
+import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
+import { hasAppCap, isTrue } from '../../util.js'
 import type TestFrameworkInstance from '../instances/testFrameworkInstance.js'
 
 export default class PercyModule extends BaseModule {
@@ -35,6 +37,21 @@ export default class PercyModule extends BaseModule {
         return PercyModule.MODULE_NAME
     }
 
+    // App supplied via the service `app` option / skipAppOverride, OR via an appium:app-style driver
+    // capability (which this.config does not carry) — resolved from the caps via the shared hasAppCap
+    // detector so Percy routes to the App Automate screenshot path. Mirrors automateModule.isAppAutomate().
+    private isAppAutomateSession(): boolean {
+        if ('app' in this.config || isTrue(this.config.skipAppOverride)) {
+            return true
+        }
+        if (hasAppCap(this.browser?.capabilities as WebdriverIO.Capabilities | undefined)) {
+            return true
+        }
+        const autoInstance = AutomationFramework.getTrackedInstance()
+        return [AutomationFrameworkConstants.KEY_INPUT_CAPABILITIES, AutomationFrameworkConstants.KEY_CAPABILITIES]
+            .some(key => hasAppCap(AutomationFramework.getState(autoInstance, key) as WebdriverIO.Capabilities | undefined))
+    }
+
     async onAfterCreate(args: Record<string, unknown>) {
         this.browser = args.browser as WebdriverIO.Browser
 
@@ -46,7 +63,7 @@ export default class PercyModule extends BaseModule {
             this.logger.warn('PercyModule: Percy capture mode is not defined in the configuration, skipping Percy initialization')
             return
         }
-        this.isAppAutomate = this.isAppAutomate || 'app' in this.config
+        this.isAppAutomate = this.isAppAutomate || this.isAppAutomateSession()
         this.percyHandler = new PercyHandler(
             (this.percyConfig as Record<string, unknown>).percyCaptureMode as string,
             this.browser,

@@ -554,6 +554,24 @@ export const isAccessibilityAutomationSession = (accessibilityFlag?: boolean | s
     return false
 }
 
+export const APP_AUTOMATE_CAP_KEYS = ['appium:app', 'appium:bundleId', 'appium:appPackage', 'appium:appActivity'] as const
+
+// An App Automate session is identified by an app capability on the driver caps
+// (appium:app / appium:bundleId / appium:appPackage / appium:appActivity / appium:options.app).
+// Shared by config-time detection and the CLI Automate/Percy modules so App-Automate
+// endpoint routing stays consistent across every place that resolves it from capabilities.
+export function hasAppCap(cap?: WebdriverIO.Capabilities): boolean {
+    if (!cap || typeof cap !== 'object') {
+        return false
+    }
+    const record = cap as Record<string, unknown>
+    if (APP_AUTOMATE_CAP_KEYS.some(key => !isUndefined(record[key]))) {
+        return true
+    }
+    const appiumOptions = record['appium:options'] as Record<string, unknown> | undefined
+    return !!(appiumOptions && !isUndefined(appiumOptions.app))
+}
+
 export const isAppAccessibilityAutomationSession = (accessibilityFlag?: boolean | string, isAppAutomate?: boolean) => {
     const accessibilityAutomation = isAccessibilityAutomationSession(accessibilityFlag)
     return accessibilityAutomation && isAppAutomate
