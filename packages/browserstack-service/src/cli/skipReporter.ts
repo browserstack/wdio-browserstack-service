@@ -36,6 +36,15 @@ export function markTestStarted(identifier: string) {
     startedTests.add(identifier)
 }
 
+// wdio does not await the reporter's onTestSkip hook, so a static `it.skip` reported through
+// reportSkippedTest can have its TEST/POST (TestRunFinished) still pending when the worker tears
+// down — the test then stays "in progress" on the dashboard. The awaited after() hook drains this
+// so the chain completes while the session is still open. (Hook-skip cascades go via
+// reportSuiteSkipped inside afterHook, which is already awaited, so they were unaffected.)
+export function drainSkipReports(): Promise<void> {
+    return reportChain
+}
+
 export function reportSkippedTest(framework: TestFramework, identifier: string, test: Frameworks.Test, suiteTitle?: string): Promise<void> {
     if (startedTests.has(identifier) || reportedSkips.has(identifier)) {
         return reportChain
