@@ -12,6 +12,9 @@ import { BrowserstackCLI } from './cli/index.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+const SIGNAL_EXIT_CODES: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGABRT: 6, SIGTERM: 15, SIGBREAK: 21 }
+const FORCED_EXIT_GRACE_MS = 5000
+
 function getInterruptSignals(): string[] {
     const allSignals: string[] = [
         'SIGTERM',
@@ -84,6 +87,16 @@ export function setupExitHandlers() {
             BStackLogger.debug(`${sig} received, setting kill signal`)
             BrowserStackConfig.getInstance().setKillSignal(sig)
             process.env[BROWSERSTACK_KILL_SIGNAL] = sig
+
+            // Listening on a signal suppresses Node's default termination. Give the
+            // runner's own shutdown a grace window, then force the conventional 128+n
+            // exit — a hung shutdown would otherwise live until CI's SIGKILL, which
+            // fires no 'exit' event and skips the cleanup rescue. unref() so a
+            // naturally exiting process is never held open.
+            const timer = setTimeout(() => {
+                process.exit(128 + (SIGNAL_EXIT_CODES[sig] || 0))
+            }, FORCED_EXIT_GRACE_MS)
+            timer.unref()
         })
     })
 

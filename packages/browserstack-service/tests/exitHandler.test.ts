@@ -1,9 +1,15 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { shouldCallCleanup } from '../src/exitHandler.js'
+import { shouldCallCleanup, setupExitHandlers } from '../src/exitHandler.js'
+import BrowserStackConfig from '../src/config.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import * as FunnelInstrumentation from '../src/instrumentation/funnelInstrumentation.js'
 import PerformanceTester from '../src/instrumentation/performance/performance-tester.js'
 import { BROWSERSTACK_TESTHUB_UUID } from '../src/constants.js'
+
+vi.mock('node:child_process', () => ({ spawn: vi.fn(() => ({ unref: vi.fn() })) }))
+vi.mock('../src/cli/index.js', () => ({
+    BrowserstackCLI: { getInstance: () => ({ isRunning: () => false, process: null }) }
+}))
 
 vi.spyOn(bstackLogger.BStackLogger, 'logToFile').mockImplementation(() => {})
 vi.spyOn(FunnelInstrumentation, 'saveFunnelData').mockReturnValue('funnel.json')
@@ -53,5 +59,33 @@ describe('shouldCallCleanup', () => {
     it('omits --uploadLogs when credentials are missing', () => {
         const args = shouldCallCleanup(makeConfig({ userName: undefined, accessKey: undefined }))
         expect(args).not.toContain('--uploadLogs')
+    })
+})
+
+describe('setupExitHandlers forced exit', () => {
+    let exitSpy: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+        vi.useFakeTimers()
+        exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+        vi.spyOn(BrowserStackConfig, 'getInstance').mockReturnValue({ setKillSignal: vi.fn() } as any)
+    })
+
+    afterEach(() => {
+        process.removeAllListeners('SIGTERM')
+        exitSpy.mockRestore()
+        vi.useRealTimers()
+        vi.restoreAllMocks()
+    })
+
+    it('forces the conventional 128+n exit once the grace window elapses', () => {
+        setupExitHandlers()
+        process.emit('SIGTERM' as NodeJS.Signals)
+
+        expect(exitSpy).not.toHaveBeenCalled()
+
+        vi.advanceTimersByTime(5000)
+
+        expect(exitSpy).toHaveBeenCalledWith(143)
     })
 })

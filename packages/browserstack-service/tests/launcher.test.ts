@@ -1406,6 +1406,15 @@ describe('_uploadServiceLogs', () => {
 
         expect((service as any).browserStackConfig.logsUploaded).toBe(false)
     })
+
+    it('leaves logsUploaded false when the server rejects the upload', async () => {
+        vi.spyOn(utils, 'uploadLogs').mockResolvedValueOnce({ status: 'error' } as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+
+        await service._uploadServiceLogs()
+
+        expect((service as any).browserStackConfig.logsUploaded).toBe(false)
+    })
 })
 
 describe('_getClientBuildUuid', () => {
