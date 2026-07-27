@@ -736,29 +736,45 @@ export const stopBuildUpstream = PerformanceTester.measureWrapper(PERFORMANCE_SD
         'stop_time': (new Date()).toISOString()
     }
 
-    try {
-        const url = `${APIUtils.DATA_ENDPOINT}/api/v1/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]}/stop`
-        const response = await fetch(url, {
-            method: 'PUT',
-            headers: {
-                ...DEFAULT_REQUEST_CONFIG.headers,
-                'Authorization': `Bearer ${process.env[BROWSERSTACK_TESTHUB_JWT]}`
-            },
-            body: JSON.stringify(data)
-        })
-        BStackLogger.debug(`[STOP_BUILD] Success response: ${await response.text()}`)
-        stopBuildUsage.success()
-        return {
-            status: 'success',
-            message: ''
+    const url = `${APIUtils.DATA_ENDPOINT}/api/v1/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]}/stop`
+    // SDK-7061: the build-stop PUT is the signal that closes the TRA build. A single
+    // best-effort request means a transient failure/timeout leaves the build running
+    // until the ~60-min server-side inactivity timeout. Retry with backoff and treat a
+    // non-2xx response as a failure so the build reliably reaches a terminal state.
+    const maxAttempts = 3
+    let lastError: unknown
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const response = await fetch(url, {
+                method: 'PUT',
+                headers: {
+                    ...DEFAULT_REQUEST_CONFIG.headers,
+                    'Authorization': `Bearer ${process.env[BROWSERSTACK_TESTHUB_JWT]}`
+                },
+                body: JSON.stringify(data)
+            })
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status} ${response.statusText}`)
+            }
+            BStackLogger.debug(`[STOP_BUILD] Success response: ${await response.text()}`)
+            stopBuildUsage.success()
+            return {
+                status: 'success',
+                message: ''
+            }
+        } catch (error: unknown) {
+            lastError = error
+            BStackLogger.debug(`[STOP_BUILD] Attempt ${attempt}/${maxAttempts} failed. Error: ${error}`)
+            if (attempt < maxAttempts) {
+                await new Promise((resolve) => setTimeout(resolve, 500 * attempt))
+            }
         }
-    } catch (error: unknown) {
-        stopBuildUsage.failed(error)
-        BStackLogger.debug(`[STOP_BUILD] Failed. Error: ${error}`)
-        return {
-            status: 'error',
-            message: (error as Error).message
-        }
+    }
+    stopBuildUsage.failed(lastError)
+    BStackLogger.debug(`[STOP_BUILD] Failed after ${maxAttempts} attempts. Error: ${lastError}`)
+    return {
+        status: 'error',
+        message: (lastError as Error)?.message ?? 'stop build failed'
     }
 }))
 

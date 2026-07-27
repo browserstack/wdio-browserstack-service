@@ -64,6 +64,7 @@ import { BrowserstackCLI } from './cli/index.js'
 import { CLIUtils } from './cli/cliUtils.js'
 import accessibilityScripts from './scripts/accessibility-scripts.js'
 import { _fetch as fetch } from './fetchWrapper.js'
+import { startBuildWatchdog, deleteBuildWatchdogMarker } from './buildWatchdogMarker.js'
 
 type BrowserstackLocal = BrowserstackLocalLauncher.Local & {
     pid?: number
@@ -433,6 +434,13 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }, this.browserStackConfig, this._accessibilityAutomation)
         }
 
+        // SDK-7061: for the direct-HTTP TRA path (CLI manages its own lifecycle), start a
+        // detached watchdog that stops the build if the launcher is hard-killed (kill -9 /
+        // OOM) before onComplete or the exit hook can send the stop PUT. Best-effort only.
+        if (!BrowserstackCLI.getInstance().isRunning() && this._options.testObservability) {
+            startBuildWatchdog()
+        }
+
         //added checks for Accessibility running on non-bstack infra
         if (isAccessibilityAutomationSession(this._accessibilityAutomation) && (process.env.BROWSERSTACK_TURBOSCALE || !shouldAddServiceVersion(this._config, this._options.testObservability))){
             const overrideOptions: Partial<Capabilities.ChromeOptions> = accessibilityScripts.ChromeExtension
@@ -609,8 +617,12 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             // SDK-4671: before stopping the build, synthesize TestRunFinished for any
             // test runs whose worker died mid-test, else they stay 'in progress' on TRA.
             await finalizeOrphanedRuns()
+            // SDK-7061: capture the stop result so we only mark the build stopped when it
+            // actually succeeded. A failed stop must leave buildStopped=false so the
+            // process-exit cleanup re-stop path can still close the build.
+            let stopResult: { status?: string } | undefined
             try {
-                await (isCLIEnabled ? BrowserstackCLI.getInstance().stop() : stopBuildUpstream())
+                stopResult = await (isCLIEnabled ? BrowserstackCLI.getInstance().stop() : stopBuildUpstream()) as { status?: string } | undefined
                 PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.STOP)
             } catch (err) {
                 BStackLogger.error(`Error while stopping CLI ${err}`)
@@ -619,7 +631,15 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             if (process.env[BROWSERSTACK_OBSERVABILITY] && process.env[BROWSERSTACK_TESTHUB_UUID]) {
                 console.log(`\nVisit https://automation.browserstack.com/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]} to view build report, insights, and many more debugging information all at one place!\n`)
             }
-            this.browserStackConfig.testObservability.buildStopped = true
+            // CLI path manages its own build lifecycle; for the direct-HTTP path only
+            // mark stopped when stopBuildUpstream returned success (SDK-7061).
+            if (isCLIEnabled || stopResult?.status === 'success') {
+                this.browserStackConfig.testObservability.buildStopped = true
+            }
+
+            // SDK-7061: clean shutdown reached — retire the watchdog so it does not
+            // double-send the stop for a build we just stopped here.
+            deleteBuildWatchdogMarker()
 
             await PerformanceTester.stopAndGenerate('performance-launcher.html')
             if (process.env[PERF_MEASUREMENT_ENV]) {

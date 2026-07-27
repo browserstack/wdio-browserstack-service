@@ -4,6 +4,7 @@ import { BStackLogger } from './bstackLogger.js'
 import fs from 'node:fs'
 import util from 'node:util'
 import { fireFunnelRequest } from './instrumentation/funnelInstrumentation.js'
+import { deleteBuildWatchdogMarker } from './buildWatchdogMarker.js'
 import { BROWSERSTACK_TESTHUB_UUID, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_OBSERVABILITY } from './constants.js'
 import type { FunnelData } from './types.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
@@ -50,6 +51,9 @@ export default class BStackCleanup {
             // before the build itself is stopped.
             await finalizeOrphanedRuns()
             const result = await stopBuildUpstream()
+            // SDK-7061: the exit hook stopped the build — retire the watchdog so it does
+            // not double-send the stop for the same build.
+            deleteBuildWatchdogMarker()
             if ((process.env[BROWSERSTACK_OBSERVABILITY]) && process.env[BROWSERSTACK_TESTHUB_UUID]) {
                 BStackLogger.info(`\nVisit https://automation.browserstack.com/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]} to view build report, insights, and many more debugging information all at one place!\n`)
             }
