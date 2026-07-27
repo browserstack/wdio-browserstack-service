@@ -1,5 +1,23 @@
 # @wdio/browserstack-service
 
+## 9.32.1
+
+### Patch Changes
+
+- aefd604: - Fixed a statically-skipped test (`it.skip`) being left orphaned as "in progress" on the Test Observability dashboard in the CLI flow. Such tests are reported from the un-awaited `onTestSkip` reporter hook, so their `TestRunFinished` event could still be pending when the worker tore down; the `after()` hook now drains these skip reports before the session closes so the test is correctly reported as skipped.
+- 1a973e9: - fix: Accessibility command wrapping.
+- a24973b: - Fixed Test Observability not being fully disabled for a run when the build could not be started (e.g. an unsupported framework) — such sessions no longer emit observability events or get linked to a non-existent build.
+- 8539e5f: fix(a11y): restore per-command auto-scanning for App Automate accessibility sessions
+
+  App Automate accessibility sessions were skipped by the per-command `overwriteCommand`
+  wrapping in `onBeforeExecute` (guarded to `!isAppAccessibility`), so app a11y scans only
+  fired via an explicit `performScan()` or the end-of-test lifecycle scan — per-command
+  auto-scanning that web sessions get was effectively disabled for app. Command wrapping now
+  applies to app sessions too, with each `overwriteCommand` call individually guarded so a
+  command the appium driver does not register is skipped (logged at debug) instead of aborting
+  `onBeforeExecute`. Commands appium does register (`click`, `setValue`, ...) now auto-scan on
+  App Automate, matching the web flow.
+
 ## 9.32.0
 
 ### Minor Changes
