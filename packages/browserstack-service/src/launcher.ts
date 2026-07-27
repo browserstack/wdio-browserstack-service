@@ -46,7 +46,8 @@ import {
     mergeChromeOptions,
     isValidEnabledValue,
     isMultiRemoteCaps,
-    coerceStringBooleans
+    coerceStringBooleans,
+    validateSkipAppOverride
 } from './util.js'
 import CrashReporter from './crash-reporter.js'
 import { finalizeOrphanedRuns } from './testOps/openRunsJournal.js'
@@ -249,6 +250,18 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
     async onPrepare (config: Options.Testrunner, capabilities: Capabilities.TestrunnerCapabilities | WebdriverIO.Capabilities) {
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.INIT)
 
+        // skipAppOverride: emit the fixed warning once + handle the 3 edge cases before anything
+        // else. Runs once here in the launcher (main process). Edge-2 (explicit false + no app) is a
+        // deliberate pre-session config error, surfaced as SevereServiceError so the run aborts cleanly.
+        try {
+            validateSkipAppOverride(this._options)
+        } catch (error) {
+            throw new SevereServiceError((error as Error).message)
+        }
+        // Keep the config singleton consistent: validateSkipAppOverride clears this._options.app on the
+        // edge-1 conflict, but browserStackConfig.app was copied earlier in the constructor.
+        this.browserStackConfig.app = this._options.app
+
         // Send Funnel start request
         await sendStart(this.browserStackConfig)
 
@@ -408,7 +421,8 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         const shouldSetupPercy = this._options.percy || (isUndefined(this._options.percy) && this._options.app)
 
         let buildStartResponse = null
-        if (!BrowserstackCLI.getInstance().isRunning() && (this._options.testObservability || this._accessibilityAutomation || shouldSetupPercy)) {
+        const classicBuildStartAttempted = !BrowserstackCLI.getInstance().isRunning() && Boolean(this._options.testObservability || this._accessibilityAutomation || shouldSetupPercy)
+        if (classicBuildStartAttempted) {
             BStackLogger.debug('Sending launch start event')
 
             buildStartResponse = await launchTestSession(this._options, this._config, {
@@ -438,6 +452,18 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         }
 
         this.browserStackConfig.accessibility = this._accessibilityAutomation
+
+        // Mirror the accessibility fold-back above for observability: if the classic build-start
+        // was attempted with observability requested but observability did not succeed
+        // (BROWSERSTACK_OBSERVABILITY !== 'true' — an explicit block sets 'false', a transport/parse
+        // failure leaves it unset because launchTestSession's error handler returns null), fold that
+        // outcome into config so the session's buildProductMap reports observability:false. Keying on
+        // the attempt (not on buildStartResponse being truthy) also covers the null-on-error case. The
+        // CLI/gRPC flow owns its own build-start, so classicBuildStartAttempted stays false there.
+        const observabilityBuildStartBlocked = classicBuildStartAttempted && Boolean(this._options.testObservability) && !isTrue(process.env[BROWSERSTACK_OBSERVABILITY])
+        if (observabilityBuildStartBlocked) {
+            this.browserStackConfig.testObservability.enabled = false
+        }
 
         if (this._accessibilityAutomation && this._options.accessibilityOptions) {
             // SDK-3737: coerce stringified booleans (e.g. autoScanning: 'false') to real
@@ -473,7 +499,14 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }
         }
 
-        this._updateCaps(capabilities as Capabilities.TestrunnerCapabilities, 'testhubBuildUuid')
+        // Skip stamping testhubBuildUuid only when the observability build-start was blocked
+        // and no other TestHub product (accessibility) succeeded — otherwise the Automate
+        // session gets orphan-linked to a TestHub build that was never created (a blocked
+        // build-start still returns a build_hashed_id), keeping it counted as an SDK
+        // observability session. Every other case keeps the prior behavior.
+        if (!(observabilityBuildStartBlocked && !this._accessibilityAutomation)) {
+            this._updateCaps(capabilities as Capabilities.TestrunnerCapabilities, 'testhubBuildUuid')
+        }
         this._updateCaps(capabilities as Capabilities.TestrunnerCapabilities, 'buildProductMap')
 
         if (isValidEnabledValue(this._options.testOrchestrationOptions?.runSmartSelection?.enabled)){
