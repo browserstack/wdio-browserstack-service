@@ -56,7 +56,11 @@ export const shouldProcessEventForTesthub = (eventType: string): boolean => {
     if (isTrue(process.env[BROWSERSTACK_PERCY]) && eventType) {
         return false
     }
-    return Boolean(process.env[BROWSERSTACK_ACCESSIBILITY] || process.env[BROWSERSTACK_OBSERVABILITY] || process.env[BROWSERSTACK_PERCY])!
+    // Evaluate with isTrue so a product flag explicitly set to the string 'false'
+    // (e.g. observability turned off after a failed/blocked build-start) reads as
+    // off. Raw Boolean('false') is truthy, which kept events flowing for an
+    // observability-only session even after the flag was disabled.
+    return isTrue(process.env[BROWSERSTACK_ACCESSIBILITY]) || isTrue(process.env[BROWSERSTACK_OBSERVABILITY]) || isTrue(process.env[BROWSERSTACK_PERCY])
 }
 
 export const handleErrorForObservability = (error: Errors | null): void => {

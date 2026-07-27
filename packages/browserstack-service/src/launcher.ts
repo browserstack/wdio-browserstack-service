@@ -422,7 +422,8 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         const shouldSetupPercy = this._options.percy || (isUndefined(this._options.percy) && this._options.app)
 
         let buildStartResponse = null
-        if (!BrowserstackCLI.getInstance().isRunning() && (this._options.testObservability || this._accessibilityAutomation || shouldSetupPercy)) {
+        const classicBuildStartAttempted = !BrowserstackCLI.getInstance().isRunning() && Boolean(this._options.testObservability || this._accessibilityAutomation || shouldSetupPercy)
+        if (classicBuildStartAttempted) {
             BStackLogger.debug('Sending launch start event')
 
             buildStartResponse = await launchTestSession(this._options, this._config, {
@@ -460,6 +461,18 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
         this.browserStackConfig.accessibility = this._accessibilityAutomation
 
+        // Mirror the accessibility fold-back above for observability: if the classic build-start
+        // was attempted with observability requested but observability did not succeed
+        // (BROWSERSTACK_OBSERVABILITY !== 'true' — an explicit block sets 'false', a transport/parse
+        // failure leaves it unset because launchTestSession's error handler returns null), fold that
+        // outcome into config so the session's buildProductMap reports observability:false. Keying on
+        // the attempt (not on buildStartResponse being truthy) also covers the null-on-error case. The
+        // CLI/gRPC flow owns its own build-start, so classicBuildStartAttempted stays false there.
+        const observabilityBuildStartBlocked = classicBuildStartAttempted && Boolean(this._options.testObservability) && !isTrue(process.env[BROWSERSTACK_OBSERVABILITY])
+        if (observabilityBuildStartBlocked) {
+            this.browserStackConfig.testObservability.enabled = false
+        }
+
         if (this._accessibilityAutomation && this._options.accessibilityOptions) {
             // SDK-3737: coerce stringified booleans (e.g. autoScanning: 'false') to real
             // booleans so boolean-typed accessibility options are honoured instead of
@@ -494,7 +507,14 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }
         }
 
-        this._updateCaps(capabilities as Capabilities.TestrunnerCapabilities, 'testhubBuildUuid')
+        // Skip stamping testhubBuildUuid only when the observability build-start was blocked
+        // and no other TestHub product (accessibility) succeeded — otherwise the Automate
+        // session gets orphan-linked to a TestHub build that was never created (a blocked
+        // build-start still returns a build_hashed_id), keeping it counted as an SDK
+        // observability session. Every other case keeps the prior behavior.
+        if (!(observabilityBuildStartBlocked && !this._accessibilityAutomation)) {
+            this._updateCaps(capabilities as Capabilities.TestrunnerCapabilities, 'testhubBuildUuid')
+        }
         this._updateCaps(capabilities as Capabilities.TestrunnerCapabilities, 'buildProductMap')
 
         if (isValidEnabledValue(this._options.testOrchestrationOptions?.runSmartSelection?.enabled)){
