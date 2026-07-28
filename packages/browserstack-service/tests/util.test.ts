@@ -824,6 +824,17 @@ describe('getScenarioExamples', () => {
 })
 
 describe('stopBuildUpstream', () => {
+    // Fake setTimeout (in addition to the module-level Date) so the SDK-7061 retry
+    // backoff can be advanced deterministically without real wall-clock delay.
+    // performance is intentionally NOT faked (negative perf.now() under the 2020
+    // system clock breaks perf_hooks on Node 18) — mirrors the module-level config.
+    // useRealTimers() first is required: re-calling useFakeTimers over an already-active
+    // fake clock does NOT widen `toFake`, so setTimeout would otherwise stay real.
+    const useBackoffTimers = () => {
+        vi.useRealTimers()
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }).setSystemTime(new Date('2020-01-01'))
+    }
+
     it('return error if completed but jwt token not present', async () => {
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         delete process.env[BROWSERSTACK_TESTHUB_JWT]
@@ -839,10 +850,13 @@ describe('stopBuildUpstream', () => {
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
 
+        // SDK-7061: the stop path now checks response.ok and reads response.text(),
+        // so the mock must yield an ok (2xx) response with a readable body.
         vi.mocked(fetch).mockReturnValueOnce(Promise.resolve(Response.json({})))
 
         const result: any = await stopBuildUpstream()
         expect(vi.mocked(fetch).mock.calls[0][1]?.method).toEqual('PUT')
+        expect(vi.mocked(fetch).mock.calls.length).toEqual(1)
         expect(result.status).toEqual('success')
     })
 
@@ -850,15 +864,71 @@ describe('stopBuildUpstream', () => {
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
 
-        vi.mocked(fetch).mockReturnValueOnce(Promise.reject(Response.json({})))
+        // SDK-7061: the stop PUT is now retried up to 3x with a 500ms*attempt backoff.
+        // Reject every attempt so the loop exhausts and returns an error. Fake timers keep
+        // the ~1.5s of cumulative backoff out of wall-clock and make the run deterministic.
+        useBackoffTimers()
+        vi.mocked(fetch)
+            .mockImplementationOnce(() => Promise.reject(new Error('network')))
+            .mockImplementationOnce(() => Promise.reject(new Error('network')))
+            .mockImplementationOnce(() => Promise.reject(new Error('network')))
 
-        const result: any = await stopBuildUpstream()
+        const promise = stopBuildUpstream()
+        await vi.advanceTimersByTimeAsync(2000)
+        const result: any = await promise
+
         expect(vi.mocked(fetch).mock.calls[0][1]?.method).toEqual('PUT')
+        expect(vi.mocked(fetch).mock.calls.length).toEqual(3)
         expect(result.status).toEqual('error')
     })
 
+    it('retries on a non-2xx response and returns error when all attempts fail', async () => {
+        process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
+        process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
+
+        // SDK-7061: a non-2xx response is a failure and must be retried (previously a
+        // best-effort PUT logged any response as success).
+        useBackoffTimers()
+        vi.mocked(fetch)
+            .mockReturnValueOnce(Promise.resolve(Response.json({}, { status: 500, statusText: 'Server Error' })))
+            .mockReturnValueOnce(Promise.resolve(Response.json({}, { status: 502, statusText: 'Bad Gateway' })))
+            .mockReturnValueOnce(Promise.resolve(Response.json({}, { status: 503, statusText: 'Service Unavailable' })))
+
+        const promise = stopBuildUpstream()
+        await vi.advanceTimersByTimeAsync(2000)
+        const result: any = await promise
+
+        expect(vi.mocked(fetch).mock.calls.length).toEqual(3)
+        expect(result.status).toEqual('error')
+    })
+
+    it('returns success when a later retry attempt succeeds', async () => {
+        process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
+        process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
+
+        // SDK-7061: a transient failure followed by a 2xx must resolve to success without
+        // exhausting all attempts.
+        useBackoffTimers()
+        vi.mocked(fetch)
+            .mockReturnValueOnce(Promise.resolve(Response.json({}, { status: 500, statusText: 'Server Error' })))
+            .mockReturnValueOnce(Promise.resolve(Response.json({})))
+
+        const promise = stopBuildUpstream()
+        await vi.advanceTimersByTimeAsync(2000)
+        const result: any = await promise
+
+        expect(vi.mocked(fetch).mock.calls.length).toEqual(2)
+        expect(result.status).toEqual('success')
+    })
+
     afterEach(() => {
+        // mockClear (not mockReset) so the shared global fetch mock keeps its default
+        // implementation for the rest of the file; the *Once queues above are fully
+        // consumed within each test, so nothing leaks.
         vi.mocked(fetch).mockClear()
+        // Restore the module-level clock config (only Date faked) so later suites in this
+        // file are unaffected by the setTimeout faking these retry tests turn on.
+        vi.useFakeTimers({ toFake: ['Date'] }).setSystemTime(new Date('2020-01-01'))
     })
 })
 
