@@ -6,7 +6,7 @@ import { HookState } from '../states/hookState.js'
 import type { Frameworks, Options } from '@wdio/types'
 import AutomationFramework from '../frameworks/automationFramework.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
-import { hasAppCap, isBrowserstackSession, isTrue } from '../../util.js'
+import { isBrowserstackSession, isTrue } from '../../util.js'
 import type TestFrameworkInstance from '../instances/testFrameworkInstance.js'
 import { TestFrameworkConstants } from '../frameworks/constants/testFrameworkConstants.js'
 import PerformanceTester from '../../instrumentation/performance/performance-tester.js'
@@ -202,11 +202,7 @@ export default class AutomateModule extends BaseModule {
         if (this.config.app || isTrue(this.config.skipAppOverride)) {
             return true
         }
-        // The app capability survives only in the raw INPUT capabilities; the resolved
-        // capabilities BrowserStack echoes back drop it. Check both, via the shared hasAppCap detector.
-        const autoInstance = AutomationFramework.getTrackedInstance()
-        return [AutomationFrameworkConstants.KEY_INPUT_CAPABILITIES, AutomationFrameworkConstants.KEY_CAPABILITIES]
-            .some(key => hasAppCap(AutomationFramework.getState(autoInstance, key) as WebdriverIO.Capabilities | undefined))
+        return this.hasAppCapInFrameworkState()
     }
 
     async markSessionName(sessionId: string, sessionName: string, config: { user: string; key: string; }): Promise<void> {

@@ -8,7 +8,6 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import PercyHandler from '../../Percy/Percy-Handler.js'
 import type { Capabilities } from '@wdio/types'
 import { TestFrameworkConstants } from '../frameworks/constants/testFrameworkConstants.js'
-import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import { hasAppCap, isTrue } from '../../util.js'
 import type TestFrameworkInstance from '../instances/testFrameworkInstance.js'
 
@@ -47,9 +46,7 @@ export default class PercyModule extends BaseModule {
         if (hasAppCap(this.browser?.capabilities as WebdriverIO.Capabilities | undefined)) {
             return true
         }
-        const autoInstance = AutomationFramework.getTrackedInstance()
-        return [AutomationFrameworkConstants.KEY_INPUT_CAPABILITIES, AutomationFrameworkConstants.KEY_CAPABILITIES]
-            .some(key => hasAppCap(AutomationFramework.getState(autoInstance, key) as WebdriverIO.Capabilities | undefined))
+        return this.hasAppCapInFrameworkState()
     }
 
     async onAfterCreate(args: Record<string, unknown>) {
