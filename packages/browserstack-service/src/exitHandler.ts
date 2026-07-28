@@ -78,8 +78,15 @@ let buildStopSentOnSignal = false
 // process.exit. Only the direct-HTTP (non-CLI) observability path with a created build is
 // handled here — the CLI manages its own build lifecycle. Best-effort, never throws.
 function stopBuildSyncBlocking(reason: string): void {
+    // SDK-7061: setupExitHandlers() (which arms this handler) runs in the launcher
+    // constructor BEFORE BrowserStackConfig is initialized, so getInstance() can return
+    // undefined during an early uncaughtException. Guard so this never throws — a throw
+    // from inside the uncaughtException listener would be fatal and mask the original error.
     const config = BrowserStackConfig.getInstance()
-    if (buildStopSentOnSignal || config.testObservability.buildStopped) {
+    if (!config) {
+        return
+    }
+    if (buildStopSentOnSignal || config.testObservability?.buildStopped) {
         return
     }
     if (!process.env[BROWSERSTACK_TESTHUB_UUID] || !process.env[BROWSERSTACK_TESTHUB_JWT]) {
