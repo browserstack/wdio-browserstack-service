@@ -225,7 +225,7 @@ class Listener {
                     BStackLogger.debug('callback: marking events success ' + data.length)
                     this.eventsSuccess(data)
                 } catch (e) {
-                    BStackLogger.debug('callback: marking events failed ' + data.length)
+                    BStackLogger.debug(`callback: marking events failed ${data.length} reason: ${e}`)
                     this.eventsFailed(data)
                 } finally {
                     this.pendingUploads -= 1

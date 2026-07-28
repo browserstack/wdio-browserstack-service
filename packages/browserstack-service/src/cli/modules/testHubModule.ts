@@ -135,7 +135,10 @@ export default class TestHubModule extends BaseModule {
                     testDataObj.app_lcnc = appLcncMeta
                 }
             }
-            const eventJson = Buffer.from(JSON.stringify(testDataObj))
+            // Nested values such as test_hooks_started/test_hooks_finished are JS Maps, which
+            // JSON.stringify would serialise to `{}` and strip the hook data. Convert any Map to
+            // a plain object so the binary receives populated hook maps.
+            const eventJson = Buffer.from(JSON.stringify(testDataObj, (_key, value) => value instanceof Map ? Object.fromEntries(value) : value))
             const executionContext = { hash: trackedContext.getId(), threadId: trackedContext.getThreadId().toString(), processId: trackedContext.getProcessId().toString() }
             const payload: Omit<TestFrameworkEventRequest, 'binSessionId'> = {
                 platformIndex,

@@ -2,7 +2,9 @@ import path from 'node:path'
 
 import type { SuiteStats, TestStats, RunnerStats, HookStats } from '@wdio/reporter'
 import WDIOReporter from '@wdio/reporter'
-import type { Options } from '@wdio/types'
+import type { Options, Frameworks } from '@wdio/types'
+import { BrowserstackCLI } from './cli/index.js'
+import { reportSkippedTest, resolveSpecFile } from './cli/skipReporter.js'
 import * as url from 'node:url'
 
 import { v4 as uuidv4 } from 'uuid'
@@ -36,9 +38,11 @@ class _TestReporter extends WDIOReporter {
     public static currentTest: CurrentRunInfo = {}
     private _userCaps?: Capabilities.RemoteCapability = {}
     private listener = Listener.getInstance()
+    private _runnerSpec?: string
 
     async onRunnerStart (runnerStats: RunnerStats) {
         this._capabilities = runnerStats.capabilities as WebdriverIO.Capabilities
+        this._runnerSpec = runnerStats.specs?.[0]
         this._userCaps = this.getUserCaps(runnerStats)
         this._config = runnerStats.config as BrowserstackConfig & Options.Testrunner
         this._sessionId = runnerStats.sessionId
@@ -209,6 +213,30 @@ class _TestReporter extends WDIOReporter {
     async onTestSkip (testStats: TestStats) {
         // cucumber steps call this method. We don't want step skipped state so skip for cucumber
         if (!this.needToSendData('test', 'skip')) {
+            return
+        }
+
+        // CLI flow: the legacy Listener -> api/v1/batch path below is dead here, so route the
+        // skipped test through the gRPC tracker instead (static `it.skip` and hook-level skips
+        // never reach beforeTest/afterTest; without this they are invisible on the dashboard
+        // and their session is never linked to the build)
+        if (BrowserstackCLI.getInstance().isRunning()) {
+            const framework = BrowserstackCLI.getInstance().getTestFramework()
+            if (framework) {
+                const stats = testStats as TestStats & { parent?: string, file?: string, body?: string, ctx?: unknown }
+                const identifier = `${stats.parent} - ${stats.title}`
+                stats.file = resolveSpecFile(stats.file, this._runnerSpec)
+                // hierarchy travels via ctx (getMochaTestHierarchy); `parent` stays a string —
+                // the Automate session name interpolates it directly
+                let parentChain: { title: string, parent: unknown } | null = null
+                for (const s of this._suites) {
+                    parentChain = { title: s.title, parent: parentChain }
+                }
+                if (parentChain) {
+                    stats.ctx = { test: { parent: parentChain } }
+                }
+                await reportSkippedTest(framework, identifier, stats as unknown as Frameworks.Test, this._suites.at(-1)?.title)
+            }
             return
         }
 
