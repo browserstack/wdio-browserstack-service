@@ -33,11 +33,6 @@
       "types": "./build/cleanup.d.ts",
       "import": "./build/cleanup.js",
       "source": "./src/cleanup.ts"
-    },
-    "./buildWatchdog": {
-      "types": "./build/buildWatchdog.d.ts",
-      "import": "./build/buildWatchdog.js",
-      "source": "./src/buildWatchdog.ts"
     }
   },
   "typeScriptVersion": "3.8.3",

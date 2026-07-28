@@ -64,7 +64,6 @@ import { BrowserstackCLI } from './cli/index.js'
 import { CLIUtils } from './cli/cliUtils.js'
 import accessibilityScripts from './scripts/accessibility-scripts.js'
 import { _fetch as fetch } from './fetchWrapper.js'
-import { startBuildWatchdog, deleteBuildWatchdogMarker } from './buildWatchdogMarker.js'
 
 type BrowserstackLocal = BrowserstackLocalLauncher.Local & {
     pid?: number
@@ -435,13 +434,6 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }, this.browserStackConfig, this._accessibilityAutomation)
         }
 
-        // SDK-7061: for the direct-HTTP TRA path (CLI manages its own lifecycle), start a
-        // detached watchdog that stops the build if the launcher is hard-killed (kill -9 /
-        // OOM) before onComplete or the exit hook can send the stop PUT. Best-effort only.
-        if (!BrowserstackCLI.getInstance().isRunning() && this._options.testObservability) {
-            startBuildWatchdog()
-        }
-
         //added checks for Accessibility running on non-bstack infra
         if (isAccessibilityAutomationSession(this._accessibilityAutomation) && (process.env.BROWSERSTACK_TURBOSCALE || !shouldAddServiceVersion(this._config, this._options.testObservability))){
             const overrideOptions: Partial<Capabilities.ChromeOptions> = accessibilityScripts.ChromeExtension
@@ -656,10 +648,6 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             if (isCLIEnabled || stopResult?.status === 'success') {
                 this.browserStackConfig.testObservability.buildStopped = true
             }
-
-            // SDK-7061: clean shutdown reached — retire the watchdog so it does not
-            // double-send the stop for a build we just stopped here.
-            deleteBuildWatchdogMarker()
 
             await PerformanceTester.stopAndGenerate('performance-launcher.html')
             if (process.env[PERF_MEASUREMENT_ENV]) {
