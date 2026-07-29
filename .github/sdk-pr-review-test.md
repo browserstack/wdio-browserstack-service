@@ -8,3 +8,7 @@ SDK PR Review Gate and the SDK PR Review Agent can be exercised end-to-end.
 
 Created: 2026-07-28
 Target branch: `v8`
+
+## Trigger log
+
+- 2026-07-29 — dummy commit to fire a `synchronize` event on the PR.
