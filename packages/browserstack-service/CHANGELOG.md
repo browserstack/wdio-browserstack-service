@@ -1,5 +1,15 @@
 # @wdio/browserstack-service
 
+## 9.33.0
+
+### Minor Changes
+
+- e99828d: - Fixed SDK logs not being uploaded when a test run is interrupted (Ctrl-C or CI job cancellation); interrupted runs are now correctly reported with their termination reason.
+
+### Patch Changes
+
+- 74c2682: - Read the `apis` service-URL map from the binary's new `config.sessionData` bucket (SDK-6821 session.config split), with the flat `config.apis` as backward-compat fallback. Single-point change in `setConfig`; verified `npm run build` clean and the vitest suite shows zero new failures vs main (68 pre-existing environmental failures identical on both).
+
 ## 9.32.1
 
 ### Patch Changes
