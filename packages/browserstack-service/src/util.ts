@@ -35,6 +35,7 @@ import {
     BROWSERSTACK_LTS_SESSION_ID,
     TESTOPS_SCREENSHOT_ENV,
     BROWSERSTACK_TESTHUB_UUID,
+    BROWSERSTACK_KILL_SIGNAL,
     PERF_MEASUREMENT_ENV,
     RERUN_ENV,
     BROWSERSTACK_TEST_PLAN_ID,
@@ -750,8 +751,14 @@ export const stopBuildUpstream = PerformanceTester.measureWrapper(PERFORMANCE_SD
             message: 'Token/buildID is undefined, build creation might have failed'
         }
     }
-    const data = {
+    const data: Record<string, unknown> = {
         'stop_time': (new Date()).toISOString()
+    }
+    // Stamp the kill reason onto the build record so terminated runs are
+    // identifiable server-side, not only via the analytics funnel.
+    const killSignal = process.env[BROWSERSTACK_KILL_SIGNAL]
+    if (killSignal) {
+        data.finished_metadata = [{ reason: 'user_killed', signal: killSignal }]
     }
 
     try {

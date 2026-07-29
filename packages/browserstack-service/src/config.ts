@@ -75,6 +75,8 @@ class BrowserStackConfig {
     public percyBuildId?: number | null
     public isPercyAutoEnabled = false
     public sdkRunID: string
+    public killSignal?: string
+    public logsUploaded: boolean = false
 
     constructor(
         options: BrowserstackConfig & Options.Testrunner,
@@ -100,6 +102,10 @@ class BrowserStackConfig {
 
     sentFunnelData() {
         this.funnelDataSent = true
+    }
+
+    setKillSignal(signal: string) {
+        this.killSignal = signal
     }
 
 }

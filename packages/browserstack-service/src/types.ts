@@ -469,6 +469,7 @@ export interface EventProperties {
     isCLIEnabled?: boolean
     finishedMetadata?: {
         reason: string
+        signal?: string
     }
 }
 
