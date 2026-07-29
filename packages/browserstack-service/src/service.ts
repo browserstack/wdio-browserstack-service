@@ -32,7 +32,7 @@ import PerformanceTester from './instrumentation/performance/performance-tester.
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import { EVENTS } from './instrumentation/performance/constants.js'
 import { BrowserstackCLI } from './cli/index.js'
-import { markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
+import { drainSkipReports, markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
 import { CLIUtils } from './cli/cliUtils.js'
 
 import { _fetch as fetch } from './fetchWrapper.js'
@@ -572,6 +572,14 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     await testHubModule?.flushPendingTestFinishEvent()
                 } catch (flushErr) {
                     BStackLogger.debug(`Exception flushing deferred test finish in after(): ${util.format(flushErr)}`)
+                }
+                // Drain skip reports queued from the un-awaited onTestSkip reporter hook (static
+                // `it.skip`) so their TestRunFinished lands before the session closes — otherwise
+                // the test is orphaned "in progress" on the dashboard.
+                try {
+                    await drainSkipReports()
+                } catch (skipDrainErr) {
+                    BStackLogger.debug(`Exception draining skip reports in after(): ${util.format(skipDrainErr)}`)
                 }
                 await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.EXECUTE, HookState.POST, {})
             }
