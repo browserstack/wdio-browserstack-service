@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 8.49.2
+
+### Patch Changes
+
+- effdc1e: - Fixed SDK logs not being uploaded when a test run is interrupted (Ctrl-C or CI job cancellation); interrupted runs are now reported with their termination reason on the build record.
+
 ## 8.49.1
 
 ### Patch Changes
