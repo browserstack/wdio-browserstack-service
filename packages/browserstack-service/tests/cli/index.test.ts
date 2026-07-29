@@ -93,4 +93,30 @@ describe('BrowserstackCLI bootstrap error surfacing', () => {
             expect(loggerErrorSpy).toHaveBeenCalledWith('[Build] ERROR_ACCESS_DENIED: Access to BrowserStack denied due to incorrect credentials.')
         })
     })
+
+    // SDK-6821: apis arrives under the sessionData bucket (flat kept for backward
+    // compat until every SDK migrates). The bucket-only case is the Phase-4 shape —
+    // the one a broken hoist cannot mask via the flat fallback.
+    describe('setConfig sessionData apis hoist (SDK-6821)', () => {
+        const setConfigWith = (config: Record<string, unknown>) =>
+            instance.setConfig({ config: JSON.stringify(config) } as any)
+
+        it('resolves apis from sessionData alone (future caps-only echo)', () => {
+            setConfigWith({ sessionData: { apis: { automate: { api: 'https://api.browserstack.com' } } } })
+            expect(instance.config.apis).toEqual({ automate: { api: 'https://api.browserstack.com' } })
+        })
+
+        it('prefers sessionData.apis over a stale flat apis', () => {
+            setConfigWith({
+                apis: { automate: { api: 'https://stale.example' } },
+                sessionData: { apis: { automate: { api: 'https://fresh.example' } } }
+            })
+            expect(instance.config.apis).toEqual({ automate: { api: 'https://fresh.example' } })
+        })
+
+        it('keeps the flat apis when no bucket is present (old binary)', () => {
+            setConfigWith({ apis: { automate: { api: 'https://flat-only.example' } } })
+            expect(instance.config.apis).toEqual({ automate: { api: 'https://flat-only.example' } })
+        })
+    })
 })
