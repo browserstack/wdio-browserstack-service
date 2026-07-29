@@ -1388,6 +1388,33 @@ describe('_uploadServiceLogs', () => {
     })
 
     const service = new BrowserstackLauncher(options as any, caps, config)
+
+    it('marks logsUploaded when the upload resolves truthy', async () => {
+        vi.spyOn(utils, 'uploadLogs').mockResolvedValueOnce('success')
+        ;(service as any).browserStackConfig.logsUploaded = false
+
+        await service._uploadServiceLogs()
+
+        expect((service as any).browserStackConfig.logsUploaded).toBe(true)
+    })
+
+    it('leaves logsUploaded false when the upload resolves falsy', async () => {
+        vi.spyOn(utils, 'uploadLogs').mockResolvedValueOnce(undefined as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+
+        await service._uploadServiceLogs()
+
+        expect((service as any).browserStackConfig.logsUploaded).toBe(false)
+    })
+
+    it('leaves logsUploaded false when the server rejects the upload', async () => {
+        vi.spyOn(utils, 'uploadLogs').mockResolvedValueOnce({ status: 'error' } as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+
+        await service._uploadServiceLogs()
+
+        expect((service as any).browserStackConfig.logsUploaded).toBe(false)
+    })
 })
 
 describe('_getClientBuildUuid', () => {
