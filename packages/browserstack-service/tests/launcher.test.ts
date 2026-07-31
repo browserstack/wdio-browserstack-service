@@ -17,6 +17,7 @@ import * as FunnelInstrumentation from '../src/instrumentation/funnelInstrumenta
 import { RERUN_TESTS_ENV, BROWSERSTACK_TESTHUB_UUID, RERUN_ENV } from '../src/constants.js'
 import * as thUtils from '../src/testHub/utils.js'
 import TestOpsConfig from '../src/testOps/testOpsConfig.js'
+import { BrowserstackCLI } from '../src/cli/index.js'
 
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
 vi.mock('browserstack-local')
@@ -727,6 +728,29 @@ describe('onComplete', () => {
         // stopping the build) — await it instead of relying on its sync prefix.
         await service.onComplete()
         expect(stopBuildUpstreamSpy).toHaveBeenCalledTimes(1)
+    })
+
+    // SDK-7061: on the direct-HTTP path buildStopped must reflect whether the stop PUT
+    // actually succeeded, so the process-exit cleanup re-stop can still close the build
+    // when the in-hook stop failed.
+    it('marks buildStopped true when the direct-HTTP stop succeeds', async () => {
+        vi.spyOn(BrowserstackCLI.getInstance(), 'isRunning').mockReturnValue(false)
+        vi.spyOn(utils, 'stopBuildUpstream').mockResolvedValue({ status: 'success', message: '' } as any)
+
+        const service = new BrowserstackLauncher({} as any, [{}] as any, {} as any)
+        ;(service as any).browserStackConfig.testObservability.buildStopped = false
+        await service.onComplete()
+        expect((service as any).browserStackConfig.testObservability.buildStopped).toBe(true)
+    })
+
+    it('leaves buildStopped false when the direct-HTTP stop fails', async () => {
+        vi.spyOn(BrowserstackCLI.getInstance(), 'isRunning').mockReturnValue(false)
+        vi.spyOn(utils, 'stopBuildUpstream').mockResolvedValue({ status: 'error', message: 'boom' } as any)
+
+        const service = new BrowserstackLauncher({} as any, [{}] as any, {} as any)
+        ;(service as any).browserStackConfig.testObservability.buildStopped = false
+        await service.onComplete()
+        expect((service as any).browserStackConfig.testObservability.buildStopped).toBe(false)
     })
 })
 
