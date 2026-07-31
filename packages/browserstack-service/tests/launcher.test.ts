@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 // @ts-expect-error mock feature
 import { Local, mockStart } from 'browserstack-local'
 import logger from '@wdio/logger'
@@ -76,8 +76,19 @@ describe('onPrepare', () => {
         key: '12345678901234567890',
         capabilities: []
     }
-    vi.spyOn(utils, 'launchTestSession').mockImplementation(() => {})
+    // Default: simulate a SUCCESSFUL observability build-start (sets the env flag 'true'),
+    // matching real behavior so the buildProductMap/testhubBuildUuid caps are stamped.
+    const launchTestSessionSuccess = () => { process.env.BROWSERSTACK_OBSERVABILITY = 'true' }
+    vi.spyOn(utils, 'launchTestSession').mockImplementation(launchTestSessionSuccess as any)
     vi.spyOn(utils, 'isBStackSession').mockImplementation(() => {return true})
+
+    // Reset shared state after every test so per-test overrides (launchTestSession / getProductMap /
+    // the observability env flag) never leak into unrelated tests, even if an assertion throws first.
+    afterEach(() => {
+        delete process.env.BROWSERSTACK_OBSERVABILITY
+        vi.spyOn(utils, 'launchTestSession').mockImplementation(launchTestSessionSuccess as any)
+        vi.spyOn(thUtils, 'getProductMap').mockImplementation(() => productMap)
+    })
 
     it('should not try to upload app is app is undefined', async () => {
         const service = new BrowserstackLauncher({ testObservability: false } as any, caps, config)
@@ -119,6 +130,56 @@ describe('onPrepare', () => {
 
         await service.onPrepare(config, capabilities)
         expect(capabilities.samsungGalaxy.capabilities).toEqual({ 'appium:app': 'bs://<app-id>', 'bstack:options': { buildProductMap: productMap, testhubBuildUuid: buildHashedId } })
+    })
+
+    it('folds a blocked observability build-start into caps: buildProductMap.observability=false and no testhubBuildUuid stamped', async () => {
+        // Classic-flow build-start blocked (unsupported framework): launchTestSession turns the
+        // observability env flag off and returns a truthy response.
+        vi.spyOn(utils, 'launchTestSession').mockImplementation((() => {
+            process.env.BROWSERSTACK_OBSERVABILITY = 'false'
+            return {} as any
+        }) as any)
+        // Derive buildProductMap from config so the fold-back into config is observable in caps.
+        vi.spyOn(thUtils, 'getProductMap').mockImplementation((cfg: any) => ({
+            observability: cfg.testObservability.enabled,
+            accessibility: !!cfg.accessibility,
+            percy: cfg.percy,
+            automate: cfg.automate,
+            app_automate: cfg.appAutomate
+        }))
+
+        const service = new BrowserstackLauncher({ testObservability: true } as any, caps, config)
+        const capabilities: any = [{ 'bstack:options': {} }]
+        await service.onPrepare(config, capabilities)
+
+        // observability outcome folded into config -> buildProductMap reports observability:false
+        expect((service as any).browserStackConfig.testObservability.enabled).toBe(false)
+        expect(capabilities[0]['bstack:options'].buildProductMap.observability).toBe(false)
+        // session is not orphan-linked to a TestHub build that was never created
+        expect(capabilities[0]['bstack:options'].testhubBuildUuid).toBeUndefined()
+        // (mock/env restoration handled by afterEach)
+    })
+
+    it('folds a failed (transport-error) observability build-start into caps: observability off, no testhubBuildUuid', async () => {
+        // launchTestSession's error handler returns null WITHOUT setting the env flag (neither
+        // success 'true' nor explicit block 'false') — the fold must still fire since the classic
+        // build-start was attempted and observability did not succeed.
+        vi.spyOn(utils, 'launchTestSession').mockImplementation((() => null) as any)
+        vi.spyOn(thUtils, 'getProductMap').mockImplementation((cfg: any) => ({
+            observability: cfg.testObservability.enabled,
+            accessibility: !!cfg.accessibility,
+            percy: cfg.percy,
+            automate: cfg.automate,
+            app_automate: cfg.appAutomate
+        }))
+
+        const service = new BrowserstackLauncher({ testObservability: true } as any, caps, config)
+        const capabilities: any = [{ 'bstack:options': {} }]
+        await service.onPrepare(config, capabilities)
+
+        expect((service as any).browserStackConfig.testObservability.enabled).toBe(false)
+        expect(capabilities[0]['bstack:options'].buildProductMap.observability).toBe(false)
+        expect(capabilities[0]['bstack:options'].testhubBuildUuid).toBeUndefined()
     })
 
     it('should add the "appium:app" property to a multiremote capability if "bstack:options" present', async () => {
@@ -1386,6 +1447,27 @@ describe('_uploadServiceLogs', () => {
         process.env[BROWSERSTACK_TESTHUB_UUID] = 'obs123'
         expect(service._getClientBuildUuid()).toEqual('obs123')
         delete process.env[BROWSERSTACK_TESTHUB_UUID]
+    })
+
+    it('does not mark logsUploaded when the server rejects the upload', async () => {
+        vi.mocked(utils.uploadLogs).mockResolvedValueOnce({ status: 'error', message: 'File not attached' } as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+        await service._uploadServiceLogs()
+        expect((service as any).browserStackConfig.logsUploaded).toBe(false)
+    })
+
+    it('marks logsUploaded when the response status is success', async () => {
+        vi.mocked(utils.uploadLogs).mockResolvedValueOnce({ status: 'success' } as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+        await service._uploadServiceLogs()
+        expect((service as any).browserStackConfig.logsUploaded).toBe(true)
+    })
+
+    it('marks logsUploaded when the response carries no status field', async () => {
+        vi.mocked(utils.uploadLogs).mockResolvedValueOnce({ buildId: 'x' } as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+        await service._uploadServiceLogs()
+        expect((service as any).browserStackConfig.logsUploaded).toBe(true)
     })
 
     const service = new BrowserstackLauncher(options as any, caps, config)

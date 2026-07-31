@@ -529,6 +529,9 @@ export class BrowserstackCLI {
     setConfig(response: StartBinSessionResponse) {
         try {
             this.config = JSON.parse(response.config)
+            // Binary now nests apis under config.sessionData; prefer it, fall back to the flat config.apis (SDK-6821 Phase 3)
+            const sessionData = this.config.sessionData as { apis?: unknown } | undefined
+            this.config.apis = sessionData?.apis ?? this.config.apis
             const redactedConfig = JSON.parse(response.config)
             CrashReporter.recursivelyRedactKeysFromObject(redactedConfig, ['user', 'username', 'key', 'accesskey', 'password'])
             this.logger.debug(`loadModules: config=${JSON.stringify(redactedConfig)}`)

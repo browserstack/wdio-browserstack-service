@@ -1,5 +1,33 @@
 # @wdio/browserstack-service
 
+## 9.33.0
+
+### Minor Changes
+
+- e99828d: - Fixed SDK logs not being uploaded when a test run is interrupted (Ctrl-C or CI job cancellation); interrupted runs are now correctly reported with their termination reason.
+
+### Patch Changes
+
+- 74c2682: - Read the `apis` service-URL map from the binary's new `config.sessionData` bucket (SDK-6821 session.config split), with the flat `config.apis` as backward-compat fallback. Single-point change in `setConfig`; verified `npm run build` clean and the vitest suite shows zero new failures vs main (68 pre-existing environmental failures identical on both).
+
+## 9.32.1
+
+### Patch Changes
+
+- aefd604: - Fixed a statically-skipped test (`it.skip`) being left orphaned as "in progress" on the Test Observability dashboard in the CLI flow. Such tests are reported from the un-awaited `onTestSkip` reporter hook, so their `TestRunFinished` event could still be pending when the worker tore down; the `after()` hook now drains these skip reports before the session closes so the test is correctly reported as skipped.
+- 1a973e9: - fix: Accessibility command wrapping.
+- a24973b: - Fixed Test Observability not being fully disabled for a run when the build could not be started (e.g. an unsupported framework) — such sessions no longer emit observability events or get linked to a non-existent build.
+- 8539e5f: fix(a11y): restore per-command auto-scanning for App Automate accessibility sessions
+
+  App Automate accessibility sessions were skipped by the per-command `overwriteCommand`
+  wrapping in `onBeforeExecute` (guarded to `!isAppAccessibility`), so app a11y scans only
+  fired via an explicit `performScan()` or the end-of-test lifecycle scan — per-command
+  auto-scanning that web sessions get was effectively disabled for app. Command wrapping now
+  applies to app sessions too, with each `overwriteCommand` call individually guarded so a
+  command the appium driver does not register is skipped (logged at debug) instead of aborting
+  `onBeforeExecute`. Commands appium does register (`click`, `setValue`, ...) now auto-scan on
+  App Automate, matching the web flow.
+
 ## 9.32.0
 
 ### Minor Changes

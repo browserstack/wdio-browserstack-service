@@ -2,13 +2,15 @@ import fs from 'node:fs'
 import { describe, expect, it, vi, beforeEach, afterEach, type Mock } from 'vitest'
 
 import BStackCleanup from '../src/cleanup.js'
-import { stopBuildUpstream } from '../src/util.js'
+import { stopBuildUpstream, uploadLogs } from '../src/util.js'
 import { fireFunnelRequest } from '../src/instrumentation/funnelInstrumentation.js'
 import { BROWSERSTACK_TESTHUB_JWT } from '../src/constants.js'
 import type { FunnelData } from '../src/types.js'
 
 vi.mock('../src/util.js', () => ({
-    stopBuildUpstream: vi.fn()
+    stopBuildUpstream: vi.fn(),
+    uploadLogs: vi.fn(),
+    getErrorString: vi.fn((e) => String(e))
 }))
 
 vi.mock('../src/instrumentation/funnelInstrumentation.js', () => ({
@@ -76,6 +78,30 @@ describe('BStackCleanup', () => {
             process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwtToken'
             await BStackCleanup.executeObservabilityCleanup({} as any)
             expect(stopBuildUpstream).toBeCalledTimes(1)
+        })
+    })
+
+    describe('executeLogsUpload', () => {
+        it('uploads with the pre-redaction funnel creds and the --uploadLogs uuid', async () => {
+            const funnelData = { userName: 'real-user', accessKey: 'real-key' }
+            process.argv.push('--funnelData', 'funnel.json', '--uploadLogs', 'client-uuid')
+            vi.spyOn(BStackCleanup, 'getFunnelDataFromFile').mockReturnValue(funnelData)
+            // Mirror fireFunnelRequest's in-place credential redaction so the test
+            // proves the snapshot is taken before it runs.
+            ;(fireFunnelRequest as unknown as Mock).mockImplementation((d: FunnelData) => {
+                d.userName = '[REDACTED]'
+                d.accessKey = '[REDACTED]'
+            })
+
+            await BStackCleanup.startCleanup()
+
+            expect(uploadLogs).toHaveBeenCalledWith('real-user', 'real-key', 'client-uuid')
+        })
+
+        it('skips upload when the build uuid or credentials are missing', async () => {
+            process.argv.push('--uploadLogs', '')
+            await BStackCleanup.executeLogsUpload('user', 'key')
+            expect(uploadLogs).not.toHaveBeenCalled()
         })
     })
 
