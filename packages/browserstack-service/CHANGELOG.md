@@ -1,5 +1,12 @@
 # @wdio/browserstack-service
 
+## 9.33.1
+
+### Patch Changes
+
+- 4b19d7a: - Fixed App Automate session names not updating to the test title when the app is provided via the `appium:app` capability.
+- 929b1f5: - Fixed WebdriverIO test results sometimes not appearing (builds staying "in progress") when the build-completion signal failed or the test runner was interrupted.
+
 ## 9.33.0
 
 ### Minor Changes
