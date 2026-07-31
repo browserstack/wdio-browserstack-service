@@ -180,24 +180,22 @@ jobs:
       - name: Notify Slack on label removal
         if: steps.gate.outputs.removed == 'true'
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_PR_SLA_WEBHOOK }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_PR_DM_WEBHOOK }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_REF: "${{ github.repository }}#${{ github.event.pull_request.number }}"
           REASON: ${{ steps.gate.outputs.reason }}
           AUTHOR: ${{ steps.gate.outputs.author }}
         run: |
           if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "SLACK_PR_SLA_WEBHOOK not configured — skipping Slack notification"
+            echo "SLACK_PR_DM_WEBHOOK not configured — skipping Slack notification"
             exit 0
           fi
-          # The author identity goes in the message TEXT and github_username is OMITTED
-          # from the payload. The SLACK_PR_SLA_WEBHOOK Workflow-Builder workflow resolves
-          # github_username -> @mention via a List lookup that ERRORS (dropping the whole
-          # run, so nothing posts) when the login is not in the list — e.g. an external
-          # PR author. Omitting github_username skips that lookup so the message ALWAYS
-          # surfaces (without an @mention). Plain text + bare URL (no mrkdwn link syntax).
+          # github_username (the PR author's GitHub login) is sent so the
+          # SLACK_PR_DM_WEBHOOK Workflow-Builder workflow resolves the author via
+          # the SDK PR Reviewers list and DMs them. Authors not in that list are
+          # not notified (no channel fallback — the list lookup halts on no-match).
           text=":warning: ready-for-review was removed from ${PR_REF} (author: ${AUTHOR}) — ${REASON}. ${PR_URL} — fix the PR body per the repo PR template, then re-apply the label."
-          payload=$(jq -n --arg text "$text" '{text: $text}')
+          payload=$(jq -n --arg text "$text" --arg github_username "$AUTHOR" '{text: $text, github_username: $github_username}')
           curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
             -d "$payload" "$SLACK_WEBHOOK_URL" \
             || echo "Slack notify failed (non-fatal)"
