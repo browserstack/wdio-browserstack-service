@@ -195,16 +195,23 @@ export default class AutomateModule extends BaseModule {
         this.sessionMap.clear()
     }
 
+    // An App Automate session is identified by the service-level app / skipAppOverride flag,
+    // OR an app supplied only via the appium:app / appium:options.app capability — which the
+    // service-level config (this.config) does not carry. Mirrors accessibilityModule.isAppAutomateSession.
+    private isAppAutomate(): boolean {
+        if (this.config.app || isTrue(this.config.skipAppOverride)) {
+            return true
+        }
+        return this.hasAppCapInFrameworkState()
+    }
+
     async markSessionName(sessionId: string, sessionName: string, config: { user: string; key: string; }): Promise<void> {
         return await PerformanceTester.measureWrapper(
             PERFORMANCE_SDK_EVENTS.AUTOMATE_EVENTS.SESSION_NAME,
             async (sessionId: string, sessionName: string, config: { user: string; key: string; }) => {
                 try {
                     const auth = Buffer.from(`${config.user}:${config.key}`).toString('base64')
-                    // skipAppOverride runs App Automate without an app value, so route session
-                    // name/status to the App Automate endpoint on the flag too (config echoed from
-                    // the binary carries skipAppOverride via the binconfig service options).
-                    const isAppAutomate = this.config.app || isTrue(this.config.skipAppOverride)
+                    const isAppAutomate = this.isAppAutomate()
                     if (isAppAutomate) {
                         this.logger.info('Marking session name for App Automate')
                     } else {
@@ -244,10 +251,7 @@ export default class AutomateModule extends BaseModule {
             async (sessionId: string, sessionStatus: 'passed' | 'failed', sessionErrorMessage: string | undefined, config: { user: string; key: string; }) => {
                 try {
                     const auth = Buffer.from(`${config.user}:${config.key}`).toString('base64')
-                    // skipAppOverride runs App Automate without an app value, so route session
-                    // name/status to the App Automate endpoint on the flag too (config echoed from
-                    // the binary carries skipAppOverride via the binconfig service options).
-                    const isAppAutomate = this.config.app || isTrue(this.config.skipAppOverride)
+                    const isAppAutomate = this.isAppAutomate()
                     if (isAppAutomate) {
                         this.logger.info('Marking session status for App Automate')
                     } else {
