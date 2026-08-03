@@ -1,3 +1,5 @@
+import { BStackLogger } from './cliLogger.js'
+
 export default class APIUtils {
     static FUNNEL_INSTRUMENTATION_URL = 'https://api.browserstack.com/sdk/v1/event'
     static BROWSERSTACK_AUTOMATE_API_URL = 'https://api.browserstack.com'
@@ -10,35 +12,41 @@ export default class APIUtils {
     static UPLOAD_LOGS_ADDRESS = 'https://upload-observability.browserstack.com'
     static EDS_URL = 'https://eds.browserstack.com'
 
-    static hasValidGRRUrls(apis?: Partial<GRRUrls>): apis is GRRUrls {
-        return Boolean(
-            apis?.automate?.api &&
-            apis?.automate?.upload &&
-            apis?.appAutomate?.api &&
-            apis?.appAutomate?.upload &&
-            apis?.percy?.api &&
-            apis?.appAccessibility?.api &&
-            apis?.observability?.api &&
-            apis?.observability?.upload &&
-            apis?.edsInstrumentation?.api
-        )
+    static missingGRRUrlKeys(apis?: Partial<GRRUrls>): string[] {
+        const checks: Array<[string, unknown]> = [
+            ['automate.api', apis?.automate?.api],
+            ['automate.upload', apis?.automate?.upload],
+            ['appAutomate.api', apis?.appAutomate?.api],
+            ['appAutomate.upload', apis?.appAutomate?.upload],
+            ['percy.api', apis?.percy?.api],
+            ['appAccessibility.api', apis?.appAccessibility?.api],
+            ['observability.api', apis?.observability?.api],
+            ['observability.upload', apis?.observability?.upload],
+            ['edsInstrumentation.api', apis?.edsInstrumentation?.api]
+        ]
+        return checks.filter(([, value]) => !value).map(([key]) => key)
     }
 
     static updateURLSForGRR(apis?: Partial<GRRUrls>) {
-        if (!this.hasValidGRRUrls(apis)) {
+        const missing = APIUtils.missingGRRUrlKeys(apis)
+        if (missing.length > 0) {
+            BStackLogger.warn(`updateURLSForGRR: GRR URLs incomplete — keeping default endpoints. Missing: ${missing.join(', ')}`)
             return false
         }
 
-        this.FUNNEL_INSTRUMENTATION_URL = `${apis.automate.api}/sdk/v1/event`
-        this.BROWSERSTACK_AUTOMATE_API_URL = apis.automate.api
-        this.BROWSERSTACK_AA_API_URL = apis.appAutomate.api
-        this.BROWSERSTACK_PERCY_API_URL = apis.percy.api
-        this.BROWSERSTACK_AUTOMATE_API_CLOUD_URL = apis.automate.upload
-        this.BROWSERSTACK_AA_API_CLOUD_URL = apis.appAutomate.upload
-        this.APP_ALLY_ENDPOINT = `${apis.appAccessibility.api}/automate`
-        this.DATA_ENDPOINT = apis.observability.api
-        this.UPLOAD_LOGS_ADDRESS = apis.observability.upload
-        this.EDS_URL = apis.edsInstrumentation.api
+        // Validated above: every field read below is present. Cast is scoped to
+        // this method so no unsound `apis is GRRUrls` predicate leaks to callers.
+        const grrUrls = apis as GRRUrls
+        this.FUNNEL_INSTRUMENTATION_URL = `${grrUrls.automate.api}/sdk/v1/event`
+        this.BROWSERSTACK_AUTOMATE_API_URL = grrUrls.automate.api
+        this.BROWSERSTACK_AA_API_URL = grrUrls.appAutomate.api
+        this.BROWSERSTACK_PERCY_API_URL = grrUrls.percy.api
+        this.BROWSERSTACK_AUTOMATE_API_CLOUD_URL = grrUrls.automate.upload
+        this.BROWSERSTACK_AA_API_CLOUD_URL = grrUrls.appAutomate.upload
+        this.APP_ALLY_ENDPOINT = `${grrUrls.appAccessibility.api}/automate`
+        this.DATA_ENDPOINT = grrUrls.observability.api
+        this.UPLOAD_LOGS_ADDRESS = grrUrls.observability.upload
+        this.EDS_URL = grrUrls.edsInstrumentation.api
 
         return true
     }

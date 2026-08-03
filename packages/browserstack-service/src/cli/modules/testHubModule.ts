@@ -35,15 +35,13 @@ export default class TestHubModule extends BaseModule {
         this.name = 'TestHubModule'
         this.testhubConfig = testhubConfig
 
+        TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
+
         Object.values(TestFrameworkState).forEach(state => {
             Object.values(HookState).forEach(hook => {
                 TestFramework.registerObserver(state, hook, this.onAllTestEvents.bind(this))
             })
         })
-        // TEST/PRE: sendTestFrameworkEvent must run before onBeforeTest mutates
-        // TestMetadata.currentTestRunUuid, so sequence them explicitly instead of
-        // relying on observer registration order.
-        TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
     }
 
     /**
@@ -55,7 +53,7 @@ export default class TestHubModule extends BaseModule {
     }
 
     private getCurrentTestRunUuid(instance: TestFrameworkInstance): string | undefined {
-        return (TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) as string | undefined) ?? instance.getRef()
+        return (TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) as string | undefined) || instance.getRef()
     }
 
     onBeforeTest(args: Record<string, unknown>) {
@@ -107,7 +105,8 @@ export default class TestHubModule extends BaseModule {
             this.sendTestFrameworkEvent(args)
         }
 
-        if (testState === TestFrameworkState.TEST && hookState === HookState.POST) {
+        if (testState === TestFrameworkState.TEST && hookState === HookState.POST &&
+            TestFramework.hasState(instance, TestFrameworkConstants.KEY_TEST_RESULT_AT)) {
             TestMetadata.reset()
         }
     }

@@ -381,7 +381,7 @@ export const getCentralUser = (): Partial<CentralUser> => {
     case 'app_lcnc':
         return { app_lcnc: true }
     default:
-        return { app_lcnc: false }
+        return {}
     }
 }
 
@@ -411,7 +411,9 @@ export const launchTestSession = PerformanceTester.measureWrapper(PERFORMANCE_SD
             settings: options.accessibilityOptions
         },
         browserstackAutomation: shouldAddServiceVersion(config, options.testObservability),
-        grouping_identifier: process.env[BROWSERSTACK_BUILD_GROUPING_IDENTIFIER] || '',
+        ...(process.env[BROWSERSTACK_BUILD_GROUPING_IDENTIFIER]
+            ? { grouping_identifier: process.env[BROWSERSTACK_BUILD_GROUPING_IDENTIFIER] }
+            : {}),
         framework_details: {
             frameworkName: WDIO_NAMING_PREFIX + config.framework,
             frameworkVersion: bsConfig.bstackServiceVersion,

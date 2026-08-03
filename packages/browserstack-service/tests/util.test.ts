@@ -2272,13 +2272,13 @@ describe('getCentralUser', () => {
         expect(utils.getCentralUser()).toEqual({ app_lcnc: true })
     })
 
-    it('returns { app_lcnc: false } when the central user env var is unset', () => {
+    it('returns {} when the central user env var is unset', () => {
         delete process.env.BROWSERSTACK_CENTRAL_USER
-        expect(utils.getCentralUser()).toEqual({ app_lcnc: false })
+        expect(utils.getCentralUser()).toEqual({})
     })
 
-    it('returns { app_lcnc: false } for an unrecognised central user', () => {
+    it('returns {} for an unrecognised central user', () => {
         process.env.BROWSERSTACK_CENTRAL_USER = 'some_other_user'
-        expect(utils.getCentralUser()).toEqual({ app_lcnc: false })
+        expect(utils.getCentralUser()).toEqual({})
     })
 })

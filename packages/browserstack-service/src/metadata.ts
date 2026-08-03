@@ -18,8 +18,8 @@ class TestMetadata {
         }
 
         const testRunIdentifier = metadata.identifier
-        if (typeof testRunIdentifier !== 'string') {
-            BStackLogger.warn('setTestMetadata: metadata.identifier must be a string.')
+        if (typeof testRunIdentifier !== 'string' || testRunIdentifier.length === 0) {
+            BStackLogger.warn('setTestMetadata: metadata.identifier must be a non-empty string.')
             return
         }
         if (testRunIdentifier.length > 40) {
