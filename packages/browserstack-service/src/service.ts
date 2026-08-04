@@ -242,17 +242,21 @@ export default class BrowserstackService implements Services.ServiceInstance {
         PerformanceTester.scenarioThatRan = this._scenariosThatRan
 
         if (this._browser) {
-            try {
-                if (this._browser.isMultiremote) {
-                    const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
-                    Object.keys(this._caps).forEach((browserName) => {
-                        this._routeBidiExecutorToHttp(multiRemoteBrowser.getInstance(browserName))
-                    })
-                } else {
-                    this._routeBidiExecutorToHttp(this._browser as WebdriverIO.Browser)
+            const patchBidiExecutorRouting = (resolveBrowser: () => WebdriverIO.Browser, label?: string) => {
+                try {
+                    this._routeBidiExecutorToHttp(resolveBrowser())
+                } catch (err) {
+                    BStackLogger.warn(`Failed to patch execute for BiDi browserstack_executor routing${label ? ` on ${label}` : ''}; executor commands may not work in BiDi sessions: ${err}`)
                 }
-            } catch (err) {
-                BStackLogger.warn(`Failed to patch execute for BiDi browserstack_executor routing; executor commands may not work in BiDi sessions: ${err}`)
+            }
+
+            if (this._browser.isMultiremote) {
+                const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
+                Object.keys(this._caps).forEach((browserName) => {
+                    patchBidiExecutorRouting(() => multiRemoteBrowser.getInstance(browserName), browserName)
+                })
+            } else {
+                patchBidiExecutorRouting(() => this._browser as WebdriverIO.Browser)
             }
 
             try {

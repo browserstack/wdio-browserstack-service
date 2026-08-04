@@ -685,6 +685,28 @@ describe('before', () => {
         await overwriteA(originalExecuteA, 'return arguments[0]', extraArg)
         expect(originalExecuteA).toHaveBeenCalledWith('return arguments[0]', extraArg)
     })
+
+    it('should keep patching remaining multiremote instances when one instance fails to resolve', async () => {
+        const browserA = { executeScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionA', isBidi: true }
+        const browserB = { executeScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
+        const multiRemoteBrowser = {
+            ...browser,
+            isMultiremote: true,
+            getInstance: vi.fn()
+                .mockImplementationOnce(() => {
+                    throw new Error('no such instance')
+                })
+                .mockImplementation((name: string) => name === 'browserA' ? browserA : browserB)
+        } as unknown as WebdriverIO.MultiRemoteBrowser
+
+        const service = new BrowserstackService({} as any, { browserA: {}, browserB: {} } as any, {
+            user: 'foo', key: 'bar'
+        })
+        await service.before(service['_config'] as any, [], multiRemoteBrowser as any)
+
+        expect(browserA.overwriteCommand).not.toHaveBeenCalled()
+        expect(browserB.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
+    })
 })
 
 describe('beforeHook', () => {
