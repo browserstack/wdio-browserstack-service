@@ -113,6 +113,25 @@ describe('openRunsJournal', () => {
             expect(event.test_run.duration_in_ms).toBeGreaterThanOrEqual(5000)
         })
 
+        it('posts a failed HookRunFinished (hook_run envelope) for an orphaned hook', async () => {
+            const startedAt = new Date(Date.now() - 5000).toISOString()
+            mockFs.existsSync.mockReturnValueOnce(true)
+            mockFs.readdirSync.mockReturnValueOnce(['open-run-h.json'] as any)
+            mockFs.readFileSync.mockReturnValueOnce(JSON.stringify({ uuid: 'h', type: 'hook', hook_type: 'AFTER_EACH', name: 'AFTER_EACH for scenario', started_at: startedAt }))
+            const batchSpy = vi.spyOn(utils, 'batchAndPostEvents').mockResolvedValueOnce(undefined as any)
+
+            expect(await OpenRunsJournal.finalizeOrphanedRuns()).toBe(1)
+
+            const [, , events] = batchSpy.mock.calls[0]
+            const event = (events as any)[0]
+            expect(event.event_type).toBe('HookRunFinished')
+            expect(event.test_run).toBeUndefined()
+            expect(event.hook_run.uuid).toBe('h')
+            expect(event.hook_run.hook_type).toBe('AFTER_EACH')
+            expect(event.hook_run.result).toBe('failed')
+            expect(event.hook_run.finished_at).toBeTruthy()
+        })
+
         it('swallows upload failures and returns 0', async () => {
             mockFs.existsSync.mockReturnValueOnce(true)
             mockFs.readdirSync.mockReturnValueOnce(['open-run-a.json'] as any)

@@ -140,6 +140,8 @@ describe('afterScenario', () => {
         insightsHandler.afterScenario({
             pickle: {
                 name: 'pickle-name',
+                uri: 'uri',
+                astNodeIds: ['1'],
                 tags: []
             },
             gherkinDocument: {
@@ -151,6 +153,16 @@ describe('afterScenario', () => {
             }
         } as any)
         expect(insightsHandler['getTestRunDataForCucumber']).toBeCalledTimes(1)
+    })
+
+    it('stamps finishedAt on the stashed scenario meta so the teardown sweep skips it', () => {
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue('scenario-unique-id')
+        insightsHandler['_tests']['scenario-unique-id'] = { uuid: 'uuid1', startedAt: '2020-01-01T00:00:00.000Z', kind: 'test' }
+        insightsHandler.afterScenario({
+            pickle: { name: 'pickle-name', uri: 'uri', astNodeIds: ['1'], tags: [] },
+            gherkinDocument: { uri: '', feature: { name: 'feature-name', description: '' } }
+        } as any)
+        expect(insightsHandler['_tests']['scenario-unique-id'].finishedAt).toBeTruthy()
     })
 })
 
@@ -854,6 +866,122 @@ describe('processCucumberHook', function () {
         insightsHandler['_tests']['hook_unique_id'] = hookObj
         insightsHandler['processCucumberHook'](undefined, { event: 'after' }, resultObj as any)
         expect(sendHookRunEventSpy).toBeCalledWith(hookObj, 'HookRunFinished', resultObj)
+    })
+
+    it('tags the stashed meta as a hook (with identity) on the before event so the sweep can close it', function () {
+        cucumberHookTypeSpy.mockReturnValue('AFTER_EACH')
+        cucumberHookUniqueIdSpy.mockReturnValue('hook_unique_id')
+        InsightsHandler['currentTest'].uuid = 'test_uuid'
+        insightsHandler['processCucumberHook']({ id: '1', hookId: 'hook_unique_id' } as any, { event: 'before', hookUUID: 'hook_uuid' })
+        const meta = insightsHandler['_tests']['hook_unique_id']
+        expect(meta.kind).toBe('hook')
+        expect(meta.hookType).toBe('AFTER_EACH')
+        expect(meta.uuid).toBe('hook_uuid')
+        expect(meta.startedAt).toBeTruthy()
+    })
+
+    it('skips the after event (no unmatched finish) when no start was recorded for the hook id', function () {
+        cucumberHookTypeSpy.mockReturnValue('AFTER_EACH')
+        cucumberHookUniqueIdSpy.mockReturnValue('unseen_hook_id')
+        const hookFinishedSpy = vi.spyOn(insightsHandler['listener'], 'hookFinished').mockImplementation(() => {})
+        insightsHandler['processCucumberHook']({ id: '1', hookId: 'unseen_hook_id' } as any, { event: 'after' }, { passed: true } as any)
+        expect(hookFinishedSpy).toBeCalledTimes(0)
+        hookFinishedSpy.mockRestore()
+    })
+})
+
+describe('sweepUnfinished - cucumber', function () {
+    let handler: InsightsHandler
+    let hookFinishedSpy, testFinishedSpy
+
+    beforeEach(() => {
+        handler = new InsightsHandler(browser, 'cucumber')
+        hookFinishedSpy = vi.spyOn(handler['listener'], 'hookFinished').mockImplementation(() => {})
+        testFinishedSpy = vi.spyOn(handler['listener'], 'testFinished').mockImplementation(() => {})
+    })
+
+    afterEach(() => {
+        hookFinishedSpy.mockRestore()
+        testFinishedSpy.mockRestore()
+    })
+
+    it('emits a terminal HookRunFinished for a started-but-unfinished cucumber hook', async () => {
+        handler['_tests']['cucumber-hook-def-id'] = {
+            uuid: 'hook-uuid-1',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            kind: 'hook',
+            hookType: 'AFTER_EACH',
+            name: 'AFTER_EACH for my scenario',
+            testRunId: 'test-run-uuid-1',
+            scopes: ['my feature'],
+            fileName: 'features/my.feature'
+        }
+        await handler.sweepUnfinished()
+        expect(hookFinishedSpy).toBeCalledTimes(1)
+        const payload = hookFinishedSpy.mock.calls[0][0] as any
+        expect(payload.uuid).toBe('hook-uuid-1')
+        expect(payload.type).toBe('hook')
+        expect(payload.result).toBe('failed')
+        expect(payload.hook_type).toBe('AFTER_EACH')
+        expect(payload.test_run_id).toBe('test-run-uuid-1')
+        expect(payload.finished_at).toBeTruthy()
+        // marked finished so a second sweep pass will not re-emit
+        expect(handler['_tests']['cucumber-hook-def-id'].finishedAt).toBeTruthy()
+    })
+
+    it('does not sweep a cucumber hook that finished normally', async () => {
+        handler['_tests']['cucumber-hook-def-id'] = {
+            uuid: 'hook-uuid-1',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            finishedAt: '2020-01-01T00:00:01.000Z',
+            kind: 'hook',
+            hookType: 'AFTER_EACH'
+        }
+        await handler.sweepUnfinished()
+        expect(hookFinishedSpy).toBeCalledTimes(0)
+    })
+
+    it('emits a terminal TestRunFinished for a started-but-unfinished scenario', async () => {
+        handler['_tests']['scenario-unique-id'] = {
+            uuid: 'scenario-uuid-1',
+            startedAt: '2020-01-01T00:00:00.000Z',
+            kind: 'test',
+            name: 'my scenario',
+            scopes: ['my feature'],
+            fileName: 'features/my.feature'
+        }
+        await handler.sweepUnfinished()
+        expect(testFinishedSpy).toBeCalledTimes(1)
+        const payload = testFinishedSpy.mock.calls[0][0] as any
+        expect(payload.uuid).toBe('scenario-uuid-1')
+        expect(payload.type).toBe('test')
+        expect(payload.result).toBe('failed')
+    })
+
+    it('skips kind-less legacy entries', async () => {
+        handler['_tests']['legacy-entry'] = {
+            uuid: 'legacy-uuid',
+            startedAt: '2020-01-01T00:00:00.000Z'
+        }
+        await handler.sweepUnfinished()
+        expect(hookFinishedSpy).toBeCalledTimes(0)
+        expect(testFinishedSpy).toBeCalledTimes(0)
+    })
+})
+
+describe('beforeScenario resets in-flight step state', function () {
+    it('clears stale steps left by an aborted step so hook classification stays correct', async () => {
+        const handler = new InsightsHandler(browser, 'cucumber')
+        vi.spyOn(utils, 'getUniqueIdentifierForCucumber').mockReturnValue('scenario-unique-id')
+        handler['getTestRunDataForCucumber'] = vi.fn() as any
+        handler['_cucumberData'].steps = [{ id: 'stale-step' } as any]
+        await handler.beforeScenario({
+            pickle: { name: 'pickle-name', uri: 'uri', astNodeIds: ['1'], tags: [] },
+            gherkinDocument: { uri: 'features/my.feature', feature: { name: 'feature-name', description: '' } }
+        } as any)
+        expect(handler['_cucumberData'].steps).toEqual([])
+        const meta = handler['_tests']['scenario-unique-id']
+        expect(meta.kind).toBe('test')
     })
 })
 
