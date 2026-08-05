@@ -89,6 +89,7 @@
     "@wdio/reporter": "^9.0.0",
     "@wdio/types": "^9.0.0",
     "esbuild": "^0.27.2",
+    "mocha": "^10.8.2",
     "rimraf": "^6.0.1",
     "ts-proto": "^2.7.5",
     "typescript": "^5.8.3",

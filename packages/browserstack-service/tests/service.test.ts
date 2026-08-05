@@ -2427,3 +2427,85 @@ describe('_isAppAutomate honors skipAppOverride', () => {
         expect(svc._isAppAutomate()).toBe(false)
     })
 })
+
+describe('afterTest bail skip cascade (SDK-7063)', () => {
+    let getInstanceSpy: ReturnType<typeof vi.spyOn>
+
+    // reportSkippedTest de-dupes on `${parent} - ${title}` in a module-scope Set that outlives
+    // each test, so every case here needs its own titles.
+    const buildTree = (tag: string) => {
+        const root: any = { title: '', tests: [], suites: [], parent: undefined }
+        const suiteA: any = { title: `${tag} Suite A`, tests: [], suites: [], parent: root }
+        const suiteB: any = { title: `${tag} Suite B`, tests: [], suites: [], parent: root }
+        root.suites.push(suiteA, suiteB)
+
+        const ran: any = { title: `${tag} A1`, state: 'passed', parent: suiteA, file: '/spec/a.js' }
+        const failing: any = { title: `${tag} A2`, state: 'failed', parent: suiteA, file: '/spec/a.js' }
+        const dropped: any = { title: `${tag} A3`, parent: suiteA, file: '/spec/a.js' }
+        suiteA.tests.push(ran, failing, dropped)
+        // sibling top-level describe — only reachable because the cascade walks up to root
+        suiteB.tests.push({ title: `${tag} B1`, parent: suiteB, file: '/spec/a.js' })
+
+        failing.ctx = { test: { parent: suiteA } }
+        return { failing, root }
+    }
+
+    const makeService = (config: Record<string, unknown>) => new BrowserstackService(
+        { testObservability: false } as any,
+        [] as any,
+        { user: 'foo', key: 'bar', ...config } as any
+    )
+
+    const runAfterTest = async (svc: BrowserstackService, failing: any, results: Record<string, unknown>) => {
+        const trackEvent = vi.fn().mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => ({ trackEvent })
+        } as any)
+        await svc.afterTest(failing, undefined as never, results as any)
+        return trackEvent
+    }
+
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+    })
+
+    it('reports un-run tests across sibling describes when mocha bail is on', async () => {
+        const { failing } = buildTree('bail1')
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
+        const trackEvent = await runAfterTest(svc, failing, { passed: false })
+
+        // 2 events close the failing test (LOG_REPORT/POST + TEST/POST), then 4 per skipped test.
+        // A3 (same describe) and B1 (SIBLING describe) => 2 skipped => 8.
+        expect(trackEvent).toHaveBeenCalledTimes(2 + 8)
+    })
+
+    it('does not cascade when only wdio-level bail is set', async () => {
+        // wdio's `bail` never halts a spec, so those tests still run — reporting them
+        // as skipped here would double-report them.
+        const { failing } = buildTree('bail2')
+        const svc = makeService({ framework: 'mocha', bail: 1 })
+        const trackEvent = await runAfterTest(svc, failing, { passed: false })
+
+        expect(trackEvent).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not cascade while a retry is still queued', async () => {
+        const { failing } = buildTree('bail3')
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
+        const trackEvent = await runAfterTest(svc, failing, {
+            passed: false,
+            retries: { attempts: 0, limit: 2 }
+        })
+
+        expect(trackEvent).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not cascade when the test passed', async () => {
+        const { failing } = buildTree('bail4')
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
+        const trackEvent = await runAfterTest(svc, failing, { passed: true })
+
+        expect(trackEvent).toHaveBeenCalledTimes(2)
+    })
+})

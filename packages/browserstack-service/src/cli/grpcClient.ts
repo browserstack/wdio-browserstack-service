@@ -11,6 +11,7 @@ import {
     ConnectBinSessionRequestConstructor,
     TestFrameworkEventRequestConstructor,
     TestSessionEventRequestConstructor,
+    EnqueueTestEventRequestConstructor,
     ExecutionContextConstructor,
     LogCreatedEventRequestConstructor,
     // eslint-disable-next-line camelcase
@@ -34,6 +35,8 @@ import type {
     StartBinSessionResponse,
     TestFrameworkEventResponse,
     TestSessionEventResponse,
+    EnqueueTestEventRequest,
+    EnqueueTestEventResponse,
     LogCreatedEventResponse,
     DriverInitResponse,
     FetchDriverExecuteParamsEventResponse,
@@ -365,6 +368,32 @@ export class GrpcClient {
      *
      * Send TestFrameworkEvent
      */
+
+    /**
+     * Relay a single observability event through the binary, which forwards it using the
+     * build-scoped credential it holds internally. The launcher's own
+     * `BROWSERSTACK_TESTHUB_JWT` is the binary's account-auth token on this path (no build
+     * claim), so posting to the collector directly from here returns 401 — see SDK-7063.
+     * `eventUrl` is advisory; the binary logs it and routes by session.
+     */
+    async enqueueTestEvent(eventUrl: string, eventData: unknown) {
+        try {
+            if (!this.client) {
+                this.logger.info('enqueueTestEvent: gRPC client not initialized.')
+                return
+            }
+            const request = EnqueueTestEventRequestConstructor.create({
+                binSessionId: this.binSessionId,
+                eventUrl,
+                eventDataJson: Buffer.from(JSON.stringify(eventData))
+            })
+            const enqueuePromise = promisify(this.client!.enqueueTestEvent).bind(this.client!) as
+                (arg0: EnqueueTestEventRequest) => Promise<EnqueueTestEventResponse>
+            return await enqueuePromise(request)
+        } catch (error) {
+            this.logger.error(`Error in EnqueueTestEvent: ${util.format(error)}`)
+        }
+    }
 
     async testFrameworkEvent(data: Omit<TestFrameworkEventRequest, 'binSessionId'>) {
         // Generate unique event ID per call to avoid timing conflicts
