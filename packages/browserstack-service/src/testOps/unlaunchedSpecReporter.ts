@@ -143,17 +143,18 @@ export async function reportUnlaunchedSpecs(
             return !rel || rel.startsWith('..') ? file : rel
         }
         for (const test of tests) {
-            // Same shape `getUniqueIdentifier` produces for tests that DO run, so a test
-            // reported skipped here and the same test on a later successful run carry one
-            // identity. Mocha's own `fullTitle` (space-joined) would not match.
-            const identifier = `${test.scopes.at(-1) ?? ''} - ${test.title}`
+            // Match field-for-field what a test that DOES run emits, so a test reported
+            // skipped here and the same test on a later successful run are one test:
+            // `name`/`identifier` are the bare title and only `scope` carries the parent.
+            // (Observed on the wire; mocha's space-joined `fullTitle` matches neither.)
+            const scope = `${test.scopes.at(-1) ?? ''} - ${test.title}`
             const testData: TestData = {
                 uuid: uuidv4(),
                 type: 'test',
                 name: test.title,
-                scope: identifier,
+                scope,
                 scopes: test.scopes,
-                identifier,
+                identifier: test.title,
                 file_name: relativize(test.file),
                 location: relativize(test.file),
                 started_at: at,

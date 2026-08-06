@@ -136,7 +136,7 @@ describe('reported identity matches getUniqueIdentifier', () => {
     // identity, or TM sees two tests and rerun reconciliation breaks. getUniqueIdentifier
     // (util.ts) builds `${parent} - ${title}`; mocha's own fullTitle is space-joined and would
     // not match. This pins the format.
-    it('builds `parent - title`, not mocha fullTitle', async () => {
+    it('emits bare title for name/identifier and `parent - title` for scope', async () => {
         const enqueueTestEvent = vi.fn().mockResolvedValue({ success: true })
         vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({ isRunning: () => true } as any)
         vi.spyOn(GrpcClient, 'getInstance').mockReturnValue({ enqueueTestEvent } as any)
@@ -154,9 +154,10 @@ describe('reported identity matches getUniqueIdentifier', () => {
         const sent = enqueueTestEvent.mock.calls.map(c => c[1] as { test_run: Record<string, unknown> })
         expect(sent).toHaveLength(2) // TestRunStarted + TestRunFinished
         for (const event of sent) {
-            expect(event.test_run.identifier).toBe('Suite B - SB-TC1')
-            expect(event.test_run.scope).toBe('Suite B - SB-TC1')
+            // field-for-field parity with what an executed test emits
             expect(event.test_run.name).toBe('SB-TC1')
+            expect(event.test_run.identifier).toBe('SB-TC1')
+            expect(event.test_run.scope).toBe('Suite B - SB-TC1')
             expect(event.test_run.scopes).toEqual(['Suite B'])
             expect(event.test_run.result).toBe('skipped')
         }
