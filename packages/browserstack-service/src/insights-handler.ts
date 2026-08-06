@@ -183,7 +183,12 @@ class _InsightsHandler {
         switch (hookType) {
         case 'BEFORE_EACH':
         case 'AFTER_EACH':
-            return (hook as CucumberHook).hookId
+            // hookId is cucumber's hook *registration* id — every scenario invoking the same
+            // Before()/After() presents the same value. Suffix the current scenario's run uuid
+            // so a still-open entry orphaned in an earlier scenario is never clobbered by a
+            // later invocation before sweepUnfinished() can close it (SDK-7167). The uuid is
+            // stable between a hook's before/after events, so pairing is unaffected.
+            return `${(hook as CucumberHook).hookId}_${InsightsHandler.currentTest.uuid}`
         case 'BEFORE_ALL':
         case 'AFTER_ALL':
             // Can only work for single beforeAll or afterAll

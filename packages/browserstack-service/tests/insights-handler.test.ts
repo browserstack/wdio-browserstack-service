@@ -775,8 +775,11 @@ describe('getCucumberHookUniqueId', function () {
         insightsHandler = new InsightsHandler(browser, 'framework')
     })
 
-    it('should return hookId for each hooks', function () {
-        expect(insightsHandler['getCucumberHookUniqueId']('BEFORE_EACH', { id: '1', hookId: '2' })).toBe('2')
+    it('should key each hooks on hookId + current scenario run uuid', function () {
+        // hookId alone is cucumber's registration id, shared by every scenario invoking the
+        // same Before()/After() — the scenario-run suffix keeps each invocation distinct
+        InsightsHandler['currentTest'] = { uuid: 'scenario-run-uuid' }
+        expect(insightsHandler['getCucumberHookUniqueId']('BEFORE_EACH', { id: '1', hookId: '2' })).toBe('2_scenario-run-uuid')
     })
 
     it('should return unique id with feature for all hooks', function () {
@@ -966,6 +969,68 @@ describe('sweepUnfinished - cucumber', function () {
         await handler.sweepUnfinished()
         expect(hookFinishedSpy).toBeCalledTimes(0)
         expect(testFinishedSpy).toBeCalledTimes(0)
+    })
+})
+
+describe('cucumber hooks sharing one registered hookId across scenarios', function () {
+    let handler: InsightsHandler
+    let hookStartedSpy, hookFinishedSpy
+    // cucumber assigns hookId at Before()/After() registration time, so every scenario
+    // invoking the same registered hook presents the same value
+    const registeredHook = { id: 'test-step-1', hookId: 'registered-hook-id' } as any
+
+    beforeEach(() => {
+        handler = new InsightsHandler(browser, 'cucumber')
+        hookStartedSpy = vi.spyOn(handler['listener'], 'hookStarted').mockImplementation(() => {})
+        hookFinishedSpy = vi.spyOn(handler['listener'], 'hookFinished').mockImplementation(() => {})
+        vi.spyOn(handler, 'getCucumberHookType').mockReturnValue('AFTER_EACH')
+    })
+
+    afterEach(() => {
+        hookStartedSpy.mockRestore()
+        hookFinishedSpy.mockRestore()
+        InsightsHandler['currentTest'] = {}
+    })
+
+    it('keeps an earlier scenario\'s orphan recoverable when a later scenario invokes the same hook', async () => {
+        InsightsHandler['currentTest'] = { uuid: 'scenario-run-1' }
+        await handler['processCucumberHook'](registeredHook, { event: 'before', hookUUID: 'hook-uuid-1' })
+        // scenario 1's finish never arrives; scenario 2 invokes the same registered hook
+        InsightsHandler['currentTest'] = { uuid: 'scenario-run-2' }
+        await handler['processCucumberHook'](registeredHook, { event: 'before', hookUUID: 'hook-uuid-2' })
+
+        await handler.sweepUnfinished()
+        expect(hookFinishedSpy).toBeCalledTimes(2)
+        const sweptUuids = hookFinishedSpy.mock.calls.map((call: any) => call[0].uuid).sort()
+        expect(sweptUuids).toEqual(['hook-uuid-1', 'hook-uuid-2'])
+    })
+
+    it('pairs each after event with its own scenario\'s invocation', async () => {
+        InsightsHandler['currentTest'] = { uuid: 'scenario-run-1' }
+        await handler['processCucumberHook'](registeredHook, { event: 'before', hookUUID: 'hook-uuid-1' })
+        await handler['processCucumberHook'](registeredHook, { event: 'after' }, { passed: true } as any)
+        InsightsHandler['currentTest'] = { uuid: 'scenario-run-2' }
+        await handler['processCucumberHook'](registeredHook, { event: 'before', hookUUID: 'hook-uuid-2' })
+        await handler['processCucumberHook'](registeredHook, { event: 'after' }, { passed: true } as any)
+
+        expect(hookFinishedSpy).toBeCalledTimes(2)
+        expect(hookFinishedSpy.mock.calls[0][0].uuid).toBe('hook-uuid-1')
+        expect(hookFinishedSpy.mock.calls[1][0].uuid).toBe('hook-uuid-2')
+
+        await handler.sweepUnfinished()
+        expect(hookFinishedSpy).toBeCalledTimes(2)
+    })
+
+    it('does not reuse a previous scenario\'s closed entry when a later before event was dropped', async () => {
+        InsightsHandler['currentTest'] = { uuid: 'scenario-run-1' }
+        await handler['processCucumberHook'](registeredHook, { event: 'before', hookUUID: 'hook-uuid-1' })
+        await handler['processCucumberHook'](registeredHook, { event: 'after' }, { passed: true } as any)
+        // scenario 2's before is dropped; its after must not re-emit scenario 1's uuid
+        InsightsHandler['currentTest'] = { uuid: 'scenario-run-2' }
+        await handler['processCucumberHook'](registeredHook, { event: 'after' }, { passed: true } as any)
+
+        expect(hookFinishedSpy).toBeCalledTimes(1)
+        expect(hookFinishedSpy.mock.calls[0][0].uuid).toBe('hook-uuid-1')
     })
 })
 
