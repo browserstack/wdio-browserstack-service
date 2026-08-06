@@ -51,7 +51,6 @@ import {
 } from './util.js'
 import CrashReporter from './crash-reporter.js'
 import { finalizeOrphanedRuns } from './testOps/openRunsJournal.js'
-import { applyExcludes, hasPerCapabilitySpecFilters, reportUnlaunchedSpecs, resolveSpecPatterns } from './testOps/unlaunchedSpecReporter.js'
 import { BStackLogger } from './bstackLogger.js'
 import { PercyLogger } from './Percy/PercyLogger.js'
 import type Percy from './Percy/Percy.js'
@@ -81,13 +80,6 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
     private _percy?: Percy
     private _percyBestPlatformCaps?: WebdriverIO.Capabilities
     private readonly browserStackConfig: BrowserStackConfig
-    /** Spec files that actually reached a worker. Anything in the run's spec list that is
-     *  missing from this by onComplete was dropped by wdio's top-level `bail`. */
-    private _dispatchedSpecs: Set<string> = new Set()
-    private _requestedCapabilities?: Capabilities.TestrunnerCapabilities
-    /** Workers that exited non-zero. wdio's `bail` counts failed runners, so this is what
-     *  tells us whether bail actually fired and dropped work. */
-    private _failedRunners: number = 0
 
     constructor (
         private _options: BrowserstackConfig & BrowserstackOptions,
@@ -127,7 +119,6 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             process.env.TEST_OBSERVABILITY_BUILD_TAG = process.env.TEST_REPORTING_BUILD_TAG
         }
 
-        this._requestedCapabilities = capabilities
         this.browserStackConfig = BrowserStackConfig.getInstance(_options, _config, capabilities)
         BStackLogger.debug(`_options data: ${JSON.stringify(_options)}`)
         BStackLogger.debug(`webdriver capabilities data: ${JSON.stringify(capabilities)}`)
@@ -241,20 +232,8 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         }
     }
 
-    async onWorkerEnd (cid: string, exitCode: number, specs?: string[], retries?: number) {
-        // Mirror wdio's own `_runnerFailed` accounting: a failed spec with retries left is
-        // requeued, not counted. Counting it here would let us conclude bail had fired while
-        // those specs are still going to run.
-        if (exitCode !== 0 && !(typeof retries === 'number' && retries > 0)) {
-            this._failedRunners++
-        }
-    }
-
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_SETUP)
-    async onWorkerStart (cid: string, caps: WebdriverIO.Capabilities, specs?: string[]) {
-        for (const spec of specs || []) {
-            this._dispatchedSpecs.add(spec)
-        }
+    async onWorkerStart (cid: string, caps: WebdriverIO.Capabilities) {
         try {
             if (this._options.percy && this._percyBestPlatformCaps) {
                 const isThisBestPercyPlatform = ObjectsAreEqual(caps, this._percyBestPlatformCaps)
@@ -637,49 +616,6 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         })
     }
 
-    private async reportSpecsDroppedByBail() {
-        try {
-            // enumeration means loading spec files, which re-runs their top level — only worth
-            // it when bail could actually have dropped something and we have somewhere to report
-            if (this._config?.framework !== 'mocha' || !this._options.testObservability) {
-                return
-            }
-            const bail = this._config.bail
-            if (!(typeof bail === 'number' && bail > 0)) {
-                return
-            }
-            // Only report when bail actually fired. Without this, ANY spec wdio legitimately
-            // chose not to run (--spec, sharding, a filter we don't model) looks like it was
-            // dropped by bail. Gating on the real trigger makes those cases moot.
-            if (this._failedRunners < bail) {
-                BStackLogger.debug(`Skipping bail-dropped spec reporting: bail not reached (${this._failedRunners}/${bail} runners failed)`)
-                return
-            }
-            // Under sharding this process only ever owns a slice of the specs; the rest are
-            // another shard's work, not bail's doing, and the two are indistinguishable here.
-            const shard = this._config.shard
-            if (shard && typeof shard.total === 'number' && shard.total > 1) {
-                BStackLogger.debug(`Skipping bail-dropped spec reporting: run is sharded (${shard.current}/${shard.total})`)
-                return
-            }
-            // wdio narrows the spec set per capability; the top-level config then no longer
-            // describes what the run was going to execute, so opting out beats reporting a
-            // spec the user deliberately excluded
-            if (hasPerCapabilitySpecFilters(this._requestedCapabilities)) {
-                BStackLogger.debug('Skipping bail-dropped spec reporting: capabilities define their own specs/exclude')
-                return
-            }
-            const rootDir = this._config.rootDir || process.cwd()
-            const allSpecs = await resolveSpecPatterns((this._config.specs || []) as unknown[], rootDir)
-            // excluded files are never scheduled, so without this they would look "never ran"
-            const excludes = ((this._config.exclude || []) as unknown[]).filter((e): e is string => typeof e === 'string')
-            const candidates = applyExcludes(allSpecs, excludes, rootDir)
-            await reportUnlaunchedSpecs(candidates, this._dispatchedSpecs, rootDir)
-        } catch (err) {
-            BStackLogger.debug(`Error reporting specs dropped by bail: ${err}`)
-        }
-    }
-
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_CLEANUP)
     async onComplete () {
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_CLEANUP)
@@ -693,10 +629,6 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             // SDK-4671: before stopping the build, synthesize TestRunFinished for any
             // test runs whose worker died mid-test, else they stay 'in progress' on TRA.
             await finalizeOrphanedRuns()
-            // SDK-7063: wdio's top-level `bail` drops whole spec files before they reach a
-            // worker, so their tests never report at all. Account for them as skipped while
-            // the build is still open. (mocha's in-spec bail is handled in service.afterTest.)
-            await this.reportSpecsDroppedByBail()
             // SDK-7061: capture the stop result so we only mark the build stopped when it
             // actually succeeded. A failed stop must leave buildStopped=false so the
             // process-exit cleanup re-stop path can still close the build.

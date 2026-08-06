@@ -117,17 +117,6 @@ export const StopBinSessionRequestConstructor = {
     }
 }
 
-export const EnqueueTestEventRequestConstructor = {
-    create: (init: Partial<SdkMessages.EnqueueTestEventRequest> = {}): SdkMessages.EnqueueTestEventRequest => {
-        return {
-            binSessionId: '',
-            eventUrl: '',
-            eventDataJson: new Uint8Array(),
-            ...init
-        }
-    }
-}
-
 export const ConnectBinSessionRequestConstructor = {
     create: (init: Partial<SdkMessages.ConnectBinSessionRequest> = {}): SdkMessages.ConnectBinSessionRequest => {
         return {

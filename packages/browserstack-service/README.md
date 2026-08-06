@@ -78,14 +78,11 @@ You can explore all the features of Test Reporting and Analytics in [this sandbo
 
 #### Reporting of tests skipped by `bail`
 
-When a run is cut short by `bail`, the tests that never executed are still reported, with the status `skipped`, so the report accounts for every declared test rather than silently omitting them. This applies to both forms of `bail`, which stop a run at different granularities:
+With `mochaOpts: { bail: true }`, Mocha halts a spec on its first failure and the remaining tests in that file never run. Those tests are now reported with the status `skipped`, so the report accounts for every test in the spec rather than silently omitting them. Tests in sibling `describe` blocks in the same file are covered too.
 
-| Setting | What it stops | What gets reported as `skipped` |
-|---|---|---|
-| `mochaOpts: { bail: true }` | Mocha halts on the first failure, so the rest of that spec never runs | The remaining tests in that spec file, including those in sibling `describe` blocks |
-| `bail: <n>` (WebdriverIO) | The runner stops scheduling new spec files once `n` spec files have failed | Every test in the spec files that never started |
+Requires `mocha` as the framework and Test Reporting enabled.
 
-Requires `mocha` as the framework and Test Reporting enabled. To list the tests in spec files that never started, the service loads those files without executing any test bodies — so a spec whose top-level code has side effects will run that code once more at the end of the run.
+Note that WebdriverIO's own top-level `bail` option is a different setting: it counts failed *spec files* and stops scheduling further ones, rather than stopping tests within a spec. Tests in spec files that never start are not currently reported.
 
 ### browserstackLocal
 Set this to true to enable routing connections from BrowserStack cloud through your computer.
