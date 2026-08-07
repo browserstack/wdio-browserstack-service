@@ -1,4 +1,4 @@
-import { getErrorString, stopBuildUpstream } from './util.js'
+import { getErrorString, stopBuildUpstream, uploadLogs } from './util.js'
 import { BStackLogger } from './bstackLogger.js'
 import fs from 'node:fs'
 import util from 'node:util'
@@ -17,6 +17,10 @@ export default class BStackCleanup {
                 const filePath = process.argv[index + 1]
                 funnelData = this.getFunnelDataFromFile(filePath)
             }
+            // Snapshot before sendFunnelData — fireFunnelRequest redacts the
+            // credentials in place.
+            const funnelUser = (funnelData as { userName?: string } | null)?.userName
+            const funnelKey = (funnelData as { accessKey?: string } | null)?.accessKey
 
             if (process.argv.includes('--observability')) {
                 await this.executeObservabilityCleanup(funnelData)
@@ -24,6 +28,12 @@ export default class BStackCleanup {
 
             if (funnelDataCleanup && funnelData) {
                 await this.sendFunnelData(funnelData)
+            }
+
+            // Rescue the SDK-log upload for runs whose launcher never reached
+            // onComplete's upload (signal termination) — after events.
+            if (process.argv.includes('--uploadLogs')) {
+                await this.executeLogsUpload(funnelUser, funnelKey)
             }
         } catch (err) {
             const error = err as string
@@ -38,6 +48,23 @@ export default class BStackCleanup {
             BStackLogger.debug(`Error in sending events data ${util.format(er)}`)
         }
     }
+    static async executeLogsUpload(funnelUser?: string, funnelKey?: string) {
+        try {
+            const index = process.argv.indexOf('--uploadLogs')
+            const clientBuildUuid = process.argv[index + 1]
+            const user = funnelUser || process.env.BROWSERSTACK_USERNAME
+            const key = funnelKey || process.env.BROWSERSTACK_ACCESS_KEY
+            if (!clientBuildUuid || !user || !key) {
+                BStackLogger.debug('Skipping logs upload in cleanup: missing uuid or credentials')
+                return
+            }
+            BStackLogger.debug(`Uploading SDK logs from cleanup for ${clientBuildUuid}`)
+            await uploadLogs(user, key, clientBuildUuid)
+        } catch (e: unknown) {
+            BStackLogger.error('Error uploading SDK logs in cleanup: ' + getErrorString(e))
+        }
+    }
+
     static async executeObservabilityCleanup(funnelData: any) {
         if (!process.env[BROWSERSTACK_TESTHUB_JWT]) {
             return

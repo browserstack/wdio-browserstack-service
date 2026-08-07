@@ -29,6 +29,7 @@ class BrowserStackConfig {
     public funnelDataSent: boolean = false
     public sdkRunID: string
     public killSignal?: string
+    public logsUploaded: boolean = false
     public percyBuildId?: number | null
     public isPercyAutoEnabled = false
 

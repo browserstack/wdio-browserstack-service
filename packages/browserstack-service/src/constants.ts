@@ -47,7 +47,8 @@ export const BSTACK_SERVICE_VERSION = bstackServiceVersion
 export const UPDATED_CLI_ENDPOINT =  'sdk/v1/update_cli'
 export const CLI_STOP_TIMEOUT = 3000
 
-export const NOT_ALLOWED_KEYS_IN_CAPS = ['includeTagsInTestingScope', 'excludeTagsInTestingScope', 'skipAppOverride']
+export const NOT_ALLOWED_KEYS_IN_CAPS = ['includeTagsInTestingScope', 'excludeTagsInTestingScope', 'skipAppOverride', 'testManagementOptions']
+export const BROWSERSTACK_TEST_PLAN_ID = 'BROWSERSTACK_TEST_PLAN_ID'
 
 export const LOGS_FILE = 'logs/bstack-wdio-service.log'
 export const CLI_DEBUG_LOGS_FILE = 'log/sdk-cli-debug.log'
@@ -101,6 +102,9 @@ export const TESTOPS_SCREENSHOT_ENV = 'BS_TESTOPS_ALLOW_SCREENSHOTS'
 
 // To store build hashed id
 export const BROWSERSTACK_TESTHUB_UUID = 'BROWSERSTACK_TESTHUB_UUID'
+// Interrupt signal, propagated via env so the detached cleanup child and gRPC
+// stop path can stamp the kill reason onto the build stop.
+export const BROWSERSTACK_KILL_SIGNAL = 'BROWSERSTACK_SDK_KILL_SIGNAL'
 
 // To store test run uuid
 export const TEST_ANALYTICS_ID = 'TEST_ANALYTICS_ID'

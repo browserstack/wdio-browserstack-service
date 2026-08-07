@@ -12,13 +12,15 @@ import {
     shouldAddServiceVersion,
     isTrue,
     normalizeTestReportingConfig,
-    normalizeTestReportingEnvVariables
+    normalizeTestReportingEnvVariables,
+    getUniqueIdentifier,
+    getHookType
 } from './util.js'
 import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction, SessionResponse, TurboScaleSessionResponse } from './types.js'
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
 import InsightsHandler from './insights-handler.js'
 import TestReporter from './reporter.js'
-import { DEFAULT_OPTIONS, PERF_MEASUREMENT_ENV } from './constants.js'
+import { DEFAULT_OPTIONS, NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import AccessibilityHandler from './accessibility-handler.js'
 import { BStackLogger } from './bstackLogger.js'
@@ -34,6 +36,7 @@ import { EVENTS } from './instrumentation/performance/constants.js'
 import { BrowserstackCLI } from './cli/index.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { HookState } from './cli/states/hookState.js'
+import { markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
 import { AutomationFrameworkState } from './cli/states/automationFrameworkState.js'
 import TestFramework from './cli/frameworks/testFramework.js'
 import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
@@ -156,6 +159,13 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 const instance = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
                 const caps = AutomationFramework.getState(instance, AutomationFrameworkConstants.KEY_CAPABILITIES)
                 Object.assign(capabilities, caps)
+
+                // Strip CLI-only options that BrowserStack hub doesn't accept
+                const bstackOptions = (capabilities as Record<string, unknown>)['bstack:options'] as Record<string, unknown> | undefined
+                if (bstackOptions && typeof bstackOptions === 'object') {
+                    NOT_ALLOWED_KEYS_IN_CAPS.forEach(key => delete bstackOptions[key])
+                }
+                NOT_ALLOWED_KEYS_IN_CAPS.forEach(key => delete (capabilities as Record<string, unknown>)[`browserstack.${key}`])
             }
         } catch (err) {
             BStackLogger.error(`Error while connecting to Browserstack CLI: ${err}`)
@@ -368,6 +378,22 @@ export default class BrowserstackService implements Services.ServiceInstance {
         if (this._config.framework !== 'cucumber') {
             this._currentTest = test as Frameworks.Test // not update currentTest when this is called for cucumber step
         }
+
+        // CLI flow: route hook lifecycle to the binary via the TestFramework tracker (gRPC),
+        // mirroring beforeTest/afterTest. Without this, hook events fall through to the legacy
+        // Listener -> api/v1/batch path, which is not functional in the CLI pipeline, so
+        // HookRunStarted/HookRunFinished never reach the dashboard.
+        if (BrowserstackCLI.getInstance().isRunning()) {
+            const framework = BrowserstackCLI.getInstance().getTestFramework()
+            if (framework) {
+                const hookFrameworkState = TestFrameworkState[getHookType((test as Frameworks.Test).title) as keyof typeof TestFrameworkState]
+                if (hookFrameworkState) {
+                    await framework.trackEvent(hookFrameworkState, HookState.PRE, { test })
+                }
+            }
+            return
+        }
+
         await this._insightsHandler?.beforeHook(test, context)
     }
 
@@ -383,6 +409,27 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 this._failReasons.push(hookError)
             }
         }
+
+        // CLI flow: mirror beforeHook — close the hook via the TestFramework tracker (gRPC).
+        if (BrowserstackCLI.getInstance().isRunning()) {
+            const framework = BrowserstackCLI.getInstance().getTestFramework()
+            if (framework) {
+                const hookFrameworkState = TestFrameworkState[getHookType((test as Frameworks.Test).title) as keyof typeof TestFrameworkState]
+                if (hookFrameworkState) {
+                    await framework.trackEvent(hookFrameworkState, HookState.POST, { test, result })
+                }
+                // a failed (or skipping) before/each hook silently drops the suite's remaining
+                // tests in mocha — report them as skipped so they surface on the dashboard and
+                // attribute their Automate session (port of the legacy insights-handler cascade)
+                const hookType = getHookType((test as Frameworks.Test).title)
+                const suite = (test as Frameworks.Test).ctx?.test?.parent
+                if (result && !result.passed && ['BEFORE_ALL', 'BEFORE_EACH', 'AFTER_EACH'].includes(hookType) && suite) {
+                    await reportSuiteSkipped(framework, suite)
+                }
+            }
+            return
+        }
+
         await this._insightsHandler?.afterHook(test, result)
     }
 
@@ -407,6 +454,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
         if (BrowserstackCLI.getInstance().isRunning()) {
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test })
             const uuid = TestFramework.getState(TestFramework.getTrackedInstance(), TestFrameworkConstants.KEY_TEST_UUID)
+            // this test reports its own finish (incl. runtime `this.skip()`), so the
+            // skip reporter must never re-report it from onTestSkip
+            markTestStarted(getUniqueIdentifier(test, this._config.framework))
             this._insightsHandler?.setTestData(test, uuid)
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
             return

@@ -1000,6 +1000,56 @@ describe('_updateObjectTypeCaps', () => {
     })
 })
 
+describe('_removeCliOnlyCapabilityOptions', () => {
+    const options: BrowserstackConfig = {}
+    const config = {
+        user: 'foobaruser',
+        key: '12345678901234567890',
+        capabilities: []
+    }
+
+    it('should remove testManagementOptions from bstack:options in caps array', () => {
+        const caps: any = [{ 'bstack:options': { testManagementOptions: { testPlanId: 'tp-1' }, buildName: 'my-build' } }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service['_removeCliOnlyCapabilityOptions'](caps)
+        expect(caps[0]['bstack:options'].testManagementOptions).toBeUndefined()
+        expect(caps[0]['bstack:options'].buildName).toBe('my-build')
+    })
+
+    it('should remove testManagementOptions from bstack:options in multiremote caps', () => {
+        const caps: any = { chromeBrowser: { capabilities: { 'bstack:options': { testManagementOptions: { testPlanId: 'tp-1' } } } } }
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service['_removeCliOnlyCapabilityOptions'](caps)
+        expect(caps.chromeBrowser.capabilities['bstack:options'].testManagementOptions).toBeUndefined()
+    })
+
+    it('should remove legacy browserstack.testManagementOptions from caps array', () => {
+        const caps: any = [{ 'browserstack.testManagementOptions': { testPlanId: 'tp-1' } }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service['_removeCliOnlyCapabilityOptions'](caps)
+        expect(caps[0]['browserstack.testManagementOptions']).toBeUndefined()
+    })
+
+    it('should handle caps array without testManagementOptions gracefully', () => {
+        const caps: any = [{ 'bstack:options': { buildName: 'my-build' } }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        expect(() => service['_removeCliOnlyCapabilityOptions'](caps)).not.toThrow()
+        expect(caps[0]['bstack:options'].buildName).toBe('my-build')
+    })
+
+    it('should handle alwaysMatch caps', () => {
+        const caps: any = [{ alwaysMatch: { 'bstack:options': { testManagementOptions: { testPlanId: 'tp-1' } } } }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service['_removeCliOnlyCapabilityOptions'](caps)
+        expect(caps[0].alwaysMatch['bstack:options'].testManagementOptions).toBeUndefined()
+    })
+})
+
 describe('_validateApp', () => {
     const caps: any = [{}]
     const config = {
@@ -1338,6 +1388,33 @@ describe('_uploadServiceLogs', () => {
     })
 
     const service = new BrowserstackLauncher(options as any, caps, config)
+
+    it('marks logsUploaded when the upload resolves truthy', async () => {
+        vi.spyOn(utils, 'uploadLogs').mockResolvedValueOnce('success')
+        ;(service as any).browserStackConfig.logsUploaded = false
+
+        await service._uploadServiceLogs()
+
+        expect((service as any).browserStackConfig.logsUploaded).toBe(true)
+    })
+
+    it('leaves logsUploaded false when the upload resolves falsy', async () => {
+        vi.spyOn(utils, 'uploadLogs').mockResolvedValueOnce(undefined as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+
+        await service._uploadServiceLogs()
+
+        expect((service as any).browserStackConfig.logsUploaded).toBe(false)
+    })
+
+    it('leaves logsUploaded false when the server rejects the upload', async () => {
+        vi.spyOn(utils, 'uploadLogs').mockResolvedValueOnce({ status: 'error' } as any)
+        ;(service as any).browserStackConfig.logsUploaded = false
+
+        await service._uploadServiceLogs()
+
+        expect((service as any).browserStackConfig.logsUploaded).toBe(false)
+    })
 })
 
 describe('_getClientBuildUuid', () => {

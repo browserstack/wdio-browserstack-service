@@ -39,6 +39,7 @@ import {
     BROWSERSTACK_TESTHUB_JWT,
     BROWSERSTACK_OBSERVABILITY,
     BROWSERSTACK_TEST_REPORTING,
+    BROWSERSTACK_TEST_PLAN_ID,
     BROWSERSTACK_ACCESSIBILITY,
     MAX_GIT_META_DATA_SIZE_IN_BYTES,
     GIT_META_DATA_TRUNCATED,
@@ -407,7 +408,10 @@ export const launchTestSession = PerformanceTester.measureWrapper(PERFORMANCE_SD
         },
         product_map: getProductMapForBuildStartCall(bStackConfig, accessibilityAutomation),
         config: {},
-        test_orchestration: OrchestrationUtils.getInstance(config)?.getBuildStartData() || {}
+        test_orchestration: OrchestrationUtils.getInstance(config)?.getBuildStartData() || {},
+        test_management: {
+            test_plan_id: getTestPlanId(options)
+        }
     }
 
     if (accessibilityAutomation && (isTurboScale(options) || data.browserstackAutomation === false)){
@@ -434,6 +438,7 @@ export const launchTestSession = PerformanceTester.measureWrapper(PERFORMANCE_SD
         }).json()
         delete data?.accessibility?.settings?.includeEncodedExtension
         BStackLogger.debug(`[Start_Build] Success response: ${JSON.stringify(response)}`)
+        BStackLogger.debug(`Test Plan Id sent in request: ${getTestPlanId(options)}`)
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         if (response.jwt) {
             process.env[BROWSERSTACK_TESTHUB_JWT] = response.jwt
@@ -1248,8 +1253,10 @@ export async function batchAndPostEvents (eventUrl: string, kind: string, data: 
                 limit: 3,
                 methods: ['GET', 'POST']
             }
-        }).json()
-        BStackLogger.debug(`[${kind}] Success response: ${JSON.stringify(response)}`)
+        })
+        // .json() threw a misleading "Unexpected end of JSON input" on empty 2xx bodies;
+        // non-2xx already surfaces as got's HTTPError with the status code
+        BStackLogger.debug(`[${kind}] Success response: ${response.body}`)
     } catch (error) {
         BStackLogger.debug(`[${kind}] EXCEPTION IN ${kind} REQUEST TO TEST Reporting and Analytics : ${error}`)
         throw new Error('Exception in request ' + error)
@@ -1333,6 +1340,26 @@ export function getObservabilityBuildTags(options: BrowserstackConfig & Options.
         return [bstackBuildTag]
     }
     return []
+}
+
+export function getTestPlanId(options: BrowserstackConfig & Options.Testrunner): string | undefined {
+    if (process.env[BROWSERSTACK_TEST_PLAN_ID]) {
+        return process.env[BROWSERSTACK_TEST_PLAN_ID]
+    }
+    const CLI_ARG = '--browserstack.testManagementOptions.testPlanId'
+    const argIndex = process.argv.indexOf(CLI_ARG)
+    if (argIndex !== -1 && process.argv[argIndex + 1]) {
+        return process.argv[argIndex + 1]
+    }
+    const argWithEquals = process.argv.find((arg) => arg.startsWith(`${CLI_ARG}=`))
+    if (argWithEquals) {
+        return argWithEquals.split('=')[1]
+    }
+    const testPlanId = options.testManagementOptions?.testPlanId
+    if (typeof testPlanId === 'string' && testPlanId.trim().length > 0) {
+        return testPlanId.trim()
+    }
+    return undefined
 }
 
 export function getBrowserStackUser(config: Options.Testrunner) {
