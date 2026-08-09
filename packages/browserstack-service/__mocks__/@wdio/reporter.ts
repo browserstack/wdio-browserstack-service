@@ -1,0 +1,87 @@
+import { vi } from 'vitest'
+
+import { EventEmitter } from 'node:events'
+// Runtime stubs for the stats classes — the code under test references them only as TS
+// types (erased at runtime). Importing the real @wdio/reporter from within its own mock
+// deadlocks vitest's module loader and hangs reporter.test.ts at collection.
+class HookStats {}
+class RunnerStats {}
+class SuiteStats {}
+class TestStats {}
+import { Chalk } from '../chalk.ts'
+
+export default class WDIOReporter extends EventEmitter {
+    outputStream: { write: Function }
+    failures: number
+    suites: Record<string, SuiteStats>
+    hooks: Record<string, HookStats>
+    tests: Record<string, TestStats>
+    currentSuites: SuiteStats[]
+    counts: {
+        suites: number
+        tests: number
+        hooks: number
+        passes: number
+        skipping: number
+        failures: number
+    }
+    retries: number
+    _chalk: Chalk
+    runnerStat?: RunnerStats
+    constructor (public options: any) {
+        super()
+        this.options = options
+        this.outputStream = { write: vi.fn() }
+        this.failures = 0
+        this.suites = {}
+        this.hooks = {}
+        this.tests = {}
+        this.currentSuites = []
+        this.counts = {
+            suites: 0,
+            tests: 0,
+            hooks: 0,
+            passes: 0,
+            skipping: 0,
+            failures: 0
+        }
+        this.retries = 0
+        this._chalk = new Chalk(!options.color ? { level : 0 } : {})
+    }
+
+    get isSynchronised () {
+        return true
+    }
+
+    write (content: any) {
+        this.outputStream.write(content)
+    }
+
+    /* istanbul ignore next */
+    onRunnerStart () {}
+    /* istanbul ignore next */
+    onBeforeCommand () {}
+    /* istanbul ignore next */
+    onAfterCommand () {}
+    /* istanbul ignore next */
+    onSuiteStart () {}
+    /* istanbul ignore next */
+    onHookStart () {}
+    /* istanbul ignore next */
+    onHookEnd () {}
+    /* istanbul ignore next */
+    onTestStart () {}
+    /* istanbul ignore next */
+    onTestPass () {}
+    /* istanbul ignore next */
+    onTestFail () {}
+    /* istanbul ignore next */
+    onTestSkip () {}
+    /* istanbul ignore next */
+    onTestEnd () {}
+    /* istanbul ignore next */
+    onSuiteEnd () {}
+    /* istanbul ignore next */
+    onRunnerEnd () {}
+}
+export { HookStats, RunnerStats, SuiteStats, TestStats }

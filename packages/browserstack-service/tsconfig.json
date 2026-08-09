@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "target": "es2022",
+    "moduleResolution": "node16",
+
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "allowJs": true,
+    "declaration": true,
+    "declarationMap": true,
+    "resolveJsonModule": true,
+    "removeComments": false,
+    "strictFunctionTypes": false,
+    "experimentalDecorators": true,
+    "lib": ["es2023", "dom", "es2021"],
+
+    "baseUrl": ".",
+    "outDir": "./build",
+    "rootDir": "./src",
+    "types": ["node", "@wdio/globals/types"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "build", "**/*.spec.ts"]
+}

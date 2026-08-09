@@ -1,0 +1,218 @@
+name: Ready for Review Label
+
+on:
+  pull_request:
+    types: [edited, synchronize, labeled, unlabeled]
+
+# Coalesce runs per PR. Label add/remove re-fires this workflow; cancel-in-progress
+# drops the superseded run so only the latest state is evaluated.
+concurrency:
+  group: ready-for-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-ready:
+    # NO job-level `if`. Because Req 3 makes the JOB FAILURE the gate, this job MUST
+    # always conclude red/green and never "skipped" — a skipped required check reads
+    # as passing on GitHub, so an `if` that skips on an unrelated label event would
+    # silently flip the hard gate from red to green. The gate runs on every triggering
+    # event and does its own label filtering internally (it only ever removes the
+    # ready-for-review label and computes purely from the PR's current labels).
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Validate ready-for-review label against the release gate (SDK-6104 #8)
+        id: gate
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const body = context.payload.pull_request.body || '';
+            // "Ready to review" is matched against the WHOLE body: the string is
+            // unambiguous and lives in the Checklist section, not Release.
+            const isCheckboxTicked = /- \[[xX]\] Ready to review/.test(body);
+            const labels = context.payload.pull_request.labels.map(l => l.name);
+            const hadLabel = labels.includes('ready-for-review');
+
+            // Anchor the bump count to the "## Release" section only. A bump tick
+            // appearing elsewhere (description prose, another checklist, a quoted
+            // template) must NOT satisfy the gate. Slice the body into heading blocks
+            // at each "## " boundary and pick the Release block.
+            const releaseBlock = body.split(/(?=^## )/m).find(s => /^##[ \t]*Release[ \t]*(\(|$)/m.test(s)) || '';
+            const hasReleaseSection = releaseBlock !== '';
+            // The free-form "Release notes (...)" subsections live INSIDE the Release
+            // block (bold headers, not "## " headings) and may legitimately contain
+            // checkbox-looking bullets (e.g. an internal note "- [x] patch the retry
+            // path"). Count bump ticks only in the region BEFORE the first notes
+            // header so notes text can never flip the count (mirrors the release
+            // planner's scan scoping).
+            const bumpRegion = releaseBlock.split(/^\*\*Release notes \(/m)[0];
+            // The (?=\s|\(|$) lookahead matches a bump tick followed by whitespace, an
+            // opening paren ("minor (...)"), or end-of-string. It rejects e.g. "minor-stub".
+            const bumpTicks = [...bumpRegion.matchAll(/- \[[xX]\]\s*(minor|patch)(?=\s|\(|$)/g)].length;
+
+            // Internal release notes are REQUIRED (they feed the internal CHANGELOG.md):
+            // the Release block must carry at least one non-empty bullet under
+            // "**Release notes (internal):**". The header-line remainder (the italic
+            // "*(required ...)*" annotation) and HTML comments are stripped first so
+            // template scaffolding can never satisfy the check, and the empty
+            // placeholder "- " does not count. Auto-generated release PRs (head branch
+            // "release_x.y.z") are EXEMPT: the release workflow writes the CHANGELOG.md
+            // entries itself from the constituent PRs' notes, so the release PR's own
+            // subsection legitimately stays empty.
+            const isReleasePr = /^release_\d+(\.\d+)*$/.test(context.payload.pull_request.head.ref);
+            const internalSplit = releaseBlock.split(/^\*\*Release notes \(internal\):\*\*/m);
+            const internalRegion = internalSplit.length > 1
+              ? internalSplit[1].replace(/^[^\n]*\n?/, '').split(/^\*\*/m)[0].replace(/<!--[\s\S]*?-->/g, '')
+              : '';
+            const internalFilled = /^[ \t]*[-*][ \t]*\S/m.test(internalRegion);
+            const internalOk = isReleasePr || internalFilled;
+
+            // reasons   -> full sentences for the PR comment.
+            // reasonBits -> short single-line fragments for step outputs / Slack.
+            const reasons = [];
+            const reasonBits = [];
+            if (!hasReleaseSection) {
+              const templateUrl = `${context.payload.repository.html_url}/blob/${context.payload.repository.default_branch}/.github/PULL_REQUEST_TEMPLATE.md`;
+              reasons.push(`The PR body has no \`## Release\` section. Apply the [repo PR template](${templateUrl}) to the PR body, then tick exactly one version bump.`);
+              reasonBits.push('missing ## Release section');
+            } else if (bumpTicks === 0) {
+              reasons.push('Tick exactly one version bump (minor or patch) in the Release section.');
+              reasonBits.push('no version bump ticked in ## Release');
+            } else if (bumpTicks > 1) {
+              reasons.push('Tick exactly ONE version bump (minor or patch), not multiple.');
+              reasonBits.push(`expected exactly one version bump tick in ## Release, found ${bumpTicks}`);
+            } else if (!internalOk) {
+              reasons.push('Fill in at least one non-empty bullet under `**Release notes (internal):**` in the Release section (engineer-facing — it feeds the internal CHANGELOG.md). The empty placeholder `- ` does not count.');
+              reasonBits.push('internal release notes empty');
+            }
+            if (!isCheckboxTicked) {
+              reasons.push('Tick `- [x] Ready to review` once the PR body is complete.');
+              reasonBits.push('Ready-to-review checkbox not ticked');
+            }
+
+            const bumpOk = bumpTicks === 1;
+            const shouldHaveLabel = isCheckboxTicked && bumpOk && internalOk;
+
+            // This workflow NEVER ADDS the ready-for-review label — the author applies
+            // it manually. It only REMOVES the label when the label is present but the
+            // body does not pass the release gate. The "Require label" step below then
+            // FAILS the check whenever the label is absent, making ready-for-review a
+            // required, manually-applied merge gate.
+            let removedNow = false;
+            if (hadLabel && !shouldHaveLabel) {
+              await github.rest.issues.removeLabel({
+                ...context.repo,
+                issue_number: context.issue.number,
+                name: 'ready-for-review'
+              }).catch(() => {});
+              removedNow = true;
+            }
+            // We never add, so the label is present at the end iff it was present and
+            // we did not strip it.
+            const labelPresent = hadLabel && !removedNow;
+
+            // Warning comment (single, marker-deduped): posted when the author has
+            // CLAIMED readiness (ticked the checkbox) but the body fails, or when this
+            // run removed the label. A WIP PR that never claimed readiness gets NO
+            // comment — the failing check is the signal; we don't spam every draft.
+            // Deleted once the body passes AND the label is present.
+            // Emit step outputs FIRST — the notify and enforce steps depend on them,
+            // and they must be set regardless of the (advisory, best-effort) warning
+            // comment lifecycle below.
+            core.setOutput('removed', removedNow ? 'true' : 'false');
+            core.setOutput('reason', reasonBits.join('; ') || 'PR body passes the release gate');
+            core.setOutput('author', context.payload.pull_request.user.login);
+            core.setOutput('label_present', labelPresent ? 'true' : 'false');
+
+            // Warning comment lifecycle — ADVISORY ONLY, wrapped in try/catch so a transient
+            // GitHub comments-API error can neither (a) fail the check on a passing PR nor
+            // (b) skip the Slack notify step (the gate step must stay green so the later
+            // step `if`s evaluate). Posted when the author CLAIMED readiness (ticked the
+            // checkbox) but the body fails, or when this run removed the label. A WIP PR that
+            // never claimed readiness gets NO comment. Deleted once the body passes AND the
+            // label is present.
+            const marker = '<!-- sdk-6104:release-section-incomplete -->';
+            const shouldWarn = removedNow || (isCheckboxTicked && !(bumpOk && internalOk));
+            let warningBody = '';
+            if (shouldWarn) {
+              const headline = removedNow
+                ? '⚠️ The `ready-for-review` label was removed because the PR body does not pass the release gate:'
+                : '⚠️ The PR body claims it is ready to review but does not pass the release gate:';
+              warningBody = marker + '\n' + headline + '\n- ' + reasons.join('\n- ') +
+                '\n\nHow to get (and keep) the `ready-for-review` label:\n' +
+                '1. Make sure the PR body follows the repo PR template (all sections present).\n' +
+                '2. In the `## Release` section, tick exactly one version bump (`minor` or `patch`).\n' +
+                '3. Fill in at least one bullet under `**Release notes (internal):**` (engineer-facing; feeds the internal CHANGELOG.md).\n' +
+                '4. Tick `- [x] Ready to review` in the checklist.\n' +
+                '5. Apply the `ready-for-review` label yourself — this workflow does NOT add it for you; it only removes it if the body stops passing, and the check stays red until the label is present.';
+            }
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                ...context.repo,
+                issue_number: context.issue.number,
+                per_page: 100
+              });
+              const existingWarning = comments.find(c => (c.body || '').includes(marker));
+              if (shouldWarn && !existingWarning) {
+                await github.rest.issues.createComment({
+                  ...context.repo,
+                  issue_number: context.issue.number,
+                  body: warningBody
+                });
+              } else if (shouldWarn && existingWarning && existingWarning.body !== warningBody) {
+                await github.rest.issues.updateComment({
+                  ...context.repo,
+                  comment_id: existingWarning.id,
+                  body: warningBody
+                });
+              } else if (labelPresent && existingWarning) {
+                await github.rest.issues.deleteComment({
+                  ...context.repo,
+                  comment_id: existingWarning.id
+                });
+              }
+            } catch (e) {
+              console.log(`warning-comment lifecycle skipped (non-fatal): ${e.message}`);
+            }
+
+      - name: Notify Slack on label removal
+        if: steps.gate.outputs.removed == 'true'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_PR_DM_WEBHOOK }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_REF: "${{ github.repository }}#${{ github.event.pull_request.number }}"
+          REASON: ${{ steps.gate.outputs.reason }}
+          AUTHOR: ${{ steps.gate.outputs.author }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_PR_DM_WEBHOOK not configured — skipping Slack notification"
+            exit 0
+          fi
+          # github_username (the PR author's GitHub login) is sent so the
+          # SLACK_PR_DM_WEBHOOK Workflow-Builder workflow resolves the author via
+          # the SDK PR Reviewers list and DMs them. Authors not in that list are
+          # not notified (no channel fallback — the list lookup halts on no-match).
+          text=":warning: ready-for-review was removed from ${PR_REF} (author: ${AUTHOR}) — ${REASON}. ${PR_URL} — fix the PR body per the repo PR template, then re-apply the label."
+          payload=$(jq -n --arg text "$text" --arg github_username "$AUTHOR" '{text: $text, github_username: $github_username}')
+          curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
+            -d "$payload" "$SLACK_WEBHOOK_URL" \
+            || echo "Slack notify failed (non-fatal)"
+
+      - name: Require the ready-for-review label
+        # Hard gate: this step fails the check whenever the label is absent (a WIP PR,
+        # a never-applied label, or one this run just removed). It runs after the notify
+        # step (the gate step does not fail, so the notify is never skipped). Green only
+        # when the label is present — i.e. the author applied it AND the body passes
+        # (otherwise the gate step above would have removed it).
+        if: steps.gate.outputs.label_present != 'true'
+        run: |
+          echo "::error::The 'ready-for-review' label is required and is not present on this PR."
+          echo "Apply the 'ready-for-review' label once the PR body passes the release gate:"
+          echo "  - the PR template is complete,"
+          echo "  - the '## Release' section has exactly one version bump (minor or patch),"
+          echo "  - '**Release notes (internal):**' has at least one non-empty bullet,"
+          echo "  - and '- [x] Ready to review' is ticked."
+          echo "This workflow does not add the label for you; the check stays red until the label is present."
+          exit 1
