@@ -95,9 +95,30 @@ export const COMPOUND_SECRET_SUFFIXES_SNAKE = 'key|token|secret|password|passwd|
  * reach. Applied as whole-block passes before the line passes.
  */
 /* an inline PEM: the key bytes sit on lines that carry no key name at all */
-export const PEM_BLOCK_REGEX = /(-----BEGIN [^-\r\n]+-----)[\s\S]*?(-----END [^-\r\n]+-----)/g
-/* basic-auth userinfo in ANY url value, not just the `proxyUrl` key */
-export const URL_USERINFO_REGEX = /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]*@/g
+/*
+ * The body is TEMPERED so it cannot cross a second `-----BEGIN`: with a plain `[\s\S]*?`,
+ * an UNTERMINATED block earlier in the file matches through to a later, unrelated block's
+ * END marker and everything in between is replaced — silently destroying unrelated config.
+ * Bounded as well, so the scan stays linear.
+ */
+export const PEM_BLOCK_REGEX = /(-----BEGIN [^-\r\n]+-----)(?:(?!-----BEGIN)[\s\S]){0,65536}?(-----END [^-\r\n]+-----)/g
+/*
+ * A PEM opened but never closed. The block regex above needs the END marker, so without it
+ * the key bytes survive every pass. Matched as BEGIN + the run of base64-only lines that
+ * follows. A run must be at least 20 characters and end at a non-base64 character: letters
+ * are valid base64, so a shorter/unbounded rule matches part of an ordinary line such as
+ * `nextOption: 1` and eats it. Stops at the first line that does not qualify, so a malformed
+ * block cannot swallow the rest of the file.
+ */
+export const PEM_UNTERMINATED_REGEX = /(-----BEGIN [^-\r\n]+-----)(?:\r?\n[A-Za-z0-9+/=]{20,200}(?=[^A-Za-z0-9+/=]|$))+/g
+/*
+ * Userinfo in ANY url value, not just the `proxyUrl` key. The password half is optional so
+ * single-token forms (`https://ghp_xxx@github.com`, common in CI git/npm remotes) are caught
+ * too. Quantifiers are BOUNDED: the unbounded form was measurably quadratic (100 KB of
+ * word characters took 6.1 s, 4x per doubling) because both halves scan forward for an `@`
+ * that never arrives. Real userinfo is short, so the bounds change no real-world match.
+ */
+export const URL_USERINFO_REGEX = /([a-zA-Z][a-zA-Z0-9+.-]{0,64}:\/\/)[^\s/@:]{1,256}(?::[^\s/@]{0,256})?@/g
 
 export const REDACTED_KEYS = [
     'user', 'key',

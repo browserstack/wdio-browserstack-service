@@ -329,6 +329,64 @@ describe('redactSensitiveContent', () => {
             .toContain('https://example.com:8080/path')
     })
 
+    it('scrubs single-token userinfo in a URL, not just user:pass (PR review round 3)', () => {
+        // Common in CI git remotes and npm registry auth.
+        const redacted = redactSensitiveContent([
+            "repoUrl: 'https://ghp_TOKENLEAK@github.com/x/y.git'",
+            "registry: 'https://npm_TOKENLEAK2@registry.example.com'"
+        ].join('\n'))
+
+        expect(redacted).not.toContain('ghp_TOKENLEAK')
+        expect(redacted).not.toContain('npm_TOKENLEAK2')
+        expect(redacted).toContain('github.com')
+    })
+
+    it('scrubs an unterminated PEM block without eating the rest of the file', () => {
+        const redacted = redactSensitiveContent([
+            'credentials: {',
+            '    privateKey: `-----BEGIN PRIVATE KEY-----',
+            'MIIEvQIBADANunterminatedbytes',
+            'nextOption: 1',
+            '}'
+        ].join('\n'))
+
+        expect(redacted).not.toContain('MIIEvQIBADANunterminatedbytes')
+        // a malformed block must not swallow everything after it
+        expect(redacted).toContain('nextOption')
+    })
+
+    it('does not let an unterminated PEM swallow a later, unrelated PEM block', () => {
+        // Found live: with an untempered body the FIRST (unterminated) BEGIN matched through
+        // to the SECOND block's END marker, replacing every unrelated line in between.
+        const redacted = redactSensitiveContent([
+            'openPem: `-----BEGIN RSA PRIVATE KEY-----',
+            'MIIEUNTERMINATEDBYTESMUSTNOTAPPEAR`,',
+            "afterPem: 'STILL_READABLE_MARKER',",
+            'pem: `-----BEGIN PRIVATE KEY-----',
+            'MIIEvQTERMINATEDBYTESMUSTNOTAPPEAR',
+            '-----END PRIVATE KEY-----`,'
+        ].join('\n'))
+
+        expect(redacted).not.toContain('MIIEUNTERMINATEDBYTESMUSTNOTAPPEAR')
+        expect(redacted).not.toContain('MIIEvQTERMINATEDBYTESMUSTNOTAPPEAR')
+        // the line between the two blocks must survive
+        expect(redacted).toContain('STILL_READABLE_MARKER')
+    })
+
+    it('stays linear on pathological input (ReDoS guard)', () => {
+        // The unbounded URL userinfo pass was measurably quadratic: 100 KB of word
+        // characters took ~6.1s, 4x per doubling, and redactSensitiveContent runs
+        // synchronously inside uploadLogs. Bounded quantifiers keep it flat.
+        const build = (n: number) => `baseUrl: 'https://${'a'.repeat(n)}` + '\n' + `k${'b'.repeat(n)}Key`
+
+        const started = Date.now()
+        redactSensitiveContent(build(200_000))
+        const elapsed = Date.now() - started
+
+        // generous ceiling: the unbounded form did not finish 1 MB in 120s
+        expect(elapsed).toBeLessThan(2_000)
+    })
+
     it('scrubs a token embedded in a package.json script', () => {
         expect(redactSensitiveContent('"deploy": "gh release upload --token=ghp_leak"'))
             .not.toContain('ghp_leak')

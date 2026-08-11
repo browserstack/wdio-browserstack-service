@@ -9,6 +9,7 @@ import {
     COMPOUND_SECRET_SUFFIXES_CAMEL,
     COMPOUND_SECRET_SUFFIXES_SNAKE,
     PEM_BLOCK_REGEX,
+    PEM_UNTERMINATED_REGEX,
     URL_USERINFO_REGEX,
     BROWSERSTACK_WDIO_CONFIG_FILE_PATH,
     BROWSERSTACK_WDIO_CONFIG_STRATEGY,
@@ -307,8 +308,11 @@ export function redactSensitiveContent(text: string): string {
     // camelCase stays case-SENSITIVE: requiring a capitalised suffix is what separates
     // `privateKey` from `hotkey`, so this closes the leak without the false positives a
     // bare /key|token|secret/ pass would produce.
+    // Identifier scans are bounded at 64 chars. Real config keys are far shorter, so this
+    // changes no match; it is defence-in-depth against backtracking on a pathological line
+    // (a minified/base64 run), keeping every start position O(1) instead of O(n).
     const compoundCamelRegex = new RegExp(
-        `^.*?(?<![A-Za-z0-9_$])([A-Za-z0-9_$]*[a-z0-9](?:${COMPOUND_SECRET_SUFFIXES_CAMEL}))\\s*[:=].*$`,
+        `^.*?(?<![A-Za-z0-9_$])([A-Za-z0-9_$]{0,64}[a-z0-9](?:${COMPOUND_SECRET_SUFFIXES_CAMEL}))\\s*[:=].*$`,
         'gm'
     )
     // snake_case is matched case-INSENSITIVELY, which is safe precisely because it requires
@@ -317,7 +321,7 @@ export function redactSensitiveContent(text: string): string {
     // while `keyword` and `my_secretary` still fall out, since neither has `_<suffix>`
     // immediately before an assignment.
     const compoundSnakeRegex = new RegExp(
-        `^.*?(?<![A-Za-z0-9_$])([A-Za-z0-9_$]*_(?:${COMPOUND_SECRET_SUFFIXES_SNAKE}))\\s*[:=].*$`,
+        `^.*?(?<![A-Za-z0-9_$])([A-Za-z0-9_$]{0,64}_(?:${COMPOUND_SECRET_SUFFIXES_SNAKE}))\\s*[:=].*$`,
         'gmi'
     )
 
@@ -325,6 +329,7 @@ export function redactSensitiveContent(text: string): string {
         // Block-level passes run FIRST: they span lines, and the line-anchored passes below
         // can only ever see the one line that carries the key name.
         .replace(PEM_BLOCK_REGEX, '$1[REDACTED]$2')
+        .replace(PEM_UNTERMINATED_REGEX, '$1[REDACTED]')
         .replace(URL_USERINFO_REGEX, '$1[REDACTED]@')
         .replace(redactRegex, '$1: [REDACTED]')
         .replace(compoundCamelRegex, '$1: [REDACTED]')
