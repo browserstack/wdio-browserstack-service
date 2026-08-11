@@ -1633,6 +1633,11 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
             failure = `archive_add_failed [${archiveAddFailures.length}]: ${archiveAddFailures.join('; ')}`.substring(0, 300)
         }
 
+        // Full archive manifest: the only place the complete entry list is visible, so
+        // regression automation can assert package.json and the config files actually
+        // made it in rather than inferring it from the config-capture line alone.
+        BStackLogger.debug(`Auto-capture archive entries: ${copiedFileNames.join(', ')}`)
+
         await create(
             {
                 file: tarPath,
