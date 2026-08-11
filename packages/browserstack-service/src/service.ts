@@ -569,12 +569,31 @@ export default class BrowserstackService implements Services.ServiceInstance {
      * as skipped — same cascade the failed-hook path uses, from the spec's root suite so sibling
      * describes are covered too (bail kills the whole spec, not just the failing describe).
      */
+    /**
+     * Whether this failure will be retried, in which case mocha has not dropped anything yet and
+     * the tests after it are still going to run.
+     *
+     * `results.retries` only tracks wdio's spec-file retries — `@wdio/utils` builds it as
+     * `{ attempts: 0, limit: repeatTest }` and `@wdio/mocha-framework` never feeds `mochaOpts.retries`
+     * into it, so under mocha-level retries it stays `{0, 0}` and tells us nothing. Read mocha's own
+     * runnable state for that case, otherwise the cascade fires on the first attempt and reports
+     * tests as skipped that the retry then actually runs.
+     */
+    private hasRetryPending(test: Frameworks.Test, results: Frameworks.TestResult): boolean {
+        const mochaTest = test.ctx?.test as { currentRetry?: () => number, retries?: () => number } | undefined
+        if (typeof mochaTest?.currentRetry === 'function' && typeof mochaTest.retries === 'function') {
+            if (mochaTest.currentRetry() < mochaTest.retries()) {
+                return true
+            }
+        }
+        return Boolean(results.retries && results.retries.attempts < results.retries.limit)
+    }
+
     private async reportBailSkippedTests(test: Frameworks.Test, results: Frameworks.TestResult) {
         if (!this._mochaBail || results.passed || results.skipped) {
             return
         }
-        // a retry is still queued — mocha has not dropped anything yet
-        if (results.retries && results.retries.attempts < results.retries.limit) {
+        if (this.hasRetryPending(test, results)) {
             return
         }
         try {

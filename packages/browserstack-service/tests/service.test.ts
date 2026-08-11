@@ -2490,7 +2490,7 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
         expect(trackEvent).toHaveBeenCalledTimes(2)
     })
 
-    it('does not cascade while a retry is still queued', async () => {
+    it('does not cascade while a wdio spec-file retry is still queued', async () => {
         const { failing } = buildTree('bail3')
         const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
         const trackEvent = await runAfterTest(svc, failing, {
@@ -2499,6 +2499,36 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
         })
 
         expect(trackEvent).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not cascade while a MOCHA-level retry is still queued', async () => {
+        // wdio's `results.retries` only tracks spec-file retries — @wdio/mocha-framework never
+        // feeds mochaOpts.retries into it, so it reads {0,0} here and cannot be relied on.
+        // Without reading mocha's own runnable state the cascade fires on attempt 1 and reports
+        // tests as skipped that the retry then actually runs.
+        const { failing } = buildTree('bail5')
+        failing.ctx.test.currentRetry = () => 0
+        failing.ctx.test.retries = () => 1
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true, retries: 1 } })
+        const trackEvent = await runAfterTest(svc, failing, {
+            passed: false,
+            retries: { attempts: 0, limit: 0 }
+        })
+
+        expect(trackEvent).toHaveBeenCalledTimes(2)
+    })
+
+    it('cascades once the final mocha retry has been used', async () => {
+        const { failing } = buildTree('bail6')
+        failing.ctx.test.currentRetry = () => 1
+        failing.ctx.test.retries = () => 1
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true, retries: 1 } })
+        const trackEvent = await runAfterTest(svc, failing, {
+            passed: false,
+            retries: { attempts: 0, limit: 0 }
+        })
+
+        expect(trackEvent).toHaveBeenCalledTimes(2 + 8)
     })
 
     it('does not cascade when the test passed', async () => {
