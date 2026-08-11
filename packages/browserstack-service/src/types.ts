@@ -104,6 +104,15 @@ export interface BrowserstackConfig {
      */
     testManagementOptions?: TestManagementOptions;
     /**
+     * By default the service uploads its own debug logs, your `package.json` and a
+     * credential-redacted copy of your wdio config file at the end of a run, so
+     * BrowserStack support can debug issues without asking you to reproduce them.
+     * Set this to true to disable that upload entirely.
+     * Can also be set with the `BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS=true` env var.
+     * @default false
+     */
+    disableAutoCaptureLogs?: boolean;
+    /**
      * Set this to true to enable BrowserStack Percy which will take screenshots
      * and snapshots for your tests run on Browserstack
      * @default false

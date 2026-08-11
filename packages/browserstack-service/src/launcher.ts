@@ -50,6 +50,7 @@ import {
     validateSkipAppOverride
 } from './util.js'
 import CrashReporter from './crash-reporter.js'
+import { initWdioConfigPath, isAutoCaptureLogsDisabled, publishAutoCaptureDisabled } from './configCapture.js'
 import { finalizeOrphanedRuns } from './testOps/openRunsJournal.js'
 import { BStackLogger } from './bstackLogger.js'
 import { PercyLogger } from './Percy/PercyLogger.js'
@@ -249,6 +250,15 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_PRE_TEST)
     async onPrepare (config: Options.Testrunner, capabilities: Capabilities.TestrunnerCapabilities | WebdriverIO.Capabilities) {
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.INIT)
+
+        // Resolve the user's wdio config path ONCE, here, while the freshly parsed config
+        // still carries the CLI's `config-path` positional, and publish it on the env for
+        // the upload path. Re-deriving it at archive time from cwd is the exact bug
+        // SDK-5993 fixed in the Node SDK (silently dropped the config on every monorepo /
+        // subdir CI run). Best-effort: never blocks the run.
+        if (!publishAutoCaptureDisabled(this._options)) {
+            initWdioConfigPath(config)
+        }
 
         // skipAppOverride: emit the fixed warning once + handle the 3 edge cases before anything
         // else. Runs once here in the launcher (main process). Edge-2 (explicit false + no app) is a
@@ -838,7 +848,12 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         // return path (no creds, archive failure, upload no-response, exception), so
         // measureWrapper is no longer needed here.
         const clientBuildUuid = this._getClientBuildUuid()
-        const response = await uploadLogs(getBrowserStackUser(this._config), getBrowserStackKey(this._config), clientBuildUuid)
+        const response = await uploadLogs(
+            getBrowserStackUser(this._config),
+            getBrowserStackKey(this._config),
+            clientBuildUuid,
+            { disableAutoCaptureLogs: isAutoCaptureLogsDisabled(this._options), config: this._config }
+        )
         // Treat a truthy response carrying a non-success status as a server-side
         // rejection, not a delivery — a delivered upload must not be repeated by
         // the exit-time cleanup rescue; failed/skipped uploads stay eligible for it.

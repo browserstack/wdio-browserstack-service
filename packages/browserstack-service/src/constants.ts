@@ -52,6 +52,46 @@ export const UPLOAD_LOGS_ENDPOINT = 'client-logs/upload'
 
 export const PERCY_LOGS_FILE = 'logs/percy.log'
 
+/**
+ * Auto-capture of the user's wdio config file (SDK-7250).
+ */
+
+/* Absolute path of the resolved wdio config, published once so the upload path never re-derives it */
+export const BROWSERSTACK_WDIO_CONFIG_FILE_PATH = 'BROWSERSTACK_WDIO_CONFIG_FILE_PATH'
+export const BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS = 'BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS'
+/* Which ladder rung resolved the config, kept so the upload path reports the TRUE rung
+   instead of re-reading its own env var and always saying 'env_override' */
+export const BROWSERSTACK_WDIO_CONFIG_STRATEGY = 'BROWSERSTACK_WDIO_CONFIG_STRATEGY'
+
+/* Mirrors create-wdio's SUPPORTED_CONFIG_FILE_EXTENSION (identical in wdio v8 and v9) */
+export const SUPPORTED_WDIO_CONFIG_EXTENSIONS = ['.js', '.ts', '.mjs', '.mts', '.cjs', '.cts']
+export const DEFAULT_WDIO_CONFIG_BASENAME = 'wdio.conf'
+/* `wdio <cmd>` verbs that must never be mistaken for the config positional */
+export const WDIO_CLI_SUBCOMMANDS = ['run', 'install', 'repl', 'config']
+
+/* Configs are kilobytes; the cap only exists so a mislabelled path cannot bloat the archive */
+export const MAX_CAPTURED_CONFIG_FILE_BYTES = 1024 * 1024
+export const MAX_CAPTURED_CONFIG_FILES = 6
+/* How far to follow relative imports out of the entry config (1 = direct imports only) */
+export const CAPTURE_CONFIG_IMPORT_DEPTH = 1
+/* How far to walk up from the config dir looking for the project's package.json */
+export const MAX_PACKAGE_JSON_WALK_UP = 5
+
+/**
+ * Keys whose line is scrubbed before a config file enters the archive.
+ * `user` / `key` are WDIO's own top-level credential options, hence the bare entries.
+ */
+export const REDACTED_KEYS = [
+    'user', 'key',
+    'userName', 'accessKey',
+    'browserstack.user', 'browserstack.key',
+    'browserstack.userName', 'browserstack.accessKey',
+    'password', 'proxyPassword', 'proxyUser', 'proxyPass',
+    'localProxyUser', 'localProxyPass', 'proxyUrl',
+    'authToken', 'apiKey', 'accessToken', 'secret', 'token',
+    'customVariables', 'user_data', 'httpProxy', 'httpsProxy'
+]
+
 export const PERCY_DOM_CHANGING_COMMANDS_ENDPOINTS = [
     '/session/:sessionId/url',
     '/session/:sessionId/forward',

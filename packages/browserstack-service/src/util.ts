@@ -48,6 +48,7 @@ import {
 } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import { BStackLogger } from './bstackLogger.js'
+import { collectConfigFilesForUpload, findPackageJsonForUpload, isAutoCaptureLogsDisabled } from './configCapture.js'
 import UsageStats from './testOps/usageStats.js'
 import TestOpsConfig from './testOps/testOpsConfig.js'
 import type { StartBinSessionResponse } from './grpc/index.js'
@@ -1516,7 +1517,14 @@ export function getFailureObject(error: string|Error) {
 
 export const sleep = (ms = 100) => new Promise((resolve) => setTimeout(resolve, ms))
 
-export async function uploadLogs(user: string | undefined, key: string | undefined, clientBuildUuid: string) {
+export interface UploadLogsOptions {
+    /* opt-out, mirroring the Node SDK's `disableAutoCaptureLogs` */
+    disableAutoCaptureLogs?: boolean
+    /* parsed wdio config, used to locate the user's config file */
+    config?: Options.Testrunner
+}
+
+export async function uploadLogs(user: string | undefined, key: string | undefined, clientBuildUuid: string, options: UploadLogsOptions = {}) {
     // Manual instrumentation: tag every return path on the SDK_UPLOAD_LOGS event so
     // the metric identifies the specific reason logs were not uploaded (no creds,
     // per-file copy failure, upload no-response, exception). measureWrapper would
@@ -1524,9 +1532,24 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
     const eventName = PERFORMANCE_SDK_EVENTS.EVENTS.SDK_UPLOAD_LOGS
     let success = true
     let failure: string | undefined
+    // Staging dir for the archive. Created per run: the previous fixed `tmpdir()/logs.tar`
+    // names meant two concurrent wdio runs on one CI host clobbered and unlinked each
+    // other's archives, and a source file that already lived in tmpdir was copied onto
+    // itself and then deleted by cleanup.
+    let stagingDir: string | undefined
     PerformanceTester.start(eventName)
 
     try {
+        // isAutoCaptureLogsDisabled (not options.disableAutoCaptureLogs) so the detached
+        // cleanup process — which calls this with no options — still honours the opt-out
+        // via the env var the launcher publishes.
+        if (isAutoCaptureLogsDisabled(options)) {
+            success = false
+            failure = 'skipped: disableAutoCaptureLogs=true'
+            BStackLogger.debug('Skipping log upload, auto-capture is disabled')
+            return
+        }
+
         if (!user || !key) {
             success = false
             failure = 'skipped: missing_credentials'
@@ -1534,29 +1557,78 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
             return
         }
 
-        const tmpDir = tmpdir()
+        stagingDir = fs.mkdtempSync(path.join(tmpdir(), 'bstack-wdio-logs-'))
+        const tmpDir = stagingDir
         const tarPath = path.join(tmpDir, 'logs.tar')
         const tarGzPath = path.join(tmpDir, 'logs.tar.gz')
+
+        // Archive entries are keyed by basename, so two sources sharing one basename would
+        // silently overwrite each other — reachable now that user-supplied config paths
+        // (e.g. configs/wdio.conf.ts + shared/wdio.conf.ts) join the archive.
+        const takenNames = new Set<string>(['logs.tar', 'logs.tar.gz'])
+        const uniqueName = (filePath: string): string => {
+            const base = path.basename(filePath)
+            if (!takenNames.has(base)) {
+                takenNames.add(base)
+                return base
+            }
+            const ext = path.extname(base)
+            const stem = ext ? base.slice(0, -ext.length) : base
+            let index = 1
+            let candidate = `${stem}.${index}${ext}`
+            while (takenNames.has(candidate)) {
+                index++
+                candidate = `${stem}.${index}${ext}`
+            }
+            takenNames.add(candidate)
+            return candidate
+        }
 
         const filesToArchive = [
             BStackLogger.logFilePath,
             CLI_DEBUG_LOGS_FILE,
-        ].filter(f => fs.existsSync(f))
+            // framework/service versions — first thing triage needs, and the archive
+            // carried neither before (the Node SDK has shipped package.json for years)
+            findPackageJsonForUpload(),
+        ].filter((f): f is string => Boolean(f) && fs.existsSync(f as string))
 
         const copiedFileNames: string[] = []
         const archiveAddFailures: string[] = []
         for (const f of filesToArchive) {
             try {
-                const dest = path.join(tmpDir, path.basename(f))
-                fs.copyFileSync(f, dest)
-                copiedFileNames.push(path.basename(f))
+                const entryName = uniqueName(f)
+                fs.copyFileSync(f, path.join(tmpDir, entryName))
+                copiedFileNames.push(entryName)
             } catch (copyErr) {
                 const msg = (copyErr as Error)?.message || String(copyErr)
                 archiveAddFailures.push(`${path.basename(f)}: ${msg}`)
             }
         }
 
-        if (archiveAddFailures.length > 0 && failure === undefined) {
+        // SDK-7250: the user's wdio config (and the local files it imports), credential-scrubbed.
+        // Soft-failure by design — a config we cannot read or locate must never stop the
+        // log upload; the reason is recorded on the event instead.
+        const { files: configFiles, failures: configFailures, strategy } = collectConfigFilesForUpload(options.config)
+        for (const configFile of configFiles) {
+            try {
+                const entryName = uniqueName(configFile.name)
+                fs.writeFileSync(path.join(tmpDir, entryName), configFile.content)
+                copiedFileNames.push(entryName)
+            } catch (writeErr) {
+                const msg = (writeErr as Error)?.message || String(writeErr)
+                configFailures.push(`${configFile.name}: ${msg}`)
+            }
+        }
+        if (configFiles.length > 0) {
+            BStackLogger.debug(`Auto-captured ${configFiles.length} config file(s) via ${strategy}: ${configFiles.map(f => f.name).join(', ')}`)
+        }
+        if (configFailures.length > 0 && failure === undefined) {
+            // Warning only — `success` stays true so a missing config never reads as a
+            // failed log upload (same contract as the Node SDK's `redaction_failed`).
+            failure = `config_capture: ${configFailures.join('; ')}`.substring(0, 300)
+        }
+
+        if (archiveAddFailures.length > 0) {
             success = false
             failure = `archive_add_failed [${archiveAddFailures.length}]: ${archiveAddFailures.join('; ')}`.substring(0, 300)
         }
@@ -1605,14 +1677,7 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
             'POST', UPLOAD_LOGS_ENDPOINT, requestOptions, APIUtils.UPLOAD_LOGS_ADDRESS
         )
 
-        fs.unlinkSync(tarPath)
-        fs.unlinkSync(tarGzPath)
-        for (const f of copiedFileNames) {
-            const filePath = path.join(tmpDir, f)
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath)
-            }
-        }
+        // Staging dir (archive + every copied/redacted entry) is removed in `finally`.
 
         // Delete the SDK CLI log file after upload
         if (fs.existsSync(CLI_DEBUG_LOGS_FILE)) {
@@ -1638,6 +1703,13 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
         BStackLogger.error(`Error while uploading logs: ${getErrorString(error)}`)
         return null
     } finally {
+        if (stagingDir) {
+            try {
+                fs.rmSync(stagingDir, { recursive: true, force: true })
+            } catch (cleanupErr) {
+                BStackLogger.debug(`Failed to clean up log staging dir ${stagingDir}: ${getErrorString(cleanupErr)}`)
+            }
+        }
         PerformanceTester.end(eventName, success, failure)
     }
 }
