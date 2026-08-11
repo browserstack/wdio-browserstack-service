@@ -6,6 +6,8 @@ import type { Options } from '@wdio/types'
 import { BStackLogger } from './bstackLogger.js'
 import {
     BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS,
+    COMPOUND_SECRET_SUFFIXES_CAMEL,
+    COMPOUND_SECRET_SUFFIXES_SNAKE,
     BROWSERSTACK_WDIO_CONFIG_FILE_PATH,
     BROWSERSTACK_WDIO_CONFIG_STRATEGY,
     CAPTURE_CONFIG_IMPORT_DEPTH,
@@ -56,6 +58,15 @@ const resolveCandidate = (value: unknown): string | undefined => {
         return isReadableFile(resolved) ? resolved : undefined
     } catch {
         return undefined
+    }
+}
+
+/** cwd-relative form of a path, for logs that get uploaded. Falls back to the input. */
+const relativeToCwd = (filePath: string): string => {
+    try {
+        return path.relative(process.cwd(), filePath) || path.basename(filePath)
+    } catch {
+        return path.basename(filePath)
     }
 }
 
@@ -220,9 +231,13 @@ export function initWdioConfigPath(config?: Options.Testrunner): ConfigPathResol
             if (resolution.strategy) {
                 process.env[BROWSERSTACK_WDIO_CONFIG_STRATEGY] = resolution.strategy
             }
-            // Path first: BStackLogger scrubs any `<...>key:`/`<...>user:` prefixed value, so a
-            // strategy name ending in `key`/`user` right before the path would redact the path.
-            BStackLogger.debug(`Resolved wdio config file ${resolution.configPath} for auto-capture (strategy ${resolution.strategy})`)
+            // Relative to cwd: this log file is itself uploaded, and an absolute path leaks
+            // the OS username and directory layout (`/Users/jane.doe/...`). `path.relative`
+            // still yields `../../shared/wdio.conf.ts` for a config outside cwd, so the
+            // monorepo/subdir diagnostic — which is the whole point of logging it — survives.
+            // Path before strategy: BStackLogger scrubs any `<...>key:`/`<...>user:` prefixed
+            // value, so a strategy name ending in `key`/`user` here would redact the path.
+            BStackLogger.debug(`Resolved wdio config file ${relativeToCwd(resolution.configPath)} for auto-capture (strategy ${resolution.strategy})`)
         } else {
             BStackLogger.debug(`Could not resolve wdio config file for auto-capture: ${resolution.reason}`)
         }
@@ -283,7 +298,25 @@ export function redactSensitiveContent(text: string): string {
         .join('|')
     const redactRegex = new RegExp(`^.*?(?<![A-Za-z0-9_$])(${keys})(?![A-Za-z0-9_$]).*$`, 'gmi')
 
-    return text.toString().replace(redactRegex, '$1: [REDACTED]')
+    // Second pass for compound identifiers ending in a sensitive word, which the
+    // whole-word pass above cannot see: its lookbehind rejects the preceding letter in
+    // `clientSecret` / `refreshToken` / `privateKey`, and the preceding `_` in
+    // `client_secret`, so third-party secrets under those names survived it.
+    //
+    // Case matters here and the regex is deliberately NOT case-insensitive: requiring a
+    // capitalised suffix (camelCase) or an explicit `_` (snake_case) is what separates
+    // `privateKey` from `hotkey` and `client_secret` from `keyword`, so this closes the
+    // leak without the false positives a bare /key|token|secret/ pass would produce.
+    const compoundRegex = new RegExp(
+        '^.*?(?<![A-Za-z0-9_$])' +
+        `([A-Za-z0-9_$]*(?:[a-z0-9](?:${COMPOUND_SECRET_SUFFIXES_CAMEL})|_(?:${COMPOUND_SECRET_SUFFIXES_SNAKE})))` +
+        '\\s*[:=].*$',
+        'gm'
+    )
+
+    return text.toString()
+        .replace(redactRegex, '$1: [REDACTED]')
+        .replace(compoundRegex, '$1: [REDACTED]')
 }
 
 const readCappedFile = (filePath: string): { content?: string, reason?: string } => {
@@ -382,8 +415,11 @@ const collectLocalImports = (entryPath: string, entryContent: string, budget: nu
  * Give every archive entry a unique name. Two configs can share a basename
  * (`configs/wdio.conf.ts` + `shared/wdio.conf.ts`); without this the second silently
  * overwrites the first, since archive entries are keyed by basename.
+ *
+ * Shared with `uploadLogs`, which de-dupes the copied log files against these entries —
+ * one implementation so the two can never disagree.
  */
-const uniqueEntryName = (filePath: string, taken: Set<string>): string => {
+export function dedupeEntryName(filePath: string, taken: Set<string>): string {
     const base = path.basename(filePath)
     if (!taken.has(base)) {
         taken.add(base)
@@ -392,15 +428,14 @@ const uniqueEntryName = (filePath: string, taken: Set<string>): string => {
 
     const ext = path.extname(base)
     const stem = ext ? base.slice(0, -ext.length) : base
-    for (let i = 1; i < MAX_CAPTURED_CONFIG_FILES + 2; i++) {
-        const candidate = `${stem}.${i}${ext}`
-        if (!taken.has(candidate)) {
-            taken.add(candidate)
-            return candidate
-        }
+    let index = 1
+    let candidate = `${stem}.${index}${ext}`
+    while (taken.has(candidate)) {
+        index++
+        candidate = `${stem}.${index}${ext}`
     }
-    taken.add(base)
-    return base
+    taken.add(candidate)
+    return candidate
 }
 
 /**
@@ -429,7 +464,7 @@ export function collectConfigFilesForUpload(config?: Options.Testrunner): { file
         }
 
         files.push({
-            name: uniqueEntryName(resolution.configPath, takenNames),
+            name: dedupeEntryName(resolution.configPath, takenNames),
             sourcePath: resolution.configPath,
             content: redactSensitiveContent(content)
         })
@@ -445,7 +480,7 @@ export function collectConfigFilesForUpload(config?: Options.Testrunner): { file
                     continue
                 }
                 files.push({
-                    name: uniqueEntryName(importedPath, takenNames),
+                    name: dedupeEntryName(importedPath, takenNames),
                     sourcePath: importedPath,
                     content: redactSensitiveContent(imported.content)
                 })

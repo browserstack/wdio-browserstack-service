@@ -86,6 +86,25 @@ describe('uploadLogs archive contents (SDK-7250)', () => {
         expect(entries).toContain('bstack-wdio-service.log')
     })
 
+    it('redacts package.json instead of archiving it verbatim (PR review, SDK-7250)', async () => {
+        fs.writeFileSync(path.join(tmpProject, 'package.json'), JSON.stringify({
+            name: 'customer-app',
+            version: '1.2.3',
+            scripts: { deploy: 'gh release upload --token=ghp_LEAKED_IN_MANIFEST' },
+            dependencies: { webdriverio: '^9.0.0' }
+        }, null, 2))
+        fs.writeFileSync(path.join(tmpProject, 'wdio.conf.js'), 'export const config = {}')
+
+        await uploadLogs('some_user', 'some_key', 'some_uuid', {})
+
+        const raw = zlib.gunzipSync(uploadedArchive!).toString('binary')
+        expect(raw).not.toContain('ghp_LEAKED_IN_MANIFEST')
+        // the reason we ship it at all must survive the scrub
+        expect(raw).toContain('webdriverio')
+        expect(raw).toContain('1.2.3')
+        expect(await readArchiveEntries(uploadedArchive!)).toContain('package.json')
+    })
+
     it('scrubs credentials out of the archived config', async () => {
         fs.writeFileSync(path.join(tmpProject, 'wdio.conf.js'), [
             'export const config = {',

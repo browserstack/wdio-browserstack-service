@@ -223,6 +223,59 @@ describe('redactSensitiveContent', () => {
             .not.toContain('leaked-key')
     })
 
+    it('scrubs compound camelCase secret keys (PR review, SDK-7250)', () => {
+        // The whole-word pass cannot see these: its lookbehind rejects the letter before
+        // `Secret`/`Token`/`Key`, so third-party secrets under compound names survived it.
+        const redacted = redactSensitiveContent([
+            "clientSecret: 'cs_live_leak'",
+            "refreshToken: 'ya29_leak'",
+            "privateKey: '-----BEGIN PRIVATE KEY-----'",
+            "sessionSecret: 'sess_leak'",
+            'bearerToken = "bt_leak"'
+        ].join('\n'))
+
+        expect(redacted).not.toContain('cs_live_leak')
+        expect(redacted).not.toContain('ya29_leak')
+        expect(redacted).not.toContain('BEGIN PRIVATE KEY')
+        expect(redacted).not.toContain('sess_leak')
+        expect(redacted).not.toContain('bt_leak')
+    })
+
+    it('scrubs snake_case secret keys', () => {
+        const redacted = redactSensitiveContent([
+            "client_secret: 'snake_leak'",
+            "refresh_token: 'snake_token_leak'",
+            "private_key: 'snake_key_leak'"
+        ].join('\n'))
+
+        expect(redacted).not.toContain('snake_leak')
+        expect(redacted).not.toContain('snake_token_leak')
+        expect(redacted).not.toContain('snake_key_leak')
+    })
+
+    it('still does not over-redact lookalike identifiers', () => {
+        // Case sensitivity is what buys this: a bare /key|token|secret/ pass would take
+        // all of these with it.
+        const redacted = redactSensitiveContent([
+            "hotkey: 'ctrl+a'",
+            "keyword: 'search'",
+            "monkeypatch: 'enabled'",
+            "tokenizer: 'default'",
+            "secretary: 'name'"
+        ].join('\n'))
+
+        expect(redacted).toContain('ctrl+a')
+        expect(redacted).toContain('search')
+        expect(redacted).toContain('enabled')
+        expect(redacted).toContain('default')
+        expect(redacted).toContain('name')
+    })
+
+    it('scrubs a token embedded in a package.json script', () => {
+        expect(redactSensitiveContent('"deploy": "gh release upload --token=ghp_leak"'))
+            .not.toContain('ghp_leak')
+    })
+
     it('returns falsy input unchanged', () => {
         expect(redactSensitiveContent('')).toBe('')
     })

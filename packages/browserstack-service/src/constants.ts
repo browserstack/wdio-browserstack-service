@@ -81,6 +81,15 @@ export const MAX_PACKAGE_JSON_WALK_UP = 5
  * Keys whose line is scrubbed before a config file enters the archive.
  * `user` / `key` are WDIO's own top-level credential options, hence the bare entries.
  */
+/**
+ * Word families that make an identifier sensitive when they appear as its SUFFIX —
+ * `clientSecret`, `refreshToken`, `privateKey`, `client_secret`. Split by case so the
+ * camelCase form requires a capital (distinguishing `privateKey` from `hotkey`) and the
+ * snake_case form requires an explicit `_` (distinguishing `client_secret` from `keyword`).
+ */
+export const COMPOUND_SECRET_SUFFIXES_CAMEL = 'Key|Token|Secret|Password|Passwd|Credential'
+export const COMPOUND_SECRET_SUFFIXES_SNAKE = 'key|token|secret|password|passwd|credential'
+
 export const REDACTED_KEYS = [
     'user', 'key',
     'userName', 'accessKey',

@@ -48,7 +48,7 @@ import {
 } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import { BStackLogger } from './bstackLogger.js'
-import { collectConfigFilesForUpload, findPackageJsonForUpload, isAutoCaptureLogsDisabled } from './configCapture.js'
+import { collectConfigFilesForUpload, dedupeEntryName, findPackageJsonForUpload, isAutoCaptureLogsDisabled, redactSensitiveContent } from './configCapture.js'
 import UsageStats from './testOps/usageStats.js'
 import TestOpsConfig from './testOps/testOpsConfig.js'
 import type { StartBinSessionResponse } from './grpc/index.js'
@@ -1565,31 +1565,13 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
         // Archive entries are keyed by basename, so two sources sharing one basename would
         // silently overwrite each other — reachable now that user-supplied config paths
         // (e.g. configs/wdio.conf.ts + shared/wdio.conf.ts) join the archive.
+        // Same helper collectConfigFilesForUpload uses, so the two cannot disagree.
         const takenNames = new Set<string>(['logs.tar', 'logs.tar.gz'])
-        const uniqueName = (filePath: string): string => {
-            const base = path.basename(filePath)
-            if (!takenNames.has(base)) {
-                takenNames.add(base)
-                return base
-            }
-            const ext = path.extname(base)
-            const stem = ext ? base.slice(0, -ext.length) : base
-            let index = 1
-            let candidate = `${stem}.${index}${ext}`
-            while (takenNames.has(candidate)) {
-                index++
-                candidate = `${stem}.${index}${ext}`
-            }
-            takenNames.add(candidate)
-            return candidate
-        }
+        const uniqueName = (filePath: string): string => dedupeEntryName(filePath, takenNames)
 
         const filesToArchive = [
             BStackLogger.logFilePath,
             CLI_DEBUG_LOGS_FILE,
-            // framework/service versions — first thing triage needs, and the archive
-            // carried neither before (the Node SDK has shipped package.json for years)
-            findPackageJsonForUpload(),
         ].filter((f): f is string => Boolean(f) && fs.existsSync(f as string))
 
         const copiedFileNames: string[] = []
@@ -1609,6 +1591,24 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
         // Soft-failure by design — a config we cannot read or locate must never stop the
         // log upload; the reason is recorded on the event instead.
         const { files: configFiles, failures: configFailures, strategy } = collectConfigFilesForUpload(options.config)
+
+        // package.json gives triage the framework/service versions, which the archive carried
+        // before this change. It goes through the same redaction as the configs rather than
+        // being copied verbatim: `scripts` routinely embed tokens (`--token=ghp_...`), and the
+        // walk-up can select a monorepo-root manifest broader than the test project. Ordinary
+        // dependency/version lines are unaffected by the scrub.
+        const packageJsonPath = findPackageJsonForUpload()
+        if (packageJsonPath) {
+            try {
+                configFiles.push({
+                    name: path.basename(packageJsonPath),
+                    sourcePath: packageJsonPath,
+                    content: redactSensitiveContent(fs.readFileSync(packageJsonPath, 'utf8'))
+                })
+            } catch (pkgErr) {
+                configFailures.push(`package.json: ${(pkgErr as Error)?.message || String(pkgErr)}`)
+            }
+        }
         for (const configFile of configFiles) {
             try {
                 const entryName = uniqueName(configFile.name)
