@@ -90,6 +90,15 @@ export const MAX_PACKAGE_JSON_WALK_UP = 5
 export const COMPOUND_SECRET_SUFFIXES_CAMEL = 'Key|Token|Secret|Password|Passwd|Credential'
 export const COMPOUND_SECRET_SUFFIXES_SNAKE = 'key|token|secret|password|passwd|credential'
 
+/**
+ * Secrets that span lines or hide inside a value, which a line/key-anchored scrub cannot
+ * reach. Applied as whole-block passes before the line passes.
+ */
+/* an inline PEM: the key bytes sit on lines that carry no key name at all */
+export const PEM_BLOCK_REGEX = /(-----BEGIN [^-\r\n]+-----)[\s\S]*?(-----END [^-\r\n]+-----)/g
+/* basic-auth userinfo in ANY url value, not just the `proxyUrl` key */
+export const URL_USERINFO_REGEX = /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]*@/g
+
 export const REDACTED_KEYS = [
     'user', 'key',
     'userName', 'accessKey',

@@ -271,6 +271,64 @@ describe('redactSensitiveContent', () => {
         expect(redacted).toContain('name')
     })
 
+    it('scrubs SCREAMING_SNAKE_CASE secret keys (PR review round 2)', () => {
+        // The dominant convention for secrets in config/env files. The snake branch is
+        // matched case-insensitively, which is safe because it requires an explicit `_`.
+        const redacted = redactSensitiveContent([
+            "CLIENT_SECRET: 'screaming_leak'",
+            "AWS_SECRET_ACCESS_KEY: 'AKIA_leak'",
+            "GITHUB_TOKEN = 'ghp_screaming_leak'",
+            "REFRESH_TOKEN: 'rt_screaming_leak'",
+            "export const DB_PASSWORD = 'pw_screaming_leak'"
+        ].join('\n'))
+
+        expect(redacted).not.toContain('screaming_leak')
+        expect(redacted).not.toContain('AKIA_leak')
+        expect(redacted).not.toContain('ghp_screaming_leak')
+        expect(redacted).not.toContain('rt_screaming_leak')
+        expect(redacted).not.toContain('pw_screaming_leak')
+    })
+
+    it('does not over-redact uppercase lookalikes', () => {
+        const redacted = redactSensitiveContent([
+            "HOTKEY: 'ctrl+a'",
+            "KEYWORD: 'search'",
+            "my_secretary: 'jane'"
+        ].join('\n'))
+
+        expect(redacted).toContain('ctrl+a')
+        expect(redacted).toContain('search')
+        expect(redacted).toContain('jane')
+    })
+
+    it('scrubs a multi-line PEM block, not just the line naming it', () => {
+        const redacted = redactSensitiveContent([
+            'credentials: {',
+            '    privateKey: `-----BEGIN PRIVATE KEY-----',
+            'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCsecretbytes',
+            '-----END PRIVATE KEY-----`',
+            '}'
+        ].join('\n'))
+
+        expect(redacted).not.toContain('MIIEvQIBADANBgkqhkiG9w0BAQEFAASCsecretbytes')
+    })
+
+    it('scrubs basic-auth credentials embedded in any URL, not just proxyUrl', () => {
+        const redacted = redactSensitiveContent([
+            "baseUrl: 'https://admin:s3cr3tPass@example.com'",
+            "mongoUri: 'mongodb://dbuser:dbP4ss@cluster0.example.net'"
+        ].join('\n'))
+
+        expect(redacted).not.toContain('s3cr3tPass')
+        expect(redacted).not.toContain('dbP4ss')
+        expect(redacted).toContain('example.com')
+    })
+
+    it('leaves a port-bearing URL with no userinfo alone', () => {
+        expect(redactSensitiveContent("baseUrl: 'https://example.com:8080/path'"))
+            .toContain('https://example.com:8080/path')
+    })
+
     it('scrubs a token embedded in a package.json script', () => {
         expect(redactSensitiveContent('"deploy": "gh release upload --token=ghp_leak"'))
             .not.toContain('ghp_leak')

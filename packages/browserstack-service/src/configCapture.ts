@@ -8,6 +8,8 @@ import {
     BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS,
     COMPOUND_SECRET_SUFFIXES_CAMEL,
     COMPOUND_SECRET_SUFFIXES_SNAKE,
+    PEM_BLOCK_REGEX,
+    URL_USERINFO_REGEX,
     BROWSERSTACK_WDIO_CONFIG_FILE_PATH,
     BROWSERSTACK_WDIO_CONFIG_STRATEGY,
     CAPTURE_CONFIG_IMPORT_DEPTH,
@@ -298,25 +300,35 @@ export function redactSensitiveContent(text: string): string {
         .join('|')
     const redactRegex = new RegExp(`^.*?(?<![A-Za-z0-9_$])(${keys})(?![A-Za-z0-9_$]).*$`, 'gmi')
 
-    // Second pass for compound identifiers ending in a sensitive word, which the
-    // whole-word pass above cannot see: its lookbehind rejects the preceding letter in
-    // `clientSecret` / `refreshToken` / `privateKey`, and the preceding `_` in
-    // `client_secret`, so third-party secrets under those names survived it.
+    // Compound identifiers ending in a sensitive word, which the whole-word pass above
+    // cannot see: its lookbehind rejects the preceding letter in `clientSecret` /
+    // `refreshToken` / `privateKey`, and the preceding `_` in `client_secret`.
     //
-    // Case matters here and the regex is deliberately NOT case-insensitive: requiring a
-    // capitalised suffix (camelCase) or an explicit `_` (snake_case) is what separates
-    // `privateKey` from `hotkey` and `client_secret` from `keyword`, so this closes the
-    // leak without the false positives a bare /key|token|secret/ pass would produce.
-    const compoundRegex = new RegExp(
-        '^.*?(?<![A-Za-z0-9_$])' +
-        `([A-Za-z0-9_$]*(?:[a-z0-9](?:${COMPOUND_SECRET_SUFFIXES_CAMEL})|_(?:${COMPOUND_SECRET_SUFFIXES_SNAKE})))` +
-        '\\s*[:=].*$',
+    // camelCase stays case-SENSITIVE: requiring a capitalised suffix is what separates
+    // `privateKey` from `hotkey`, so this closes the leak without the false positives a
+    // bare /key|token|secret/ pass would produce.
+    const compoundCamelRegex = new RegExp(
+        `^.*?(?<![A-Za-z0-9_$])([A-Za-z0-9_$]*[a-z0-9](?:${COMPOUND_SECRET_SUFFIXES_CAMEL}))\\s*[:=].*$`,
         'gm'
+    )
+    // snake_case is matched case-INSENSITIVELY, which is safe precisely because it requires
+    // an explicit `_` before the suffix. That covers SCREAMING_SNAKE_CASE — the dominant
+    // convention for secrets in config/env files (`AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`) —
+    // while `keyword` and `my_secretary` still fall out, since neither has `_<suffix>`
+    // immediately before an assignment.
+    const compoundSnakeRegex = new RegExp(
+        `^.*?(?<![A-Za-z0-9_$])([A-Za-z0-9_$]*_(?:${COMPOUND_SECRET_SUFFIXES_SNAKE}))\\s*[:=].*$`,
+        'gmi'
     )
 
     return text.toString()
+        // Block-level passes run FIRST: they span lines, and the line-anchored passes below
+        // can only ever see the one line that carries the key name.
+        .replace(PEM_BLOCK_REGEX, '$1[REDACTED]$2')
+        .replace(URL_USERINFO_REGEX, '$1[REDACTED]@')
         .replace(redactRegex, '$1: [REDACTED]')
-        .replace(compoundRegex, '$1: [REDACTED]')
+        .replace(compoundCamelRegex, '$1: [REDACTED]')
+        .replace(compoundSnakeRegex, '$1: [REDACTED]')
 }
 
 const readCappedFile = (filePath: string): { content?: string, reason?: string } => {
