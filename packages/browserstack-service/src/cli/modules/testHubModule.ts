@@ -139,9 +139,9 @@ export default class TestHubModule extends BaseModule {
      * instance so late custom-tag merges are included. Called from onAllTestEvents at the
      * next test's boundary and from service.after() at worker end.
      */
-    async flushPendingTestFinishEvent(): Promise<void> {
+    flushPendingTestFinishEvent(): Promise<void> | undefined {
         if (!this.pendingTestFinish) {
-            return
+            return undefined
         }
         const { args } = this.pendingTestFinish
         this.pendingTestFinish = null
@@ -156,18 +156,23 @@ export default class TestHubModule extends BaseModule {
         // fire-and-forget flushes of other tests each retry their own event and cannot clobber or
         // drop one another; re-stashing an exhausted event would race those call sites for no gain
         // (nothing re-flushes after service.after(), the last-test path).
+        // Retry as a promise chain (kept non-async): each attempt sends and, on a transient failure,
+        // waits 200*n ms before the next, so the returned promise resolves only once the send lands
+        // or the budget is exhausted — which is what service.after() awaits.
         const maxAttempts = 3
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            const sent = await this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST' })
-            if (sent) {
-                return
-            }
-            this.logger.debug(`flushPendingTestFinishEvent: attempt ${attempt}/${maxAttempts} failed`)
-            if (attempt < maxAttempts) {
-                await new Promise((resolve) => setTimeout(resolve, 200 * attempt))
-            }
-        }
-        this.logger.error('flushPendingTestFinishEvent: deferred TEST/POST send failed after all retries')
+        const attempt = (n: number): Promise<void> =>
+            this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST' }).then((sent) => {
+                if (sent) {
+                    return
+                }
+                this.logger.debug(`flushPendingTestFinishEvent: attempt ${n}/${maxAttempts} failed`)
+                if (n >= maxAttempts) {
+                    this.logger.error('flushPendingTestFinishEvent: deferred TEST/POST send failed after all retries')
+                    return
+                }
+                return new Promise<void>((resolve) => setTimeout(resolve, 200 * n)).then(() => attempt(n + 1))
+            })
+        return attempt(1)
     }
 
     async sendTestFrameworkEvent(args: Record<string, unknown>, stateOverride?: { testFrameworkState: string, testHookState: string }): Promise<boolean> {
