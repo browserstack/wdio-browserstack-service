@@ -114,10 +114,10 @@ describe('TestHubModule — deferred last-test-finish delivery (SDK-7265)', () =
     })
 
     // REPRODUCTION: the worker's last test relies on this single best-effort flush (service.after()).
-    // A transient gRPC failure is swallowed with no retry, so the TestRunFinished never reaches the
+    // A transient gRPC failure was swallowed with no retry, so the TestRunFinished never reached the
     // binary/backend. The test then stays "in progress" and is reaped by Test Hub's ~60-min per-test
     // timeout (TEST_TIMED_OUT_WITH_BUILD_SUCCESS), which stamps the whole build `timeout`.
-    it('does not drop the last-test finish on a transient send failure (retries until delivered)', async () => {
+    it('does not drop the last-test finish on a transient send failure — retries the SAME finish until delivered', async () => {
         const inst = makeMochaTestInstance('last')
         testHubModule.onAllTestEvents({ instance: inst, test: { title: 'last' } as Frameworks.Test })
 
@@ -128,8 +128,59 @@ describe('TestHubModule — deferred last-test-finish delivery (SDK-7265)', () =
 
         await testHubModule.flushPendingTestFinishEvent()
 
-        // Must be retried and ultimately delivered — otherwise the test is orphaned.
+        // Retried (not a single fixed attempt) AND every attempt re-sends the same test's finish —
+        // distinguishes a real retry-until-delivered from a regressed single-shot send.
         expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(2)
+        for (const call of mockGrpcClient.testFrameworkEvent.mock.calls) {
+            expect(call[0]).toMatchObject({ uuid: 'last', testFrameworkState: 'TEST', testHookState: 'POST' })
+        }
+    })
+
+    it('drives the retry budget to exhaustion on sustained failure, then gives up cleanly without re-stashing', async () => {
+        const inst = makeMochaTestInstance('exhaust')
+        testHubModule.onAllTestEvents({ instance: inst, test: { title: 'exhaust' } as Frameworks.Test })
+
+        mockGrpcClient.testFrameworkEvent.mockRejectedValue(new Error('sustained gRPC outage'))
+
+        await expect(testHubModule.flushPendingTestFinishEvent()).resolves.toBeUndefined()
+
+        // All three attempts ran, each re-sending the same finish.
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(3)
+        for (const call of mockGrpcClient.testFrameworkEvent.mock.calls) {
+            expect(call[0]).toMatchObject({ uuid: 'exhaust' })
+        }
+        // An exhausted event must NOT be re-stashed into the shared slot — re-stashing races the
+        // fire-and-forget flush call sites and can drop a newer test's finish (SDK-7265 review #1).
+        expect((testHubModule as unknown as { pendingTestFinish: unknown }).pendingTestFinish).toBeNull()
+        expect(testHubModule.logger.error).toHaveBeenCalledWith(
+            expect.stringContaining('failed after all retries')
+        )
+    })
+
+    it('concurrent flushes each deliver their own finish — a retrying older flush never drops a newer test', async () => {
+        let aAttempts = 0
+        mockGrpcClient.testFrameworkEvent.mockImplementation((payload: { uuid: string }) => {
+            if (payload.uuid === 'A') {
+                aAttempts += 1
+                if (aAttempts === 1) {
+                    return Promise.reject(new Error('transient on A'))
+                }
+            }
+            return Promise.resolve({ success: true })
+        })
+
+        // Test A finishes, is deferred, then flushed fire-and-forget (as the next-test boundary does).
+        testHubModule.onAllTestEvents({ instance: makeMochaTestInstance('A'), test: { title: 'A' } as Frameworks.Test })
+        const flushA = testHubModule.flushPendingTestFinishEvent() // not awaited — A is retrying
+
+        // While A retries, test B finishes, is deferred and flushed.
+        testHubModule.onAllTestEvents({ instance: makeMochaTestInstance('B'), test: { title: 'B' } as Frameworks.Test })
+        await testHubModule.flushPendingTestFinishEvent() // B
+        await flushA
+
+        const sent = mockGrpcClient.testFrameworkEvent.mock.calls.map((c: unknown[]) => (c[0] as { uuid: string }).uuid)
+        expect(sent.filter((u) => u === 'A').length).toBe(2) // 1 transient fail + 1 retry success
+        expect(sent.filter((u) => u === 'B').length).toBe(1) // delivered once, never dropped
     })
 
     it('clears the pending finish after a flush so it is never sent twice', async () => {

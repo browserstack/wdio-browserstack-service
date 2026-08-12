@@ -146,12 +146,16 @@ export default class TestHubModule extends BaseModule {
         const { args } = this.pendingTestFinish
         this.pendingTestFinish = null
         this.logger.debug('flushPendingTestFinishEvent: sending deferred TEST/POST event')
-        // SDK-7265: this is the ONLY guaranteed send of a mocha test's TestRunFinished — the
+        // SDK-7265: the deferred TEST/POST is the ONLY send of a mocha test's TestRunFinished — the
         // worker's last test has no next-test boundary and relies on the single flush from
-        // service.after(). A swallowed, un-retried failure orphans that test; Test Hub then reaps
-        // it at its ~60-min per-test timeout (TEST_TIMED_OUT_WITH_BUILD_SUCCESS) and stamps the whole
-        // build `timeout` even though the run passed. Retry with backoff, and on total failure keep
-        // it pending so a later flush / teardown can try again rather than dropping it outright.
+        // service.after(). Previously a swallowed, un-retried failure orphaned that test; Test Hub
+        // then reaped it at its ~60-min per-test timeout (TEST_TIMED_OUT_WITH_BUILD_SUCCESS) and
+        // stamped the whole (passing) build `timeout`. Retry with backoff so a transient gRPC
+        // failure does not drop the finish. `args` is captured locally and the shared
+        // `pendingTestFinish` slot is only cleared here (never written back), so concurrent
+        // fire-and-forget flushes of other tests each retry their own event and cannot clobber or
+        // drop one another; re-stashing an exhausted event would race those call sites for no gain
+        // (nothing re-flushes after service.after(), the last-test path).
         const maxAttempts = 3
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             const sent = await this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST' })
@@ -163,11 +167,7 @@ export default class TestHubModule extends BaseModule {
                 await new Promise((resolve) => setTimeout(resolve, 200 * attempt))
             }
         }
-        // Re-stash only if nothing newer took the slot, so a subsequent flush can retry.
-        if (!this.pendingTestFinish) {
-            this.pendingTestFinish = { args }
-        }
-        this.logger.error('flushPendingTestFinishEvent: deferred TEST/POST send failed after retries; left pending for re-flush')
+        this.logger.error('flushPendingTestFinishEvent: deferred TEST/POST send failed after all retries')
     }
 
     async sendTestFrameworkEvent(args: Record<string, unknown>, stateOverride?: { testFrameworkState: string, testHookState: string }): Promise<boolean> {
