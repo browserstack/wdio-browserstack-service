@@ -564,12 +564,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     /**
-     * mocha's `bail` aborts the run on the first failure, so every test the spec had not reached
-     * yet is dropped without emitting any event and never appears on the dashboard. Report them
-     * as skipped — same cascade the failed-hook path uses, from the spec's root suite so sibling
-     * describes are covered too (bail kills the whole spec, not just the failing describe).
-     */
-    /**
      * Whether this failure will be retried, in which case mocha has not dropped anything yet and
      * the tests after it are still going to run.
      *
@@ -589,14 +583,26 @@ export default class BrowserstackService implements Services.ServiceInstance {
         return Boolean(results.retries && results.retries.attempts < results.retries.limit)
     }
 
+    /**
+     * mocha's `bail` aborts the run on the first failure, so every test the spec had not reached
+     * yet is dropped without emitting any event and never appears on the dashboard. Report them
+     * as skipped — same cascade the failed-hook path uses, from the spec's root suite so sibling
+     * describes are covered too (bail kills the whole spec, not just the failing describe).
+     *
+     * The root can span more than one file when specs are grouped — `MochaAdapter` adds every spec
+     * it is handed to one mocha instance. Cascading across them is still correct: bail aborts that
+     * whole runner, so those tests do not run either.
+     */
     private async reportBailSkippedTests(test: Frameworks.Test, results: Frameworks.TestResult) {
         if (!this._mochaBail || results.passed || results.skipped) {
             return
         }
-        if (this.hasRetryPending(test, results)) {
-            return
-        }
         try {
+            // inside the boundary: hasRetryPending reaches into mocha's own runnable, which this
+            // SDK does not own
+            if (this.hasRetryPending(test, results)) {
+                return
+            }
             const framework = BrowserstackCLI.getInstance().getTestFramework()
             let suite = test.ctx?.test?.parent
             if (!framework || !suite) {

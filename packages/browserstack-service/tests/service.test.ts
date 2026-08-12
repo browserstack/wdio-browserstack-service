@@ -2466,6 +2466,15 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
         return trackEvent
     }
 
+    // WHICH tests got reported, not just how many events fired — a cascade that swept the wrong
+    // tests still produces the same call count. Pairs with the count assertions, which catch the
+    // opposite failure (a test emitted twice).
+    const skippedTitles = (trackEvent: ReturnType<typeof vi.fn>) => [...new Set(
+        trackEvent.mock.calls
+            .filter(([, , payload]: any[]) => payload?.result?.skipped === true)
+            .map(([, , payload]: any[]) => payload.test.title as string)
+    )].sort()
+
     afterEach(() => {
         getInstanceSpy?.mockRestore()
     })
@@ -2478,6 +2487,9 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
         // 2 events close the failing test (LOG_REPORT/POST + TEST/POST), then 4 per skipped test.
         // A3 (same describe) and B1 (SIBLING describe) => 2 skipped => 8.
         expect(trackEvent).toHaveBeenCalledTimes(2 + 8)
+        // exactly the un-run tests: A1 already passed and A2 is the failure being reported,
+        // so sweeping either of them in would be a defect the count alone cannot see
+        expect(skippedTitles(trackEvent)).toEqual(['bail1 A3', 'bail1 B1'])
     })
 
     it('does not cascade when only wdio-level bail is set', async () => {
@@ -2488,6 +2500,7 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
         const trackEvent = await runAfterTest(svc, failing, { passed: false })
 
         expect(trackEvent).toHaveBeenCalledTimes(2)
+        expect(skippedTitles(trackEvent)).toEqual([])
     })
 
     it('does not cascade while a wdio spec-file retry is still queued', async () => {
@@ -2499,6 +2512,7 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
         })
 
         expect(trackEvent).toHaveBeenCalledTimes(2)
+        expect(skippedTitles(trackEvent)).toEqual([])
     })
 
     it('does not cascade while a MOCHA-level retry is still queued', async () => {
@@ -2516,6 +2530,7 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
         })
 
         expect(trackEvent).toHaveBeenCalledTimes(2)
+        expect(skippedTitles(trackEvent)).toEqual([])
     })
 
     it('cascades once the final mocha retry has been used', async () => {
@@ -2529,6 +2544,7 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
         })
 
         expect(trackEvent).toHaveBeenCalledTimes(2 + 8)
+        expect(skippedTitles(trackEvent)).toEqual(['bail6 A3', 'bail6 B1'])
     })
 
     it('does not cascade when the test passed', async () => {
@@ -2537,5 +2553,31 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
         const trackEvent = await runAfterTest(svc, failing, { passed: true })
 
         expect(trackEvent).toHaveBeenCalledTimes(2)
+        expect(skippedTitles(trackEvent)).toEqual([])
+    })
+
+    it('does not cascade when the test was itself skipped', async () => {
+        // a skipped test does not abort the spec, and the pre-existing skip paths already
+        // report it — cascading here would double-report the rest of the suite
+        const { failing } = buildTree('bail7')
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
+        const trackEvent = await runAfterTest(svc, failing, { passed: false, skipped: true })
+
+        // A2 is the test being reported and its own result is legitimately `skipped`; what must
+        // NOT appear is A3/B1, which the cascade would have added.
+        expect(trackEvent).toHaveBeenCalledTimes(2)
+        expect(skippedTitles(trackEvent)).toEqual(['bail7 A2'])
+    })
+
+    it('never throws out of afterTest when mocha state is hostile', async () => {
+        // afterTest is awaited by wdio; anything escaping this cascade would surface as a
+        // framework-level error in the user's run
+        const { failing } = buildTree('bail8')
+        failing.ctx.test.currentRetry = () => { throw new Error('mocha exploded') }
+        failing.ctx.test.retries = () => 1
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
+
+        const trackEvent = await runAfterTest(svc, failing, { passed: false })
+        expect(skippedTitles(trackEvent)).toEqual([])
     })
 })
