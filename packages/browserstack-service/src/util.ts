@@ -48,6 +48,7 @@ import {
 } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import { BStackLogger } from './bstackLogger.js'
+import { isAutoCaptureLogsDisabled } from './autoCapture.js'
 import UsageStats from './testOps/usageStats.js'
 import TestOpsConfig from './testOps/testOpsConfig.js'
 import type { StartBinSessionResponse } from './grpc/index.js'
@@ -1527,6 +1528,16 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
     PerformanceTester.start(eventName)
 
     try {
+        // Honour the opt-out here (not just at the call site) so the DETACHED cleanup rescue
+        // in cleanup.ts — which calls this with no options — is covered too. Opting out is
+        // exactly what leaves `logsUploaded` false, which is what arms that rescue.
+        if (isAutoCaptureLogsDisabled()) {
+            success = false
+            failure = 'skipped: disableAutoCaptureLogs=true'
+            BStackLogger.debug('Skipping log upload, auto-capture is disabled')
+            return
+        }
+
         if (!user || !key) {
             success = false
             failure = 'skipped: missing_credentials'

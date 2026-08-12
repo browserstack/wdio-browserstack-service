@@ -52,6 +52,51 @@ export const UPLOAD_LOGS_ENDPOINT = 'client-logs/upload'
 
 export const PERCY_LOGS_FILE = 'logs/percy.log'
 
+/**
+ * Credential scrubbing for the debug-log config dump (SDK-7250).
+ */
+
+/* opt-out, mirroring the Node SDK's flag name */
+export const BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS = 'BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS'
+
+/*
+ * Word families that make an identifier sensitive when they appear as its SUFFIX.
+ * Split by case so camelCase requires a capital (`privateKey` vs `hotkey`) and snake_case
+ * requires an explicit `_` (`client_secret` vs `keyword`).
+ */
+export const COMPOUND_SECRET_SUFFIXES_CAMEL = 'Key|Token|Secret|Password|Passwd|Credential'
+export const COMPOUND_SECRET_SUFFIXES_SNAKE = 'key|token|secret|password|passwd|credential'
+
+/*
+ * The body is TEMPERED so it cannot cross a second `-----BEGIN`: an UNTERMINATED block
+ * would otherwise match through to a later, unrelated block's END marker and replace
+ * everything in between. Bounded so the scan stays linear.
+ */
+export const PEM_BLOCK_REGEX = /(-----BEGIN [^-\r\n]+-----)(?:(?!-----BEGIN)[\s\S]){0,65536}?(-----END [^-\r\n]+-----)/g
+/*
+ * A PEM opened but never closed. Runs must be >=20 chars and end at a non-base64 character:
+ * letters are valid base64, so a looser rule eats ordinary lines like `nextOption: 1`.
+ */
+export const PEM_UNTERMINATED_REGEX = /(-----BEGIN [^-\r\n]+-----)(?:\r?\n[A-Za-z0-9+/=]{20,200}(?=[^A-Za-z0-9+/=]|$))+/g
+/*
+ * Userinfo in ANY url value. Password half optional so single-token forms
+ * (`https://ghp_xxx@github.com`) are caught. Quantifiers BOUNDED: the unbounded form was
+ * measurably quadratic (100 KB took 6.1 s, 4x per doubling).
+ */
+export const URL_USERINFO_REGEX = /([a-zA-Z][a-zA-Z0-9+.-]{0,64}:\/\/)[^\s/@:]{1,256}(?::[^\s/@]{0,256})?@/g
+
+/* Keys whose value is never logged. `user`/`key` are WDIO's own credential options. */
+export const REDACTED_KEYS = [
+    'user', 'key',
+    'userName', 'accessKey',
+    'browserstack.user', 'browserstack.key',
+    'browserstack.userName', 'browserstack.accessKey',
+    'password', 'proxyPassword', 'proxyUser', 'proxyPass',
+    'localProxyUser', 'localProxyPass', 'proxyUrl',
+    'authToken', 'apiKey', 'accessToken', 'secret', 'token',
+    'customVariables', 'user_data', 'httpProxy', 'httpsProxy'
+]
+
 export const PERCY_DOM_CHANGING_COMMANDS_ENDPOINTS = [
     '/session/:sessionId/url',
     '/session/:sessionId/forward',

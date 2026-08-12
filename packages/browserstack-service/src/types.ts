@@ -104,6 +104,20 @@ export interface BrowserstackConfig {
      */
     testManagementOptions?: TestManagementOptions;
     /**
+     * The service uploads its own debug log at the end of a run so BrowserStack support can
+     * debug issues without asking you to reproduce them. That log contains your resolved wdio
+     * config, now including the source of your hooks.
+     *
+     * Values under known credential keys are removed first on a best-effort basis, along with
+     * inline PEM blocks and basic-auth URLs, including inside hook bodies. It is key-name
+     * driven, so a secret stored under an unrecognised name can still be included — if your
+     * config or hooks hold secrets you would rather not send, set this to true.
+     *
+     * Can also be set with the `BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS=true` env var.
+     * @default false
+     */
+    disableAutoCaptureLogs?: boolean;
+    /**
      * Set this to true to enable BrowserStack Percy which will take screenshots
      * and snapshots for your tests run on Browserstack
      * @default false
