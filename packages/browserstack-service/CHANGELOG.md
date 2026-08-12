@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 8.50.0
+
+### Minor Changes
+
+- 635fc26: Added support for the skipAppOverride flag.
+
 ## 8.49.2
 
 ### Patch Changes
