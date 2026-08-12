@@ -146,19 +146,11 @@ export default class TestHubModule extends BaseModule {
         const { args } = this.pendingTestFinish
         this.pendingTestFinish = null
         this.logger.debug('flushPendingTestFinishEvent: sending deferred TEST/POST event')
-        // SDK-7265: the deferred TEST/POST is the ONLY send of a mocha test's TestRunFinished — the
-        // worker's last test has no next-test boundary and relies on the single flush from
-        // service.after(). Previously a swallowed, un-retried failure orphaned that test; Test Hub
-        // then reaped it at its ~60-min per-test timeout (TEST_TIMED_OUT_WITH_BUILD_SUCCESS) and
-        // stamped the whole (passing) build `timeout`. Retry with backoff so a transient gRPC
-        // failure does not drop the finish. `args` is captured locally and the shared
-        // `pendingTestFinish` slot is only cleared here (never written back), so concurrent
-        // fire-and-forget flushes of other tests each retry their own event and cannot clobber or
-        // drop one another; re-stashing an exhausted event would race those call sites for no gain
-        // (nothing re-flushes after service.after(), the last-test path).
-        // Retry as a promise chain (kept non-async): each attempt sends and, on a transient failure,
-        // waits 200*n ms before the next, so the returned promise resolves only once the send lands
-        // or the budget is exhausted — which is what service.after() awaits.
+        // SDK-7265: this is the only send of a mocha test's TestRunFinished, and the worker's last
+        // test relies on this single flush from service.after(). A dropped send orphans the test →
+        // Test Hub reaps it at its ~60-min idle timeout → the passing build is stamped `timeout`.
+        // Retry with backoff. `args` is captured locally and the shared slot is only cleared (never
+        // written back), so concurrent flushes can't clobber one another.
         const maxAttempts = 3
         const attempt = (n: number): Promise<void> =>
             this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST' }).then((sent) => {
