@@ -10,8 +10,26 @@ import TrackedInstance from '../instances/trackedInstance.js'
 import { TestFrameworkConstants } from './constants/testFrameworkConstants.js'
 import { BStackLogger as logger } from '../cliLogger.js'
 import type { Frameworks } from '@wdio/types'
-import { getGitMetaData, getMochaTestHierarchy, getUniqueIdentifier, isUndefined, removeAnsiColors } from '../../util.js'
+import { getMochaTestHierarchy, getUniqueIdentifier, isUndefined, removeAnsiColors } from '../../util.js'
 import { TEST_ANALYTICS_ID } from '../../constants.js'
+
+/**
+ * File-path pair sent with every test/hook event.
+ *
+ * `test_file_path` must be the ABSOLUTE spec path: the binary re-bases it
+ * itself, as `path.relative(session.pathProject, v)` for `file_name` and
+ * `path.relative(versionControlInfo.root, v)` for `vc_filepath` (its local is
+ * literally named `absoluteTestFilePath`). Sending a pre-relativised path made
+ * both come out wrong; sending `undefined` — which is what happened whenever
+ * there was no resolvable git root — threw inside the binary and dropped the
+ * event entirely (SDK-7233).
+ */
+const resolveTestFilePaths = (filename: string | undefined) => ({
+    [TestFrameworkConstants.KEY_TEST_FILE_PATH]: filename,
+    [TestFrameworkConstants.KEY_TEST_LOCATION]: filename
+        ? path.relative(process.cwd(), filename)
+        : undefined,
+})
 
 export default class WdioMochaTestFramework extends TestFramework {
     static KEY_HOOK_LAST_STARTED = 'test_hook_last_started'
@@ -197,15 +215,13 @@ export default class WdioMochaTestFramework extends TestFramework {
     async getTestData(instance: TestFrameworkInstance, test: Frameworks.Test) {
         const framework = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME)
         const fullTitle = getUniqueIdentifier(test, framework)
-        const gitConfig = await getGitMetaData()
         const filename = test.file // || this._suiteFile
 
         const testData: Record<string, unknown> = {
             [TestFrameworkConstants.KEY_TEST_ID]: getUniqueIdentifier(test, framework),
             [TestFrameworkConstants.KEY_TEST_NAME]: test.title || test.description,
             [TestFrameworkConstants.KEY_TEST_CODE]: test.body || '',
-            [TestFrameworkConstants.KEY_TEST_FILE_PATH]: (gitConfig?.root && filename) ? path.relative(gitConfig.root, filename) : undefined,
-            [TestFrameworkConstants.KEY_TEST_LOCATION]: filename ? path.relative(process.cwd(), filename) : undefined,
+            ...resolveTestFilePaths(filename),
             [TestFrameworkConstants.KEY_TEST_SCOPE]: fullTitle,
             [TestFrameworkConstants.KEY_TEST_SCOPES]: getMochaTestHierarchy(test),
         }
@@ -389,7 +405,6 @@ export default class WdioMochaTestFramework extends TestFramework {
         }
 
         if (hookState === HookState.PRE) {
-            const gitConfig = await getGitMetaData()
             const filename = test.file
             const hook: Record<string, unknown> = {
                 key,
@@ -398,8 +413,7 @@ export default class WdioMochaTestFramework extends TestFramework {
                 [TestFrameworkConstants.KEY_EVENT_STARTED_AT]: new Date().toISOString(),
                 [TestFrameworkConstants.KEY_HOOK_LOGS]: [],
                 [TestFrameworkConstants.KEY_HOOK_NAME]: test.title || test.description,
-                [TestFrameworkConstants.KEY_TEST_FILE_PATH]: (gitConfig?.root && filename) ? path.relative(gitConfig.root, filename) : undefined,
-                [TestFrameworkConstants.KEY_TEST_LOCATION]: filename ? path.relative(process.cwd(), filename) : undefined,
+                ...resolveTestFilePaths(filename),
             }
             hooksStarted.get(key)?.push(hook)
             updates[WdioMochaTestFramework.KEY_HOOK_LAST_STARTED] = key
