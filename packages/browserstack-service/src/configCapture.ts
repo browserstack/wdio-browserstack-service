@@ -151,10 +151,15 @@ const scanArgvForConfig = (argv: string[]): string | undefined => {
  *                                            positional, which survives into the merged
  *                                            config object (v8 and v9 alike)
  *   3. process.argv positional             — `wdio <config>` without the `run` subcommand
- *   4. config._[0]                         — same positional as seen by yargs
- *   5. rootDir + wdio.conf.<ext>           — no-arg `wdio`, and programmatic `new Launcher()`
- *   6. cwd + wdio.conf.<ext>               — when the user overrides `rootDir` in their config
- *   7. single `*.conf.<ext>` in rootDir/cwd — unambiguous custom filenames only
+ *   4. rootDir + wdio.conf.<ext>           — no-arg `wdio`, and programmatic `new Launcher()`
+ *   5. cwd + wdio.conf.<ext>               — when the user overrides `rootDir` in their config
+ *   6. single `*.conf.<ext>` in rootDir/cwd — unambiguous custom filenames only
+ *
+ * There is deliberately NO `config._` rung. It looks like a free extra signal, but `config._`
+ * is derived from the same argv the scan above already reads — without the scan's guard that
+ * skips a flag's value. So it only ever differs by taking something the scan correctly
+ * rejected: `wdio --spec ./a.js` resolves to the SPEC file under that rung, and to the real
+ * `wdio.conf.js` without it.
  */
 export function resolveWdioConfigPath(config?: Options.Testrunner): ConfigPathResolution {
     const configRecord = (config || {}) as Record<string, unknown>
@@ -172,14 +177,6 @@ export function resolveWdioConfigPath(config?: Options.Testrunner): ConfigPathRe
     const fromArgv = scanArgvForConfig(process.argv.slice(2))
     if (fromArgv) {
         return { configPath: fromArgv, strategy: 'argv_positional' }
-    }
-
-    const positionals = Array.isArray(configRecord._) ? configRecord._ as unknown[] : []
-    for (const positional of positionals) {
-        const resolved = resolveCandidate(positional)
-        if (resolved && SUPPORTED_WDIO_CONFIG_EXTENSIONS.includes(path.extname(resolved))) {
-            return { configPath: resolved, strategy: 'config_positional' }
-        }
     }
 
     // `rootDir` defaults to dirname(configFile) but the user can override it in their

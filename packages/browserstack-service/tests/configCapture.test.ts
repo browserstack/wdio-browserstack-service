@@ -150,6 +150,17 @@ describe('resolveWdioConfigPath', () => {
         expect(resolveWdioConfigPath({} as never)).toEqual({ reason: 'config_ambiguous' })
     })
 
+    it('does not mistake a --spec value for the config when there is no positional', () => {
+        // Regression: a `config._` rung would take the spec here, because `config._` carries
+        // the same argv WITHOUT the scan's flag-value guard.
+        const expected = write('wdio.conf.js')
+        write('a.js')
+        process.argv = ['node', 'wdio', '--spec', './a.js']
+
+        expect(resolveWdioConfigPath({ _: ['./a.js'] } as never))
+            .toEqual({ configPath: expected, strategy: 'cwd_default' })
+    })
+
     it('reports config_not_found on an empty project', () => {
         expect(resolveWdioConfigPath({} as never)).toEqual({ reason: 'config_not_found' })
     })
