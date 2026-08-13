@@ -5,6 +5,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 
 import {
     collectConfigFilesForUpload,
+    relativeDirToCwd,
     findPackageJsonForUpload,
     initWdioConfigPath,
     isAutoCaptureLogsDisabled,
@@ -518,6 +519,24 @@ describe('collectConfigFilesForUpload', () => {
         process.env[BROWSERSTACK_WDIO_CONFIG_FILE_PATH] = path.join(tmpRoot, 'gone.conf.ts')
 
         expect(() => collectConfigFilesForUpload({} as never)).not.toThrow()
+    })
+})
+
+describe('relativeDirToCwd', () => {
+    it('renders the cwd itself as "." and never as its folder name', () => {
+        // path.relative(cwd, cwd) === '', which is the COMMON case for a project-root
+        // manifest. A basename fallback would print the folder name — and for a project
+        // checked out directly in $HOME that folder name is the OS username.
+        expect(relativeDirToCwd(tmpRoot)).toBe('.')
+        expect(relativeDirToCwd(tmpRoot)).not.toBe(path.basename(tmpRoot))
+    })
+
+    it('keeps the diagnostic for a directory outside cwd', () => {
+        expect(relativeDirToCwd(path.dirname(tmpRoot))).toBe('..')
+    })
+
+    it('is relative for a nested directory', () => {
+        expect(relativeDirToCwd(path.join(tmpRoot, 'packages', 'e2e'))).toBe(path.join('packages', 'e2e'))
     })
 })
 

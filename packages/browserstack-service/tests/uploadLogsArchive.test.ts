@@ -5,6 +5,8 @@ import zlib from 'node:zlib'
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { list } from 'tar'
 
+const fsMkdtempOriginal = fs.mkdtempSync
+
 import { uploadLogs } from '../src/util.js'
 import { BStackLogger } from '../src/bstackLogger.js'
 import { BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS, BROWSERSTACK_WDIO_CONFIG_FILE_PATH } from '../src/constants.js'
@@ -140,6 +142,18 @@ describe('uploadLogs archive contents (SDK-7250)', () => {
         expect(raw).toContain('wdio.conf.js')
     })
 
+    it('reports a project-root manifest as "." rather than the folder name', async () => {
+        fs.writeFileSync(path.join(tmpProject, 'package.json'), '{"name":"app"}')
+        fs.writeFileSync(path.join(tmpProject, 'wdio.conf.js'), 'export const config = {}')
+
+        await uploadLogs('some_user', 'some_key', 'some_uuid', {})
+
+        const raw = zlib.gunzipSync(uploadedArchive!).toString('binary')
+        expect(raw).toContain('package.json: .')
+        // the tmp dir's own name must not leak into the bundle
+        expect(raw).not.toContain(`package.json: ${path.basename(tmpProject)}`)
+    })
+
     it('records the reason in the manifest when no config is found', async () => {
         await uploadLogs('some_user', 'some_key', 'some_uuid', {})
 
@@ -178,13 +192,24 @@ describe('uploadLogs archive contents (SDK-7250)', () => {
     })
 
     it('leaves no staging directory behind', async () => {
+        // Spy on the creation rather than diffing os.tmpdir(): vitest runs test FILES in
+        // parallel workers and util.test.ts also calls uploadLogs, so a listing-based check
+        // races against staging dirs another worker is creating and removing.
         fs.writeFileSync(path.join(tmpProject, 'wdio.conf.js'), 'export const config = {}')
-        const before = fs.readdirSync(os.tmpdir()).filter((e) => e.startsWith('bstack-wdio-logs-'))
+        const created: string[] = []
+        const mkdtempSpy = vi.spyOn(fs, 'mkdtempSync').mockImplementation(((prefix: string) => {
+            const dir = fsMkdtempOriginal(prefix) as string
+            created.push(dir)
+            return dir
+        }) as never)
 
         await uploadLogs('some_user', 'some_key', 'some_uuid', {})
+        mkdtempSpy.mockRestore()
 
-        const after = fs.readdirSync(os.tmpdir()).filter((e) => e.startsWith('bstack-wdio-logs-'))
-        expect(after).toEqual(before)
+        expect(created.length).toBeGreaterThan(0)
+        for (const dir of created) {
+            expect(fs.existsSync(dir)).toBe(false)
+        }
     })
 
     it('keeps concurrent runs from clobbering each other', async () => {

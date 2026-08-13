@@ -72,12 +72,33 @@ const resolveCandidate = (value: unknown): string | undefined => {
     }
 }
 
-/** cwd-relative form of a path, for anything that gets uploaded. Falls back to the basename. */
+/**
+ * cwd-relative form of a FILE path, for anything that gets uploaded.
+ *
+ * The basename fallback is safe here only because `path.relative` is never empty for a file —
+ * a file is never equal to cwd. Do NOT pass a directory: see `relativeDirToCwd`.
+ */
 export const relativeToCwd = (filePath: string): string => {
     try {
         return path.relative(process.cwd(), filePath) || path.basename(filePath)
     } catch {
         return path.basename(filePath)
+    }
+}
+
+/**
+ * cwd-relative form of a DIRECTORY path.
+ *
+ * `path.relative(cwd, cwd)` is `''`, which is the COMMON case here (a manifest at the project
+ * root), so a basename fallback would report the folder name — and for a project checked out
+ * directly in `$HOME` that folder name is the OS username, which is the exact exposure the
+ * relative-path handling exists to prevent. Empty means "cwd", so render it as `.`.
+ */
+export const relativeDirToCwd = (dir: string): string => {
+    try {
+        return path.relative(process.cwd(), dir) || '.'
+    } catch {
+        return '.'
     }
 }
 

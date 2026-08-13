@@ -48,7 +48,7 @@ import {
 } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import { BStackLogger } from './bstackLogger.js'
-import { collectConfigFilesForUpload, dedupeEntryName, findPackageJsonForUpload, isAutoCaptureLogsDisabled, redactSensitiveContent, relativeToCwd } from './configCapture.js'
+import { collectConfigFilesForUpload, dedupeEntryName, findPackageJsonForUpload, isAutoCaptureLogsDisabled, redactSensitiveContent, relativeDirToCwd } from './configCapture.js'
 import UsageStats from './testOps/usageStats.js'
 import TestOpsConfig from './testOps/testOpsConfig.js'
 import type { StartBinSessionResponse } from './grpc/index.js'
@@ -1632,7 +1632,7 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
             BStackLogger.debug(`No wdio config captured${strategy ? ` (strategy ${strategy})` : ''}`)
         }
         if (packageJsonPath) {
-            BStackLogger.debug(`Auto-captured package.json from ${relativeToCwd(path.dirname(packageJsonPath))}`)
+            BStackLogger.debug(`Auto-captured package.json from ${relativeDirToCwd(path.dirname(packageJsonPath))}`)
         }
         if (configFailures.length > 0 && failure === undefined) {
             // Warning only — `success` stays true so a missing config never reads as a
@@ -1657,7 +1657,7 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
                 `config files captured: ${capturedConfigNames.join(', ') || 'none'}`,
                 // cwd-relative: the manifest ships inside the tarball, so an absolute path would
                 // leak the OS username and layout — the same reason the resolution log line is relative
-                `package.json: ${packageJsonPath ? relativeToCwd(path.dirname(packageJsonPath)) : 'not found'}`,
+                `package.json: ${packageJsonPath ? relativeDirToCwd(path.dirname(packageJsonPath)) : 'not found'}`,
                 `capture failures: ${configFailures.join('; ') || 'none'}`
             ]
             fs.writeFileSync(path.join(tmpDir, manifestName), manifestLines.join('\n') + '\n')
