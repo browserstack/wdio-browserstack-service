@@ -123,6 +123,31 @@ describe('uploadLogs archive contents (SDK-7250)', () => {
         expect(raw).toContain('accessibility: true')
     })
 
+    it('puts the capture manifest INSIDE the archive, not just in the log', async () => {
+        // The service log is snapshotted into the staging dir before these lines are written,
+        // so anything logged afterwards never reaches the tarball. Support downloading the
+        // bundle needs the manifest, the strategy and the failures to be in it.
+        fs.writeFileSync(path.join(tmpProject, 'package.json'), '{"name":"app"}')
+        fs.writeFileSync(path.join(tmpProject, 'wdio.conf.js'), 'export const config = {}')
+
+        await uploadLogs('some_user', 'some_key', 'some_uuid', {})
+
+        const entries = await readArchiveEntries(uploadedArchive!)
+        expect(entries).toContain('capture-manifest.txt')
+
+        const raw = zlib.gunzipSync(uploadedArchive!).toString('binary')
+        expect(raw).toContain('config resolution strategy:')
+        expect(raw).toContain('wdio.conf.js')
+    })
+
+    it('records the reason in the manifest when no config is found', async () => {
+        await uploadLogs('some_user', 'some_key', 'some_uuid', {})
+
+        const raw = zlib.gunzipSync(uploadedArchive!).toString('binary')
+        expect(raw).toContain('capture failures:')
+        expect(raw).toContain('config files captured: none')
+    })
+
     it('still uploads the logs when no config can be found', async () => {
         await uploadLogs('some_user', 'some_key', 'some_uuid', {})
 

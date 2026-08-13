@@ -19,6 +19,7 @@ import type { BrowserstackConfig, BrowserstackOptions, App, AppConfig, AppUpload
 import {
     BSTACK_SERVICE_VERSION,
     NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV, RERUN_ENV, RERUN_TESTS_ENV,
+    AUTOLOGCAPTURE_NOTIFICATION,
     BROWSERSTACK_TESTHUB_UUID,
     VALID_APP_EXTENSION,
     BROWSERSTACK_PERCY,
@@ -257,6 +258,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         // SDK-5993 fixed in the Node SDK (silently dropped the config on every monorepo /
         // subdir CI run). Best-effort: never blocks the run.
         if (!publishAutoCaptureDisabled(this._options)) {
+            BStackLogger.info(AUTOLOGCAPTURE_NOTIFICATION)
             initWdioConfigPath(config)
         }
 

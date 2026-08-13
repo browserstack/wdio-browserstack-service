@@ -1597,6 +1597,9 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
         // being copied verbatim: `scripts` routinely embed tokens (`--token=ghp_...`), and the
         // walk-up can select a monorepo-root manifest broader than the test project. Ordinary
         // dependency/version lines are unaffected by the scrub.
+        // snapshot before package.json joins the list, so counts and names stay honest
+        const capturedConfigNames = configFiles.map(f => f.name)
+
         const packageJsonPath = findPackageJsonForUpload()
         if (packageJsonPath) {
             try {
@@ -1619,8 +1622,17 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
                 configFailures.push(`${configFile.name}: ${msg}`)
             }
         }
-        if (configFiles.length > 0) {
-            BStackLogger.debug(`Auto-captured ${configFiles.length} config file(s) via ${strategy}: ${configFiles.map(f => f.name).join(', ')}`)
+        // Logged separately from package.json: `configFiles` has the manifest appended to it,
+        // and `strategy` is undefined on every failure path, so a combined line reads
+        // "Auto-captured 1 config file(s) via undefined: package.json" — i.e. it claims a
+        // capture succeeded in exactly the case where none did.
+        if (capturedConfigNames.length > 0) {
+            BStackLogger.debug(`Auto-captured ${capturedConfigNames.length} config file(s) via ${strategy}: ${capturedConfigNames.join(', ')}`)
+        } else {
+            BStackLogger.debug(`No wdio config captured${strategy ? ` (strategy ${strategy})` : ''}`)
+        }
+        if (packageJsonPath) {
+            BStackLogger.debug(`Auto-captured package.json from ${path.dirname(packageJsonPath)}`)
         }
         if (configFailures.length > 0 && failure === undefined) {
             // Warning only — `success` stays true so a missing config never reads as a
@@ -1633,9 +1645,24 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
             failure = `archive_add_failed [${archiveAddFailures.length}]: ${archiveAddFailures.join('; ')}`.substring(0, 300)
         }
 
-        // Full archive manifest: the only place the complete entry list is visible, so
-        // regression automation can assert package.json and the config files actually
-        // made it in rather than inferring it from the config-capture line alone.
+        // Written as its OWN archive entry rather than only to the service log. The log file
+        // is snapshotted into the staging dir above, so anything logged after that copy never
+        // reaches the tarball — support downloading the bundle would see no manifest, no
+        // resolution strategy and no capture failures. Those are exactly where triage starts.
+        try {
+            const manifestName = uniqueName('capture-manifest.txt')
+            const manifestLines = [
+                `archive entries: ${[...copiedFileNames, manifestName].join(', ')}`,
+                `config resolution strategy: ${strategy || 'none'}`,
+                `config files captured: ${capturedConfigNames.join(', ') || 'none'}`,
+                `package.json: ${packageJsonPath ? path.dirname(packageJsonPath) : 'not found'}`,
+                `capture failures: ${configFailures.join('; ') || 'none'}`
+            ]
+            fs.writeFileSync(path.join(tmpDir, manifestName), manifestLines.join('\n') + '\n')
+            copiedFileNames.push(manifestName)
+        } catch (manifestErr) {
+            BStackLogger.debug(`Failed to write capture manifest: ${getErrorString(manifestErr)}`)
+        }
         BStackLogger.debug(`Auto-capture archive entries: ${copiedFileNames.join(', ')}`)
 
         await create(

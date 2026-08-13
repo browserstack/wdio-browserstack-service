@@ -307,12 +307,14 @@ export function redactSensitiveContent(text: string): string {
     //
     // camelCase stays case-SENSITIVE: requiring a capitalised suffix is what separates
     // `privateKey` from `hotkey`, so this closes the leak without the false positives a
-    // bare /key|token|secret/ pass would produce.
+    // bare /key|token|secret/ pass would produce. The core does NOT require a lowercase
+    // char before the suffix — that guard only ever duplicated the case-sensitivity, while
+    // rejecting acronym prefixes (`APIToken`, `JWTSecret`, `SSHKey`, `AWSSecret`).
     // Identifier scans are bounded at 64 chars. Real config keys are far shorter, so this
     // changes no match; it is defence-in-depth against backtracking on a pathological line
     // (a minified/base64 run), keeping every start position O(1) instead of O(n).
     const compoundCamelRegex = new RegExp(
-        `^.*?(?<![A-Za-z0-9_$])([A-Za-z0-9_$]{0,64}[a-z0-9](?:${COMPOUND_SECRET_SUFFIXES_CAMEL}))\\s*[:=].*$`,
+        `^.*?(?<![A-Za-z0-9_$])([A-Za-z0-9_$]{1,64}(?:${COMPOUND_SECRET_SUFFIXES_CAMEL}))\\s*[:=].*$`,
         'gm'
     )
     // snake_case is matched case-INSENSITIVELY, which is safe precisely because it requires
@@ -387,8 +389,8 @@ const resolveRelativeImport = (specifier: string, fromFile: string): string | un
  * Only RELATIVE specifiers are followed — bare specifiers are npm packages, never the
  * customer's own config. Depth and count are capped so this can never walk a source tree.
  */
-const collectLocalImports = (entryPath: string, entryContent: string, budget: number): string[] => {
-    const found: string[] = []
+const collectLocalImports = (entryPath: string, entryContent: string, budget: number): Array<{ filePath: string, content: string }> => {
+    const found: Array<{ filePath: string, content: string }> = []
     const seen = new Set([entryPath])
     let frontier: Array<{ filePath: string, content: string }> = [{ filePath: entryPath, content: entryContent }]
 
@@ -414,7 +416,7 @@ const collectLocalImports = (entryPath: string, entryContent: string, budget: nu
                 if (importedContent === undefined) {
                     continue
                 }
-                found.push(resolved)
+                found.push({ filePath: resolved, content: importedContent })
                 next.push({ filePath: resolved, content: importedContent })
             }
         }
@@ -488,17 +490,12 @@ export function collectConfigFilesForUpload(config?: Options.Testrunner): { file
 
         const remaining = MAX_CAPTURED_CONFIG_FILES - files.length
         if (remaining > 0) {
-            for (const importedPath of collectLocalImports(resolution.configPath, content, remaining)) {
-                const imported = readCappedFile(importedPath)
-                if (imported.content === undefined) {
-                    if (imported.reason) {
-                        failures.push(imported.reason)
-                    }
-                    continue
-                }
+            // content comes back from the discovery pass — re-reading here would be a second
+            // disk read per file and could archive different bytes than were scanned.
+            for (const imported of collectLocalImports(resolution.configPath, content, remaining)) {
                 files.push({
-                    name: dedupeEntryName(importedPath, takenNames),
-                    sourcePath: importedPath,
+                    name: dedupeEntryName(imported.filePath, takenNames),
+                    sourcePath: imported.filePath,
                     content: redactSensitiveContent(imported.content)
                 })
             }

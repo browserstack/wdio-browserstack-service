@@ -387,6 +387,43 @@ describe('redactSensitiveContent', () => {
         expect(elapsed).toBeLessThan(2_000)
     })
 
+    it('scrubs acronym-prefixed camelCase secret keys (PR review round 4)', () => {
+        // The old core required a lowercase char before the suffix, so an uppercase acronym
+        // prefix slipped past BOTH passes: the camel core rejected `APIToken` on the `I`, and
+        // the whole-word pass rejected `Token` for the same preceding `I`.
+        const redacted = redactSensitiveContent([
+            "APIToken: 'API_LEAK'",
+            "JWTSecret: 'JWT_LEAK'",
+            "SSHKey: 'SSH_LEAK'",
+            "AWSSecret: 'AWS_LEAK'",
+            "OTPKey = 'OTP_LEAK'"
+        ].join('\n'))
+
+        for (const leak of ['API_LEAK', 'JWT_LEAK', 'SSH_LEAK', 'AWS_LEAK', 'OTP_LEAK']) {
+            expect(redacted).not.toContain(leak)
+        }
+    })
+
+    it('still keeps lookalikes after relaxing the camel core', () => {
+        const redacted = redactSensitiveContent([
+            "hotkey: 'ctrl+a'", "HOTKEY: 'ctrl+b'", "keyword: 'search'",
+            'monkeypatch: 1', "tokenizer: 'x'", "secretary: 'jane'", "donkey: 'y'"
+        ].join('\n'))
+
+        for (const keep of ['ctrl+a', 'ctrl+b', 'search', 'monkeypatch', 'tokenizer', 'secretary', 'donkey']) {
+            expect(redacted).toContain(keep)
+        }
+    })
+
+    it('scrubs an unterminated PEM whose body is one long unwrapped line', () => {
+        // The 200-char per-line bound made this fail OPEN: a key written unwrapped on a
+        // single line exceeded it, so nothing matched and the body shipped.
+        const body = 'B'.repeat(3000)
+        const redacted = redactSensitiveContent(`-----BEGIN PRIVATE KEY-----\n${body}`)
+
+        expect(redacted).not.toContain(body)
+    })
+
     it('scrubs a token embedded in a package.json script', () => {
         expect(redactSensitiveContent('"deploy": "gh release upload --token=ghp_leak"'))
             .not.toContain('ghp_leak')

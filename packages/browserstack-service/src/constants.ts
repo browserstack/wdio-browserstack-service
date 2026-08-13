@@ -56,6 +56,15 @@ export const PERCY_LOGS_FILE = 'logs/percy.log'
  * Auto-capture of the user's wdio config file (SDK-7250).
  */
 
+/*
+ * Shown once per run when auto-capture is active. The Node SDK does the same
+ * (BrowserStackSetup.js -> AUTOLOGCAPTURE_NOTIFICATION); without it a wdio customer gets no
+ * runtime disclosure that their config file is collected, only a changeset entry and a JSDoc
+ * comment. Since the redaction is key-name driven and best-effort, the notice is part of the
+ * control rather than decoration.
+ */
+export const AUTOLOGCAPTURE_NOTIFICATION = 'Your wdio config file, the local config files it imports and package.json are captured with the debug logs at the end of the run, with values under known credential keys removed. To disable, set disableAutoCaptureLogs: true in the browserstack service options.'
+
 /* Absolute path of the resolved wdio config, published once so the upload path never re-derives it */
 export const BROWSERSTACK_WDIO_CONFIG_FILE_PATH = 'BROWSERSTACK_WDIO_CONFIG_FILE_PATH'
 export const BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS = 'BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS'
@@ -108,9 +117,11 @@ export const PEM_BLOCK_REGEX = /(-----BEGIN [^-\r\n]+-----)(?:(?!-----BEGIN)[\s\
  * follows. A run must be at least 20 characters and end at a non-base64 character: letters
  * are valid base64, so a shorter/unbounded rule matches part of an ordinary line such as
  * `nextOption: 1` and eats it. Stops at the first line that does not qualify, so a malformed
- * block cannot swallow the rest of the file.
+ * block cannot swallow the rest of the file. The upper bound is generous (8 KB) because a
+ * key written unwrapped on ONE line would otherwise exceed it and fail OPEN, leaving the body
+ * in the bundle.
  */
-export const PEM_UNTERMINATED_REGEX = /(-----BEGIN [^-\r\n]+-----)(?:\r?\n[A-Za-z0-9+/=]{20,200}(?=[^A-Za-z0-9+/=]|$))+/g
+export const PEM_UNTERMINATED_REGEX = /(-----BEGIN [^-\r\n]+-----)(?:\r?\n[A-Za-z0-9+/=]{20,8192}(?=[^A-Za-z0-9+/=]|$))+/g
 /*
  * Userinfo in ANY url value, not just the `proxyUrl` key. The password half is optional so
  * single-token forms (`https://ghp_xxx@github.com`, common in CI git/npm remotes) are caught
