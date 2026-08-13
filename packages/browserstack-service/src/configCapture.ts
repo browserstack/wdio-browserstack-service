@@ -303,11 +303,21 @@ const readCappedFile = (filePath: string): { content?: string, reason?: string }
  * Handles the TypeScript-ESM convention where `./shared.conf.js` on disk is actually
  * `./shared.conf.ts`, plus extension-less and directory (`/index.*`) specifiers.
  */
+/**
+ * Only files that are themselves configs are followed.
+ *
+ * A relative specifier resolves to whatever the config happens to import, which is frequently
+ * ordinary application source (`./helpers/utils.js`) rather than configuration. Capturing the
+ * split-config case (`base.conf.js`, `wdio.shared.conf.ts`) is the point; shipping a
+ * customer's application modules is not.
+ */
+const isConfigFileName = (filePath: string): boolean => /\.conf(ig)?\.[^.]+$/i.test(path.basename(filePath))
+
 const resolveRelativeImport = (specifier: string, fromFile: string): string | undefined => {
     const base = path.resolve(path.dirname(fromFile), specifier)
 
     if (isReadableFile(base) && SUPPORTED_WDIO_CONFIG_EXTENSIONS.includes(path.extname(base))) {
-        return base
+        return isConfigFileName(base) ? base : undefined
     }
 
     const withoutExt = SUPPORTED_WDIO_CONFIG_EXTENSIONS.includes(path.extname(base))
@@ -316,13 +326,13 @@ const resolveRelativeImport = (specifier: string, fromFile: string): string | un
 
     for (const ext of SUPPORTED_WDIO_CONFIG_EXTENSIONS) {
         const candidate = `${withoutExt}${ext}`
-        if (isReadableFile(candidate)) {
+        if (isReadableFile(candidate) && isConfigFileName(candidate)) {
             return candidate
         }
     }
     for (const ext of SUPPORTED_WDIO_CONFIG_EXTENSIONS) {
         const candidate = path.join(base, `index${ext}`)
-        if (isReadableFile(candidate)) {
+        if (isReadableFile(candidate) && isConfigFileName(candidate)) {
             return candidate
         }
     }

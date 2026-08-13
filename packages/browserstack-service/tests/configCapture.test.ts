@@ -481,6 +481,30 @@ describe('collectConfigFilesForUpload', () => {
         expect(files.map((f) => f.content).join('\n')).not.toContain('leaked-from-import')
     })
 
+    it('follows an imported CONFIG file but not ordinary source', () => {
+        write('wdio.conf.ts', [
+            "import { base } from './base.conf.js'",
+            "import { helper } from './helpers/utils.js'",
+            'export const config = {}'
+        ].join('\n'))
+        write('base.conf.ts', 'export const base = { maxInstances: 5 }')
+        write('helpers/utils.js', 'export const helper = 1 // ORDINARY_SOURCE')
+
+        const { files } = collectConfigFilesForUpload({} as never)
+
+        expect(files.map((f) => f.name).sort()).toEqual(['base.conf.ts', 'wdio.conf.ts'])
+        expect(files.map((f) => f.content).join('\n')).not.toContain('ORDINARY_SOURCE')
+    })
+
+    it('does not follow a config-shaped path that is not named like a config', () => {
+        write('wdio.conf.ts', "import './lib/setup.ts'\nexport const config = {}")
+        write('lib/setup.ts', 'export const x = 1 // NOT_A_CONFIG')
+
+        const { files } = collectConfigFilesForUpload({} as never)
+
+        expect(files.map((f) => f.name)).toEqual(['wdio.conf.ts'])
+    })
+
     it('never follows bare (npm package) specifiers', () => {
         write('wdio.conf.ts', 'import { x } from "@wdio/globals"\nimport y from "dotenv"\nexport const config = {}')
 
