@@ -20,6 +20,26 @@ let uploadedArchive: Buffer | undefined
 let tmpProject: string
 let cwdSpy: ReturnType<typeof vi.spyOn>
 let originalLogFilePath: string
+let originalLogFolderPath: string
+
+const readArchiveEntry = async (gz: Buffer, entryName: string): Promise<string> => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bstack-untar-one-'))
+    const tarPath = path.join(workDir, 'logs.tar')
+    fs.writeFileSync(tarPath, zlib.gunzipSync(gz))
+
+    let content = ''
+    await list({
+        file: tarPath,
+        onentry: (e) => {
+            if (String(e.path) !== entryName) {
+                return
+            }
+            e.on('data', (chunk: Buffer) => { content += chunk.toString('utf8') })
+        }
+    })
+    fs.rmSync(workDir, { recursive: true, force: true })
+    return content
+}
 
 const readArchiveEntries = async (gz: Buffer) => {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bstack-untar-'))
@@ -37,6 +57,11 @@ beforeEach(() => {
     tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), 'bstack-upload-test-'))
     cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(tmpProject)
     originalLogFilePath = BStackLogger.logFilePath
+    originalLogFolderPath = BStackLogger.logFolderPath
+    // BStackLogger caches its WriteStream on a static; drop it so it reopens at THIS test's
+    // path. Without this the stream still points at the previous test's (deleted) directory.
+    BStackLogger.clearLogger()
+    BStackLogger.logFolderPath = tmpProject
     BStackLogger.logFilePath = path.join(tmpProject, 'bstack-wdio-service.log')
     fs.writeFileSync(BStackLogger.logFilePath, 'service log content')
     delete process.env[BROWSERSTACK_WDIO_CONFIG_FILE_PATH]
@@ -55,7 +80,9 @@ beforeEach(() => {
 
 afterEach(() => {
     cwdSpy.mockRestore()
+    BStackLogger.clearLogger()
     BStackLogger.logFilePath = originalLogFilePath
+    BStackLogger.logFolderPath = originalLogFolderPath
     delete process.env[BROWSERSTACK_WDIO_CONFIG_FILE_PATH]
     delete process.env[BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS]
     fs.rmSync(tmpProject, { recursive: true, force: true })
@@ -125,41 +152,30 @@ describe('uploadLogs archive contents (SDK-7250)', () => {
         expect(raw).toContain('accessibility: true')
     })
 
-    it('puts the capture manifest INSIDE the archive, not just in the log', async () => {
-        // The service log is snapshotted into the staging dir before these lines are written,
-        // so anything logged afterwards never reaches the tarball. Support downloading the
-        // bundle needs the manifest, the strategy and the failures to be in it.
+    it('puts the capture summary inside the ARCHIVED log, not just the local one', async () => {
+        // Two separate regressions are pinned here, both found against a real downloaded
+        // bundle. (1) The log is snapshotted LAST, so the resolution strategy and captured
+        // names are inside the copy that ships -- copying earlier left them local-only.
+        // (2) BStackLogger writes through an async WriteStream, so ordering alone still
+        // shipped a truncated log; uploadLogs must flush before it copies.
         fs.writeFileSync(path.join(tmpProject, 'package.json'), '{"name":"app"}')
         fs.writeFileSync(path.join(tmpProject, 'wdio.conf.js'), 'export const config = {}')
-
         await uploadLogs('some_user', 'some_key', 'some_uuid', {})
 
-        const entries = await readArchiveEntries(uploadedArchive!)
-        expect(entries).toContain('capture-manifest.txt')
-
-        const raw = zlib.gunzipSync(uploadedArchive!).toString('binary')
-        expect(raw).toContain('config resolution strategy:')
-        expect(raw).toContain('wdio.conf.js')
+        const archivedLog = await readArchiveEntry(uploadedArchive!, 'bstack-wdio-service.log')
+        expect(archivedLog).toContain('Auto-captured 1 config file(s) via cwd_default')
+        expect(archivedLog).toContain('wdio.conf.js')
+        expect(archivedLog).toContain('Auto-captured package.json from')
+        // The trailing "archive entries" line lists what actually landed, so it can only be
+        // written after the copy -- the log file is itself one of those entries. It stays
+        // local-only on purpose; whoever holds the bundle can just list the tarball.
     })
 
-    it('reports a project-root manifest as "." rather than the folder name', async () => {
-        fs.writeFileSync(path.join(tmpProject, 'package.json'), '{"name":"app"}')
-        fs.writeFileSync(path.join(tmpProject, 'wdio.conf.js'), 'export const config = {}')
-
+    it('records in the ARCHIVED log when no config was found', async () => {
         await uploadLogs('some_user', 'some_key', 'some_uuid', {})
 
-        const raw = zlib.gunzipSync(uploadedArchive!).toString('binary')
-        expect(raw).toContain('package.json: .')
-        // the tmp dir's own name must not leak into the bundle
-        expect(raw).not.toContain(`package.json: ${path.basename(tmpProject)}`)
-    })
-
-    it('records the reason in the manifest when no config is found', async () => {
-        await uploadLogs('some_user', 'some_key', 'some_uuid', {})
-
-        const raw = zlib.gunzipSync(uploadedArchive!).toString('binary')
-        expect(raw).toContain('capture failures:')
-        expect(raw).toContain('config files captured: none')
+        const archivedLog = await readArchiveEntry(uploadedArchive!, 'bstack-wdio-service.log')
+        expect(archivedLog).toContain('No wdio config captured')
     })
 
     it('still uploads the logs when no config can be found', async () => {
@@ -223,5 +239,64 @@ describe('uploadLogs archive contents (SDK-7250)', () => {
 
         expect(results.every((r) => r && r.status === 'success')).toBe(true)
         expect(fetch).toHaveBeenCalledTimes(3)
+    })
+})
+
+describe('BStackLogger.flushLogFile', () => {
+    // Lives here rather than in bstackLogger.test.ts, which mocks node:fs wholesale --
+    // buffering is the behaviour under test, so it needs a real stream and a real file.
+    let dir: string
+    let originalPath: string
+    let originalFolder: string
+
+    beforeEach(() => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bstack-flush-'))
+        originalPath = BStackLogger.logFilePath
+        originalFolder = BStackLogger.logFolderPath
+        BStackLogger.clearLogger()
+        BStackLogger.logFolderPath = dir
+        BStackLogger.logFilePath = path.join(dir, 'bstack-wdio-service.log')
+    })
+
+    afterEach(() => {
+        BStackLogger.clearLogger()
+        BStackLogger.logFilePath = originalPath
+        BStackLogger.logFolderPath = originalFolder
+        fs.rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('puts a just-logged line on disk, which an unflushed write does not', () => {
+        BStackLogger.debug('LINE_BEFORE_FLUSH')
+        // Baseline: without the flush the stream has not even opened the file yet, so anything
+        // that snapshots the log at this instant ships a truncated copy (or none at all).
+        const beforeFlush = fs.existsSync(BStackLogger.logFilePath)
+            ? fs.readFileSync(BStackLogger.logFilePath, 'utf8')
+            : ''
+        expect(beforeFlush).not.toContain('LINE_BEFORE_FLUSH')
+    })
+
+    it('drains the buffer without ending the stream', async () => {
+        BStackLogger.debug('FIRST_LINE')
+        await BStackLogger.flushLogFile()
+        expect(fs.readFileSync(BStackLogger.logFilePath, 'utf8')).toContain('FIRST_LINE')
+
+        // still writable afterwards -- unlike clearLogger(), which ends the stream
+        BStackLogger.debug('SECOND_LINE')
+        await BStackLogger.flushLogFile()
+        expect(fs.readFileSync(BStackLogger.logFilePath, 'utf8')).toContain('SECOND_LINE')
+    })
+
+    it('resolves without a stream open, and cannot hang the upload', async () => {
+        BStackLogger.clearLogger()
+        await expect(BStackLogger.flushLogFile()).resolves.toBeUndefined()
+
+        // a stream that never invokes the write callback must still resolve, via the timeout
+        BStackLogger.debug('x')
+        const stuck = { writable: true, write: vi.fn(), end: vi.fn() } as unknown as typeof BStackLogger['logFileStream']
+        // @ts-expect-error -- reaching into the private static is the point of the test
+        BStackLogger.logFileStream = stuck
+        await expect(BStackLogger.flushLogFile(50)).resolves.toBeUndefined()
+        // @ts-expect-error -- drop the fake so afterEach does not call end() on it
+        BStackLogger.logFileStream = null
     })
 })

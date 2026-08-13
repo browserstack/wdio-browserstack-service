@@ -1567,25 +1567,9 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
         // (e.g. configs/wdio.conf.ts + shared/wdio.conf.ts) join the archive.
         // Same helper collectConfigFilesForUpload uses, so the two cannot disagree.
         const takenNames = new Set<string>(['logs.tar', 'logs.tar.gz'])
-        const uniqueName = (filePath: string): string => dedupeEntryName(filePath, takenNames)
-
-        const filesToArchive = [
-            BStackLogger.logFilePath,
-            CLI_DEBUG_LOGS_FILE,
-        ].filter((f): f is string => Boolean(f) && fs.existsSync(f as string))
-
         const copiedFileNames: string[] = []
         const archiveAddFailures: string[] = []
-        for (const f of filesToArchive) {
-            try {
-                const entryName = uniqueName(f)
-                fs.copyFileSync(f, path.join(tmpDir, entryName))
-                copiedFileNames.push(entryName)
-            } catch (copyErr) {
-                const msg = (copyErr as Error)?.message || String(copyErr)
-                archiveAddFailures.push(`${path.basename(f)}: ${msg}`)
-            }
-        }
+        const uniqueName = (filePath: string): string => dedupeEntryName(filePath, takenNames)
 
         // SDK-7250: the user's wdio config (and the local files it imports), credential-scrubbed.
         // Soft-failure by design — a config we cannot read or locate must never stop the
@@ -1640,31 +1624,37 @@ export async function uploadLogs(user: string | undefined, key: string | undefin
             failure = `config_capture: ${configFailures.join('; ')}`.substring(0, 300)
         }
 
+        // The service log is snapshotted LAST, deliberately. Everything above -- the resolution
+        // strategy, what was captured, and any capture failures -- is written to that log
+        // first, so it is inside the copy that ships. Copying earlier is why those lines used
+        // to exist only in the developer's local file and never in the downloaded bundle.
+        //
+        // Ordering alone is not enough: BStackLogger writes through an async WriteStream, so
+        // those lines are still buffered at this point. Flush before copying or the shipped
+        // copy is silently missing its tail (verified against a downloaded bundle).
+        await BStackLogger.flushLogFile()
+
+        const filesToArchive = [
+            BStackLogger.logFilePath,
+            CLI_DEBUG_LOGS_FILE,
+        ].filter((f): f is string => Boolean(f) && fs.existsSync(f as string))
+
+        for (const f of filesToArchive) {
+            try {
+                const entryName = uniqueName(f)
+                fs.copyFileSync(f, path.join(tmpDir, entryName))
+                copiedFileNames.push(entryName)
+            } catch (copyErr) {
+                const msg = (copyErr as Error)?.message || String(copyErr)
+                archiveAddFailures.push(`${path.basename(f)}: ${msg}`)
+            }
+        }
+
         if (archiveAddFailures.length > 0) {
             success = false
             failure = `archive_add_failed [${archiveAddFailures.length}]: ${archiveAddFailures.join('; ')}`.substring(0, 300)
         }
 
-        // Written as its OWN archive entry rather than only to the service log. The log file
-        // is snapshotted into the staging dir above, so anything logged after that copy never
-        // reaches the tarball — support downloading the bundle would see no manifest, no
-        // resolution strategy and no capture failures. Those are exactly where triage starts.
-        try {
-            const manifestName = uniqueName('capture-manifest.txt')
-            const manifestLines = [
-                `archive entries: ${[...copiedFileNames, manifestName].join(', ')}`,
-                `config resolution strategy: ${strategy || 'none'}`,
-                `config files captured: ${capturedConfigNames.join(', ') || 'none'}`,
-                // cwd-relative: the manifest ships inside the tarball, so an absolute path would
-                // leak the OS username and layout — the same reason the resolution log line is relative
-                `package.json: ${packageJsonPath ? relativeDirToCwd(path.dirname(packageJsonPath)) : 'not found'}`,
-                `capture failures: ${configFailures.join('; ') || 'none'}`
-            ]
-            fs.writeFileSync(path.join(tmpDir, manifestName), manifestLines.join('\n') + '\n')
-            copiedFileNames.push(manifestName)
-        } catch (manifestErr) {
-            BStackLogger.debug(`Failed to write capture manifest: ${getErrorString(manifestErr)}`)
-        }
         BStackLogger.debug(`Auto-capture archive entries: ${copiedFileNames.join(', ')}`)
 
         await create(
