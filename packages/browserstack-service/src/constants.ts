@@ -157,6 +157,15 @@ export const SPAWN_RETRY_DELAY_MS = 1000
 export const WDIO_NAMING_PREFIX = 'WebdriverIO-'
 export const PERF_METRICS_WAIT_TIME = 2000
 
+// Build-stop delivery budget. The stop PUT is the only signal that closes a TRA build,
+// so a transient transport failure is worth retrying past a short network blip — but the
+// whole thing runs during shutdown, so the total cost is capped by a wall-clock deadline
+// rather than by attempt count alone.
+export const STOP_BUILD_MAX_ATTEMPTS = 4
+export const STOP_BUILD_ATTEMPT_TIMEOUT_MS = 10000
+export const STOP_BUILD_TOTAL_BUDGET_MS = 30000
+export const STOP_BUILD_BACKOFF_BASE_MS = 1000
+
 // API Endpoint constants
 export const UPDATED_CLI_ENDPOINT = 'sdk/v1/update_cli'
 
