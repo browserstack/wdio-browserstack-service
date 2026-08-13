@@ -141,6 +141,7 @@ describe('TestHubModule', () => {
             const sendTestSessionEventSpy = vi.spyOn(testHubModule, 'sendTestSessionEvent').mockResolvedValue()
 
             const mockArgs = {
+                instance: { getRef: vi.fn(() => 'test-run-ref') },
                 test: { title: 'Test Login Functionality' } as Frameworks.Test,
                 suiteTitle: 'Login Suite'
             }
