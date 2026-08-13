@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.33.2
+
+### Patch Changes
+
+- b688f05: - Fixed Accessibility Automation producing no report for WebdriverIO suites running on the jasmine framework. Accessibility scans now run for jasmine specs, as they already did for mocha.
+
 ## 9.33.1
 
 ### Patch Changes
