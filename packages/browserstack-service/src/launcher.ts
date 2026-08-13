@@ -50,6 +50,8 @@ import {
     validateSkipAppOverride
 } from './util.js'
 import CrashReporter from './crash-reporter.js'
+import { serializeConfigForLog } from './configSerializer.js'
+import { isAutoCaptureLogsDisabled, publishAutoCaptureDisabled } from './autoCapture.js'
 import { finalizeOrphanedRuns } from './testOps/openRunsJournal.js'
 import { BStackLogger } from './bstackLogger.js'
 import { PercyLogger } from './Percy/PercyLogger.js'
@@ -120,11 +122,16 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         }
 
         this.browserStackConfig = BrowserStackConfig.getInstance(_options, _config, capabilities)
-        BStackLogger.debug(`_options data: ${JSON.stringify(_options)}`)
-        BStackLogger.debug(`webdriver capabilities data: ${JSON.stringify(capabilities)}`)
-        const configCopy = JSON.parse(JSON.stringify(_config))
-        CrashReporter.recursivelyRedactKeysFromObject(configCopy, ['user', 'username', 'key', 'accesskey', 'password'])
-        BStackLogger.debug(`_config data: ${JSON.stringify(configCopy)}`)
+        // Serialized through serializeConfigForLog rather than JSON.stringify: it keeps hook
+        // SOURCE instead of `[null]`, keeps RegExp instead of `{}`, survives circular configs
+        // instead of throwing here in the constructor, and scrubs credentials — including the
+        // compound key names (`clientSecret`, `AWS_SECRET_ACCESS_KEY`) that the previous
+        // exact-name list could not see, and secrets inside the hook bodies themselves.
+        if (!isAutoCaptureLogsDisabled(_options)) {
+            BStackLogger.debug(`_options data: ${serializeConfigForLog(_options)}`)
+            BStackLogger.debug(`webdriver capabilities data: ${serializeConfigForLog(capabilities)}`)
+            BStackLogger.debug(`_config data: ${serializeConfigForLog(_config)}`)
+        }
         if (Array.isArray(capabilities)) {
             capabilities
                 .flatMap((c) => {
@@ -248,6 +255,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_PRE_TEST)
     async onPrepare (config: Options.Testrunner, capabilities: Capabilities.TestrunnerCapabilities | WebdriverIO.Capabilities) {
+        publishAutoCaptureDisabled(this._options)
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.INIT)
 
         // skipAppOverride: emit the fixed warning once + handle the 3 edge cases before anything

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import TestOpsConfig from './testOps/testOpsConfig.js'
 import { BStackLogger } from './bstackLogger.js'
+import { isAutoCaptureLogsDisabled } from './autoCapture.js'
 import { BrowserstackCLI } from './cli/index.js'
 import { BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_TESTHUB_UUID, BROWSERSTACK_KILL_SIGNAL } from './constants.js'
 
@@ -109,7 +110,7 @@ export function shouldCallCleanup(config: BrowserStackConfig, isCLIEnabled = fal
     // A signal-terminated run never reaches onComplete's log upload, leaving the
     // build with no SDK-log object — rescue it from the detached cleanup process.
     const clientBuildUuid = process.env[BROWSERSTACK_TESTHUB_UUID] || config.sdkRunID
-    if (!config.logsUploaded && config.userName && config.accessKey && clientBuildUuid) {
+    if (!isAutoCaptureLogsDisabled() && !config.logsUploaded && config.userName && config.accessKey && clientBuildUuid) {
         args.push('--uploadLogs', clientBuildUuid)
     }
 
