@@ -95,29 +95,48 @@ describe('resolveWdioConfigPath', () => {
             .toEqual({ configPath: expected, strategy: 'cwd_default' })
     })
 
-    it('falls back to the argv positional for the bare `wdio <config>` form', () => {
+    it('resolves the bare `wdio <config>` form from config._', () => {
         const expected = write('custom.conf.mjs')
-        process.argv = ['node', 'wdio', './custom.conf.mjs']
 
-        expect(resolveWdioConfigPath({} as never))
-            .toEqual({ configPath: expected, strategy: 'argv_positional' })
+        expect(resolveWdioConfigPath({ _: ['./custom.conf.mjs'] } as never))
+            .toEqual({ configPath: expected, strategy: 'config_positional' })
     })
 
-    it('does not mistake a --spec value for the config positional', () => {
-        const expected = write('wdio.conf.ts')
-        write('test/login.e2e.js')
-        process.argv = ['node', 'wdio', 'run', './wdio.conf.ts', '--spec', './test/login.e2e.js']
+    it('resolves `wdio --watch <config>`, where the config lands in _ after a boolean flag', () => {
+        // yargs consumes nothing for a boolean flag, so `_[0]` IS the config. A raw-argv scan
+        // that skips "a flag's value" throws this away; reading config._ cannot.
+        const expected = write('configs/a.conf.ts')
 
-        expect(resolveWdioConfigPath({} as never))
-            .toEqual({ configPath: expected, strategy: 'argv_positional' })
+        expect(resolveWdioConfigPath({ _: ['./configs/a.conf.ts'], watch: true } as never))
+            .toEqual({ configPath: expected, strategy: 'config_positional' })
     })
 
-    it('skips the `run` subcommand when scanning argv', () => {
+    it('probes the stem when the CLI value carries a .js spelling for a .ts file', () => {
+        // Real wdio behaviour: `wdio run ./configs/a.conf.js` starts fine with only
+        // configs/a.conf.ts on disk, and leaves the non-existent spelling on config-path.
+        const expected = write('configs/a.conf.ts')
+
+        expect(resolveWdioConfigPath({ 'config-path': './configs/a.conf.js' } as never))
+            .toEqual({ configPath: expected, strategy: 'cli_config_path' })
+    })
+
+    it('cannot be fooled by a --spec value, because yargs never leaves it in _', () => {
+        // Measured with wdio's own declaration (spec: {type:'array'}): `wdio --spec ./a.js`
+        // leaves _ EMPTY, so there is no positional to mistake, and resolution falls through
+        // to the default config. This is why reading config._ needs no flag-value heuristic.
+        const expected = write('wdio.conf.js')
+        write('a.js')
+
+        expect(resolveWdioConfigPath({ _: [], spec: ['./a.js'] } as never))
+            .toEqual({ configPath: expected, strategy: 'cwd_default' })
+    })
+
+    it('ignores the `run` subcommand when reading positionals', () => {
         write('run')
         const expected = write('wdio.conf.cts')
-        process.argv = ['node', 'wdio', 'run', './wdio.conf.cts']
 
-        expect(resolveWdioConfigPath({} as never).configPath).toBe(expected)
+        expect(resolveWdioConfigPath({ _: ['run', './wdio.conf.cts'] } as never).configPath)
+            .toBe(expected)
     })
 
     it('probes rootDir for wdio.conf with every supported extension', () => {
@@ -136,29 +155,12 @@ describe('resolveWdioConfigPath', () => {
             .toEqual({ configPath: expected, strategy: 'cwd_default' })
     })
 
-    it('accepts a single custom *.conf.* file as unambiguous', () => {
-        const expected = write('e2e.conf.ts')
+    it('does not guess when a custom-named config exists and the CLI gave nothing', () => {
+        // The directory-scan rung is gone: wdio itself never searches, so neither do we.
+        // Stem-probing the CLI value covers what that rung used to rescue, deterministically.
+        write('e2e.conf.ts')
 
-        expect(resolveWdioConfigPath({} as never))
-            .toEqual({ configPath: expected, strategy: 'single_conf_scan' })
-    })
-
-    it('captures nothing when several custom configs are present', () => {
-        write('android.conf.ts')
-        write('ios.conf.ts')
-
-        expect(resolveWdioConfigPath({} as never)).toEqual({ reason: 'config_ambiguous' })
-    })
-
-    it('does not mistake a --spec value for the config when there is no positional', () => {
-        // Regression: a `config._` rung would take the spec here, because `config._` carries
-        // the same argv WITHOUT the scan's flag-value guard.
-        const expected = write('wdio.conf.js')
-        write('a.js')
-        process.argv = ['node', 'wdio', '--spec', './a.js']
-
-        expect(resolveWdioConfigPath({ _: ['./a.js'] } as never))
-            .toEqual({ configPath: expected, strategy: 'cwd_default' })
+        expect(resolveWdioConfigPath({} as never)).toEqual({ reason: 'config_not_found' })
     })
 
     it('reports config_not_found on an empty project', () => {

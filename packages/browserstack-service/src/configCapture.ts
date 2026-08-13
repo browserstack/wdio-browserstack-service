@@ -48,24 +48,32 @@ const isReadableFile = (filePath: string): boolean => {
 }
 
 /**
- * WDIO hands us the config path exactly as the user typed it (relative or absolute),
- * so every candidate is resolved against cwd — the same base the CLI itself uses
- * (`create-wdio` formatConfigFilePaths).
+ * Accept a config path the way `@wdio/cli` does: the value as spelled, else the same stem
+ * probed across the supported extensions.
+ *
+ * The probe is not defensive padding — it is required. `commands/run.ts` hands `Launcher` the
+ * path that `canAccessConfigPath` found, but leaves `config-path` set to what the USER typed,
+ * and a TypeScript project legally spells a `.ts` config with `.js`. Verified against a real
+ * wdio run: `wdio run ./configs/a.conf.js` with only `configs/a.conf.ts` on disk starts fine
+ * and reports `config-path: './configs/a.conf.js'`, a path that does not exist.
  */
 const resolveCandidate = (value: unknown): string | undefined => {
-    if (typeof value !== 'string' || value.trim() === '') {
+    if (typeof value !== 'string' || !value.trim()) {
         return undefined
     }
     try {
-        const resolved = path.resolve(process.cwd(), value.trim())
-        return isReadableFile(resolved) ? resolved : undefined
+        const full = path.resolve(process.cwd(), value.trim())
+        const ext = path.extname(full)
+        const stem = SUPPORTED_WDIO_CONFIG_EXTENSIONS.includes(ext) ? full.slice(0, -ext.length) : full
+        return [full, ...SUPPORTED_WDIO_CONFIG_EXTENSIONS.map((e) => `${stem}${e}`)]
+            .find(isReadableFile)
     } catch {
         return undefined
     }
 }
 
-/** cwd-relative form of a path, for logs that get uploaded. Falls back to the input. */
-const relativeToCwd = (filePath: string): string => {
+/** cwd-relative form of a path, for anything that gets uploaded. Falls back to the basename. */
+export const relativeToCwd = (filePath: string): string => {
     try {
         return path.relative(process.cwd(), filePath) || path.basename(filePath)
     } catch {
@@ -73,135 +81,56 @@ const relativeToCwd = (filePath: string): string => {
     }
 }
 
-const probeConfigBasename = (dir: string, basename: string): string | undefined => {
-    for (const ext of SUPPORTED_WDIO_CONFIG_EXTENSIONS) {
-        const candidate = path.join(dir, `${basename}${ext}`)
-        if (isReadableFile(candidate)) {
-            return candidate
-        }
-    }
-    return undefined
-}
-
-/**
- * Last-resort discovery: a directory containing exactly ONE `*.conf.<ext>` file is
- * unambiguous. Two or more (e.g. `wdio.conf.ts` + `wdio.app.conf.ts`) is not, and we
- * deliberately capture nothing rather than upload the wrong file.
- */
-const scanForSingleConfig = (dir: string): { match?: string, ambiguous?: boolean } => {
-    try {
-        const matches = fs.readdirSync(dir)
-            .filter((entry) => SUPPORTED_WDIO_CONFIG_EXTENSIONS.includes(path.extname(entry)))
-            .filter((entry) => /\.conf(ig)?\.[^.]+$/i.test(entry))
-            .map((entry) => path.join(dir, entry))
-            .filter(isReadableFile)
-
-        if (matches.length === 1) {
-            return { match: matches[0] }
-        }
-        return { ambiguous: matches.length > 1 }
-    } catch {
-        return {}
-    }
-}
-
-/**
- * Scan the raw CLI args for the config positional.
- *
- * Covers `wdio <config>` (bare form), where WDIO strips the path before the config
- * object is built. A token is skipped when the PREVIOUS token is a flag, otherwise
- * `wdio run conf.js --spec ./tests/a.js` would resolve to the spec file.
- */
-const scanArgvForConfig = (argv: string[]): string | undefined => {
-    for (let i = 0; i < argv.length; i++) {
-        const arg = argv[i]
-        const previous = i > 0 ? argv[i - 1] : undefined
-
-        if (!arg || arg.startsWith('-')) {
-            continue
-        }
-        if (WDIO_CLI_SUBCOMMANDS.includes(arg)) {
-            continue
-        }
-        // value of a space-separated flag (`--spec ./a.js`), not a positional
-        if (previous && previous.startsWith('-') && !previous.includes('=')) {
-            continue
-        }
-        if (!SUPPORTED_WDIO_CONFIG_EXTENSIONS.includes(path.extname(arg))) {
-            continue
-        }
-
-        const resolved = resolveCandidate(arg)
-        if (resolved) {
-            return resolved
-        }
-    }
-    return undefined
-}
-
 /**
  * Resolve the absolute path of the user's wdio config file.
  *
- * WDIO keeps the real path in `ConfigParser`'s private `#configFilePath` field, which no
- * service can reach, so this walks a ladder of fallbacks — first rung that points at a
- * file on disk wins:
+ * WDIO keeps the real path in `ConfigParser`'s private `#configFilePath`, which no service can
+ * reach, so this reconstructs it from the values the CLI does leave on the merged config —
+ * mirroring how `@wdio/cli` itself resolves it. The CLI never searches: it takes one candidate
+ * and probes one stem across the supported extensions, so neither does this.
  *
  *   1. BROWSERSTACK_WDIO_CONFIG_FILE_PATH  — explicit override / support escape hatch
  *   2. config['config-path']               — yargs' kebab alias of the `run <configPath>`
- *                                            positional, which survives into the merged
- *                                            config object (v8 and v9 alike)
- *   3. process.argv positional             — `wdio <config>` without the `run` subcommand
+ *                                            positional (v8 and v9 alike)
+ *   3. config._[0]                         — the bare `wdio <config>` form, which `run.ts`
+ *                                            itself resolves from `params._[0]`
  *   4. rootDir + wdio.conf.<ext>           — no-arg `wdio`, and programmatic `new Launcher()`
  *   5. cwd + wdio.conf.<ext>               — when the user overrides `rootDir` in their config
- *   6. single `*.conf.<ext>` in rootDir/cwd — unambiguous custom filenames only
  *
- * There is deliberately NO `config._` rung. It looks like a free extra signal, but `config._`
- * is derived from the same argv the scan above already reads — without the scan's guard that
- * skips a flag's value. So it only ever differs by taking something the scan correctly
- * rejected: `wdio --spec ./a.js` resolves to the SPEC file under that rung, and to the real
- * `wdio.conf.js` without it.
+ * `config._` is read rather than raw `process.argv`: it is the same positional AFTER yargs has
+ * applied wdio's own option declarations. Scanning argv means re-implementing that with a
+ * heuristic that cannot know which flags are boolean — and `wdio --watch ./a.conf.ts` puts the
+ * real config in `_[0]` while any "skip a flag's value" rule throws it away.
  */
 export function resolveWdioConfigPath(config?: Options.Testrunner): ConfigPathResolution {
-    const configRecord = (config || {}) as Record<string, unknown>
+    const record = (config || {}) as Record<string, unknown>
 
-    const fromEnv = resolveCandidate(process.env[BROWSERSTACK_WDIO_CONFIG_FILE_PATH])
-    if (fromEnv) {
-        return { configPath: fromEnv, strategy: 'env_override' }
-    }
+    try {
+        const positionals = Array.isArray(record._) ? record._ as unknown[] : []
+        const positional = positionals.filter(
+            (entry): entry is string => typeof entry === 'string' && !WDIO_CLI_SUBCOMMANDS.includes(entry)
+        )[0]
+        const rootDir = typeof record.rootDir === 'string' ? record.rootDir : undefined
 
-    const fromConfigPath = resolveCandidate(configRecord['config-path'])
-    if (fromConfigPath) {
-        return { configPath: fromConfigPath, strategy: 'cli_config_path' }
-    }
+        const rungs: Array<[string, unknown]> = [
+            ['env_override', process.env[BROWSERSTACK_WDIO_CONFIG_FILE_PATH]],
+            ['cli_config_path', record['config-path']],
+            ['config_positional', positional],
+            ['root_dir_default', rootDir && path.join(rootDir, DEFAULT_WDIO_CONFIG_BASENAME)],
+            ['cwd_default', DEFAULT_WDIO_CONFIG_BASENAME]
+        ]
 
-    const fromArgv = scanArgvForConfig(process.argv.slice(2))
-    if (fromArgv) {
-        return { configPath: fromArgv, strategy: 'argv_positional' }
-    }
-
-    // `rootDir` defaults to dirname(configFile) but the user can override it in their
-    // config, so it is a fallback and never the source of truth — try cwd as well.
-    const rootDir = typeof configRecord.rootDir === 'string' ? configRecord.rootDir : undefined
-    const searchDirs = [rootDir, process.cwd()].filter((dir): dir is string => Boolean(dir))
-    const uniqueDirs = Array.from(new Set(searchDirs))
-
-    for (const dir of uniqueDirs) {
-        const probed = probeConfigBasename(dir, DEFAULT_WDIO_CONFIG_BASENAME)
-        if (probed) {
-            return { configPath: probed, strategy: dir === rootDir ? 'root_dir_default' : 'cwd_default' }
+        for (const [strategy, value] of rungs) {
+            const configPath = resolveCandidate(value)
+            if (configPath) {
+                return { configPath, strategy }
+            }
         }
-    }
 
-    let sawAmbiguous = false
-    for (const dir of uniqueDirs) {
-        const { match, ambiguous } = scanForSingleConfig(dir)
-        if (match) {
-            return { configPath: match, strategy: 'single_conf_scan' }
-        }
-        sawAmbiguous = sawAmbiguous || Boolean(ambiguous)
+        return { reason: 'config_not_found' }
+    } catch {
+        return { reason: 'config_resolve_exception' }
     }
-
-    return { reason: sawAmbiguous ? 'config_ambiguous' : 'config_not_found' }
 }
 
 /**
