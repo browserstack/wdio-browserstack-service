@@ -44,7 +44,11 @@ import {
     APP_ALLY_ISSUES_SUMMARY_ENDPOINT,
     APP_ALLY_ISSUES_ENDPOINT,
     CLI_DEBUG_LOGS_FILE,
-    WDIO_NAMING_PREFIX
+    WDIO_NAMING_PREFIX,
+    STOP_BUILD_MAX_ATTEMPTS,
+    STOP_BUILD_ATTEMPT_TIMEOUT_MS,
+    STOP_BUILD_TOTAL_BUDGET_MS,
+    STOP_BUILD_BACKOFF_BASE_MS
 } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import { BStackLogger } from './bstackLogger.js'
@@ -732,6 +736,26 @@ export const getA11yResultsSummary = PerformanceTester.measureWrapper(PERFORMANC
     }
 })
 
+/**
+ * Render an error together with its `cause` chain.
+ *
+ * Node's native fetch reports every transport failure as the same opaque
+ * `TypeError: fetch failed`; the actionable detail (ENOTFOUND, ECONNRESET, a proxy
+ * refusal) only lives on `error.cause`, which plain interpolation drops. Without this
+ * a failed build-stop is indistinguishable from any other network fault in the logs.
+ */
+export const describeErrorWithCause = (error: unknown, depth = 3): string => {
+    if (error === null || error === undefined) {
+        return String(error)
+    }
+    const described = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+    const cause = (error as { cause?: unknown }).cause
+    if (cause === null || cause === undefined || depth <= 1) {
+        return described
+    }
+    return `${described} <- caused by ${describeErrorWithCause(cause, depth - 1)}`
+}
+
 export const stopBuildUpstream = PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.TESTHUB_EVENTS.STOP, o11yErrorHandler(async function stopBuildUpstream() {
     const stopBuildUsage = UsageStats.getInstance().stopBuildUsage
     stopBuildUsage.triggered()
@@ -766,9 +790,21 @@ export const stopBuildUpstream = PerformanceTester.measureWrapper(PERFORMANCE_SD
     // best-effort request means a transient failure/timeout leaves the build running
     // until the ~60-min server-side inactivity timeout. Retry with backoff and treat a
     // non-2xx response as a failure so the build reliably reaches a terminal state.
-    const maxAttempts = 3
+    // SDK-7229: a corporate DNS/proxy blip routinely outlasts a sub-second retry window,
+    // and the request had no timeout at all, so a hung connection could stall shutdown
+    // indefinitely. Each attempt is now individually bounded, and the retry loop as a
+    // whole is capped by a wall-clock deadline (this runs during shutdown).
+    const deadline = Date.now() + STOP_BUILD_TOTAL_BUDGET_MS
     let lastError: unknown
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let attempts = 0
+    for (let attempt = 1; attempt <= STOP_BUILD_MAX_ATTEMPTS; attempt++) {
+        const budgetLeft = deadline - Date.now()
+        if (budgetLeft <= 0) {
+            break
+        }
+        attempts = attempt
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), Math.min(STOP_BUILD_ATTEMPT_TIMEOUT_MS, budgetLeft))
         try {
             const response = await fetch(url, {
                 method: 'PUT',
@@ -776,7 +812,8 @@ export const stopBuildUpstream = PerformanceTester.measureWrapper(PERFORMANCE_SD
                     ...DEFAULT_REQUEST_CONFIG.headers,
                     'Authorization': `Bearer ${process.env[BROWSERSTACK_TESTHUB_JWT]}`
                 },
-                body: JSON.stringify(data)
+                body: JSON.stringify(data),
+                signal: controller.signal
             })
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status} ${response.statusText}`)
@@ -788,15 +825,23 @@ export const stopBuildUpstream = PerformanceTester.measureWrapper(PERFORMANCE_SD
                 message: ''
             }
         } catch (error: unknown) {
-            lastError = error
-            BStackLogger.debug(`[STOP_BUILD] Attempt ${attempt}/${maxAttempts} failed. Error: ${error}`)
-            if (attempt < maxAttempts) {
-                await new Promise((resolve) => setTimeout(resolve, 500 * attempt))
+            // An aborted attempt surfaces as a generic AbortError; name the real reason so
+            // a slow endpoint is not mistaken for an outright transport failure.
+            lastError = controller.signal.aborted
+                ? new Error(`build stop request timed out after ${Math.min(STOP_BUILD_ATTEMPT_TIMEOUT_MS, budgetLeft)}ms`)
+                : error
+            BStackLogger.debug(`[STOP_BUILD] Attempt ${attempt}/${STOP_BUILD_MAX_ATTEMPTS} failed. Error: ${describeErrorWithCause(lastError)}`)
+            const backoff = STOP_BUILD_BACKOFF_BASE_MS * Math.pow(2, attempt - 1)
+            if (attempt >= STOP_BUILD_MAX_ATTEMPTS || Date.now() + backoff >= deadline) {
+                break
             }
+            await new Promise((resolve) => setTimeout(resolve, backoff))
+        } finally {
+            clearTimeout(timeoutId)
         }
     }
     stopBuildUsage.failed(lastError)
-    BStackLogger.debug(`[STOP_BUILD] Failed after ${maxAttempts} attempts. Error: ${lastError}`)
+    BStackLogger.debug(`[STOP_BUILD] Failed after ${attempts} attempt(s). Error: ${describeErrorWithCause(lastError)}`)
     return {
         status: 'error',
         message: (lastError as Error)?.message ?? 'stop build failed'
