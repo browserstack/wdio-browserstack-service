@@ -1751,10 +1751,13 @@ describe('uploadLogs', function () {
     it('should upload the logs', async function () {
         await uploadLogs('some_user', 'some_key', 'some_uuid')
         expect(fetch).toHaveBeenCalled()
+        // The suite runs with no resolvable wdio config, so config capture records the soft
+        // `config_not_found` warning. `success` staying true is the contract that matters:
+        // a missing config must never read as a failed log upload.
         expect(endSpy).toHaveBeenCalledWith(
             PERFORMANCE_SDK_EVENTS.EVENTS.SDK_UPLOAD_LOGS,
             true,
-            undefined
+            'config_capture: config_not_found'
         )
     })
 
