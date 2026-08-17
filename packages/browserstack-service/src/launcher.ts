@@ -44,6 +44,7 @@ import {
     mergeChromeOptions,
     normalizeTestReportingConfig,
     normalizeTestReportingEnvVariables,
+    normalizeLocalEnvVariables,
     isValidEnabledValue,
     isMultiRemoteCaps,
     validateSkipAppOverride
@@ -98,6 +99,9 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         normalizeTestReportingConfig(this._options)
 
         normalizeTestReportingEnvVariables()
+
+        //normalizing BrowserStack Local config from env variables
+        normalizeLocalEnvVariables(this._options)
         this.browserStackConfig = BrowserStackConfig.getInstance(_options, _config)
         if (Array.isArray(capabilities)) {
             capabilities
