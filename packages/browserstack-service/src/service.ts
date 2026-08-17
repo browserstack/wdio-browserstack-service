@@ -247,7 +247,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 try {
                     this._routeBidiExecutorToHttp(resolveBrowser())
                 } catch (err) {
-                    BStackLogger.warn(`Failed to patch execute for BiDi browserstack_executor routing${label ? ` on ${label}` : ''}; executor commands may not work in BiDi sessions: ${err}`)
+                    BStackLogger.warn(`Failed to patch execute/executeAsync for BiDi browserstack_executor routing${label ? ` on ${label}` : ''}; executor commands may not work in BiDi sessions: ${err}`)
                 }
             }
 
@@ -916,6 +916,13 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 return browser.executeScript(script, args)
             }
             return originalExecute(script, ...args)
+        })
+
+        browser.overwriteCommand('executeAsync', async (originalExecuteAsync, script, ...args) => {
+            if (isBrowserstackExecutorScript(script)) {
+                return browser.executeAsyncScript(script, args)
+            }
+            return originalExecuteAsync(script, ...args)
         })
     }
 

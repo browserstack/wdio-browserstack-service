@@ -113,6 +113,7 @@ beforeEach(() => {
     browser = {
         execute: vi.fn(),
         executeScript: vi.fn(),
+        executeAsyncScript: vi.fn(),
         overwriteCommand: vi.fn(),
         on: vi.fn(),
         sessionId: sessionId,
@@ -676,6 +677,26 @@ describe('before', () => {
         expect(browser.overwriteCommand).not.toHaveBeenCalled()
     })
 
+    it('should overwrite executeAsync command to route browserstack_executor via executeAsyncScript', async () => {
+        (browser as any).isBidi = true
+        const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+        service['_routeBidiExecutorToHttp'](browser)
+
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('executeAsync', expect.any(Function))
+
+        const overwrite = vi.mocked(browser.overwriteCommand).mock.calls
+            .find(([command]) => command === 'executeAsync')?.[1] as Function
+        const originalExecuteAsync = vi.fn()
+
+        await overwrite(originalExecuteAsync, 'browserstack_executor: {"action":"annotate"}')
+        expect(browser.executeAsyncScript).toHaveBeenCalledWith('browserstack_executor: {"action":"annotate"}', [])
+        expect(originalExecuteAsync).not.toHaveBeenCalled()
+
+        const extraArg = { key: 'value' }
+        await overwrite(originalExecuteAsync, 'arguments[0](1)', extraArg)
+        expect(originalExecuteAsync).toHaveBeenCalledWith('arguments[0](1)', extraArg)
+    })
+
     it('should not overwrite execute command for non-BrowserStack BiDi sessions', async () => {
         (browser as any).isBidi = true
         const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
@@ -688,8 +709,8 @@ describe('before', () => {
     })
 
     it('should overwrite execute on each instance for multiremote', async () => {
-        const browserA = { executeScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionA', isBidi: true }
-        const browserB = { executeScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
+        const browserA = { executeScript: vi.fn(), executeAsyncScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionA', isBidi: true }
+        const browserB = { executeScript: vi.fn(), executeAsyncScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
         const multiRemoteBrowser = {
             ...browser,
             isMultiremote: true,
@@ -716,8 +737,8 @@ describe('before', () => {
     })
 
     it('should keep patching remaining multiremote instances when one instance fails to resolve', async () => {
-        const browserA = { executeScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionA', isBidi: true }
-        const browserB = { executeScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
+        const browserA = { executeScript: vi.fn(), executeAsyncScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionA', isBidi: true }
+        const browserB = { executeScript: vi.fn(), executeAsyncScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
         const multiRemoteBrowser = {
             ...browser,
             isMultiremote: true,
