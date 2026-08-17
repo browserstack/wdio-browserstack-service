@@ -907,7 +907,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     _routeBidiExecutorToHttp (browser: WebdriverIO.Browser) {
-        if (!browser.isBidi) {
+        if (!browser.isBidi || !isBrowserstackSession(browser)) {
             return
         }
 

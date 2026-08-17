@@ -676,6 +676,17 @@ describe('before', () => {
         expect(browser.overwriteCommand).not.toHaveBeenCalled()
     })
 
+    it('should not overwrite execute command for non-BrowserStack BiDi sessions', async () => {
+        (browser as any).isBidi = true
+        const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+        // describe('_update') leaves a file-wide getCloudProvider spy returning 'browserstack',
+        // so stub the session check itself for this one call rather than restoring it.
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValueOnce(false)
+        service['_routeBidiExecutorToHttp'](browser)
+
+        expect(browser.overwriteCommand).not.toHaveBeenCalled()
+    })
+
     it('should overwrite execute on each instance for multiremote', async () => {
         const browserA = { executeScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionA', isBidi: true }
         const browserB = { executeScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
