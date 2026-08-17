@@ -9,7 +9,8 @@ import {
     patchConsoleLogs,
     isTrue,
     getUniqueIdentifier,
-    getHookType
+    getHookType,
+    isBrowserstackExecutorScript
 } from './util.js'
 import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from './types.js'
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
@@ -911,7 +912,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         browser.overwriteCommand('execute', async (originalExecute, script, ...args) => {
-            if (typeof script === 'string' && script.startsWith('browserstack_executor:')) {
+            if (isBrowserstackExecutorScript(script)) {
                 return browser.executeScript(script, args)
             }
             return originalExecute(script, ...args)

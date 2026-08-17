@@ -2150,6 +2150,15 @@ export function getMochaTestHierarchy(test: Frameworks.Test) {
     return value.reverse()
 }
 
+/**
+ * True only for the hub-interpreted `browserstack_executor: {…}` magic string.
+ * Anchored to the start (leading whitespace tolerated) and case-sensitive, matching
+ * how the hub reads the payload — a plain script merely mentioning the token must not
+ * be rerouted off its normal transport.
+ */
+export const isBrowserstackExecutorScript = (script: unknown): script is string =>
+    typeof script === 'string' && script.trimStart().startsWith('browserstack_executor:')
+
 export const performO11ySync = async (browser: WebdriverIO.Browser) => {
     if (isBrowserstackSession(browser)) {
         await browser.execute(`browserstack_executor: ${JSON.stringify({

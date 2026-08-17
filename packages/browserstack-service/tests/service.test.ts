@@ -650,6 +650,24 @@ describe('before', () => {
         expect(originalExecute).toHaveBeenCalledWith('return arguments[0]', extraArg)
     })
 
+    it('should route executor scripts with leading whitespace and leave look-alike scripts on BiDi', async () => {
+        (browser as any).isBidi = true
+        const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+        service['_routeBidiExecutorToHttp'](browser)
+
+        const overwrite = vi.mocked(browser.overwriteCommand).mock.calls[0][1] as Function
+        const originalExecute = vi.fn()
+
+        const padded = '\n  browserstack_executor: {"action":"annotate"}'
+        await overwrite(originalExecute, padded)
+        expect(browser.executeScript).toHaveBeenCalledWith(padded, [])
+        expect(originalExecute).not.toHaveBeenCalled()
+
+        const lookAlike = 'return document.title.includes("browserstack_executor:")'
+        await overwrite(originalExecute, lookAlike)
+        expect(originalExecute).toHaveBeenCalledWith(lookAlike)
+    })
+
     it('should not overwrite execute command for non-BiDi sessions', async () => {
         (browser as any).isBidi = false
         const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
