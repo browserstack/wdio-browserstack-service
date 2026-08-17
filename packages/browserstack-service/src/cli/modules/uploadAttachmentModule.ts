@@ -38,6 +38,8 @@ export default class UploadAttachmentModule extends BaseModule {
     name: string
     static MODULE_NAME = 'UploadAttachmentModule'
 
+    private pendingSends = new Set<Promise<void>>()
+
     constructor() {
         super()
         this.name = UploadAttachmentModule.MODULE_NAME
@@ -114,7 +116,7 @@ export default class UploadAttachmentModule extends BaseModule {
             return
         }
 
-        await this.sendAttachmentEvent(instance, resolvedPath, stats.size, target)
+        this.sendAttachmentEvent(instance, resolvedPath, stats.size, target)
     }
 
     /**
@@ -143,7 +145,18 @@ export default class UploadAttachmentModule extends BaseModule {
             : { level: 'TestLevel', uuid: testUuid, testFrameworkState }
     }
 
-    private async sendAttachmentEvent(
+    /**
+     * Dispatch and return — deliberately NOT awaited by the caller.
+     *
+     * uploadAttachment is called from the customer's test body, and the very next statement
+     * is usually a browser command that the accessibility module wraps with a pre-command
+     * scan. Awaiting a binary round-trip on that stack was observed to stall the following
+     * `executeAsync` scan under load (chrome sessions reaped at the framework timeout), so
+     * the event is written and its ack observed off the caller's stack. The ack carries no
+     * information the caller can act on: the binary streams the file from `filePath` while
+     * draining its own upload queue.
+     */
+    private sendAttachmentEvent(
         instance: TestFrameworkInstance,
         filePath: string,
         fileSize: number,
@@ -175,24 +188,25 @@ export default class UploadAttachmentModule extends BaseModule {
             }]
         })
 
-        // This runs inside the customer's test body, so only the ack is raced — the event
-        // is already written by the time the timer can fire. Mapping the rejection into the
-        // race keeps a late gRPC error from surfacing as an unhandled rejection.
         let timer: NodeJS.Timeout | undefined
-        const outcome = await Promise.race([
+        const observed = Promise.race([
             ack.then(() => 'ok', (error) => `failed: ${error}`),
             new Promise<string>((resolve) => {
                 timer = setTimeout(() => resolve('unacked'), UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS)
             })
-        ])
-        clearTimeout(timer)
+        ]).then((outcome) => {
+            clearTimeout(timer)
+            if (outcome === 'ok') {
+                this.logger.debug(`uploadAttachment: sent ${target.level} attachment ${filePath} (${fileSize} bytes) for uuid=${target.uuid}`)
+            } else if (outcome === 'unacked') {
+                this.logger.warn(`uploadAttachment: ${filePath} was sent but the binary did not ack within ${UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS}ms`)
+            } else {
+                this.logger.warn(`uploadAttachment: could not record ${filePath} — ${outcome}`)
+            }
+        })
 
-        if (outcome === 'ok') {
-            this.logger.debug(`uploadAttachment: sent ${target.level} attachment ${filePath} (${fileSize} bytes) for uuid=${target.uuid}`)
-        } else if (outcome === 'unacked') {
-            this.logger.warn(`uploadAttachment: ${filePath} was sent but the binary did not ack within ${UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS}ms; not waiting further`)
-        } else {
-            this.logger.warn(`uploadAttachment: could not record ${filePath} — ${outcome}`)
-        }
+        // Held only so the send is never an unobserved promise; pruned as they settle.
+        this.pendingSends.add(observed)
+        observed.finally(() => this.pendingSends.delete(observed))
     }
 }

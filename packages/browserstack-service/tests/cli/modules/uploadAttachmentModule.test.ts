@@ -167,15 +167,19 @@ describe('UploadAttachmentModule', () => {
         expect(logCreatedEvent).not.toHaveBeenCalled()
     })
 
-    it('returns to the caller when the binary never acks the event', async () => {
+    it('returns to the caller without waiting for the binary to ack', async () => {
         vi.useFakeTimers()
         logCreatedEvent.mockReturnValueOnce(new Promise(() => {}))
 
         await register()
-        const call = (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
-        await vi.advanceTimersByTimeAsync(UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS)
+        // No timer advance: the caller must not be blocked on the never-settling ack.
+        await expect(
+            (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+        ).resolves.toBeUndefined()
+        expect(logCreatedEvent).toHaveBeenCalledTimes(1)
 
-        await expect(call).resolves.toBeUndefined()
+        // Drain the ack budget so the pending timer does not leak into the next test.
+        await vi.advanceTimersByTimeAsync(UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS)
     })
 
     it('does not throw when the ack rejects', async () => {
