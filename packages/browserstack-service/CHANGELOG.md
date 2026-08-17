@@ -1,5 +1,23 @@
 # @wdio/browserstack-service
 
+## 9.34.0
+
+### Minor Changes
+
+- aa16aa1: - The debug logs the service uploads at the end of a run now include a copy of your `wdio.conf` file (and the local config files it imports) plus your `package.json`, with values under known credential keys removed on a best-effort basis, so BrowserStack support can investigate configuration issues without asking you to reproduce them.
+  - Set `disableAutoCaptureLogs: true` in the service options, or `BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS=true`, to turn this upload off entirely.
+
+### Patch Changes
+
+- 69ede2a: - Fixed inflated build durations on the Test Observability dashboard for WebdriverIO + Cucumber runs: hooks interrupted mid-run are now closed instead of staying "in progress" until the hook timeout.
+- f75b180: - Fixed WebdriverIO (Mocha) builds occasionally being reported as timed out even though the test run finished successfully.
+- 0986e13: - Fixed App Automate and Automate session names staying on the static `sessionName` capability instead of the test title, for suites that reload the session between tests or whose run ends before the WebdriverIO `after` hook.
+- 941b677: - Made the Test Reporting build-completion signal more resilient on restricted corporate networks, so builds are less likely to be left showing as "running" after a run ends.
+  - Each delivery attempt is now individually time-bounded, so a hung connection can no longer stall the end of a run.
+  - When the signal still cannot be delivered, the log now records the underlying network reason (for example a DNS or proxy failure) instead of a generic `fetch failed`.
+- 52f0cf4: - Fixed test results not appearing in Test Reporting for WebdriverIO + Mocha when the project is not a git repository.
+  - Fixed the BrowserStack binary not updating once a copy was already present, which could leave a machine on an old binary indefinitely.
+
 ## 9.33.2
 
 ### Patch Changes
