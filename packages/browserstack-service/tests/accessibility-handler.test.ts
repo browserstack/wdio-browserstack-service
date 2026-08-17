@@ -574,18 +574,48 @@ describe('beforeTest', () => {
     })
 
     describe('jasmine', () => {
-        let isBrowserstackSession: any
         beforeEach(() => {
             accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'jasmine', true, false, accessibilityOpts)
-            isBrowserstackSession = vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+            vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+            vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
+            vi.spyOn(utils, 'getUniqueIdentifier').mockReturnValue('suite title test')
         })
 
-        it('should execute test started in case of jasmine', async () => {
+        it('should start scan orchestration for jasmine like mocha (SDK-7190)', async () => {
+            const logInfoMock = vi.spyOn(log, 'info')
+            const shouldScanSpy = vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+
+            /* jasmine test objects have `description`/`fullName`, no `title`/`parent` */
+            await accessibilityHandler.beforeTest('suite title', { description: 'test', fullName: 'suite title test' } as any)
+
+            expect(shouldScanSpy).toBeCalledWith('suite title', 'test', accessibilityOpts)
+            expect(logInfoMock.mock.calls[0][0])
+                .toContain('Automate test case execution has started.')
+            expect(accessibilityHandler['_testMetadata']['suite title test']).toEqual({
+                scanTestForAccessibility: true,
+                accessibilityScanStarted: true
+            })
+        })
+
+        it('should arm the a11y scan session map so command scans fire (SDK-7190)', async () => {
             vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+            accessibilityHandler['_sessionId'] = 'session123'
+
+            await accessibilityHandler.beforeTest('suite title', { description: 'test', fullName: 'suite title test' } as any)
+
+            expect(AccessibilityHandler['_a11yScanSessionMap']['session123']).toBe(true)
+        })
+    })
+
+    describe('cucumber', () => {
+        it('should not run beforeTest orchestration for cucumber', async () => {
+            accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'cucumber', true, false, accessibilityOpts)
+            vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
+            const shouldScanSpy = vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
 
             await accessibilityHandler.beforeTest('suite title', { parent: 'parent', title: 'test' } as any)
 
-            expect(isBrowserstackSession).toBeCalledTimes(0)
+            expect(shouldScanSpy).toBeCalledTimes(0)
         })
     })
 })
@@ -640,6 +670,22 @@ describe('afterTest', () => {
 
         expect(logErrorMock.mock.calls[0][0])
             .toContain('Accessibility results could not be processed for the test case test. Error :')
+    })
+
+    it('should send test stop event for jasmine (SDK-7190)', async () => {
+        accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'jasmine', true, false, accessibilityOpts)
+        vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
+        vi.spyOn(utils, 'getUniqueIdentifier').mockReturnValue('test title')
+        accessibilityHandler['_testMetadata']['test title'] = {
+            accessibilityScanStarted: true,
+            scanTestForAccessibility: true
+        }
+        const sendStop = vi.fn()
+        accessibilityHandler['sendTestStopEvent'] = sendStop
+
+        await accessibilityHandler.afterTest('suite title', { description: 'test', fullName: 'suite title test' } as any)
+
+        expect(sendStop).toBeCalledTimes(1)
     })
 })
 
