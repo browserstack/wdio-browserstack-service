@@ -39,5 +39,6 @@ export const TestFrameworkConstants = {
     DEFAULT_HOOK_RESULT : 'pending',
     KIND_SCREENSHOT : 'TEST_SCREENSHOT',
     KIND_LOG : 'TEST_LOG',
+    KIND_ATTACHMENT : 'TEST_ATTACHMENT',
     HOOK_REGEX : '^(BEFORE_|AFTER_)',
 }

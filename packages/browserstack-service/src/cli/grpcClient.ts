@@ -496,6 +496,11 @@ export class GrpcClient {
                     message: log.message,
                     timestamp: log.timestamp,
                     level: log.level,
+                    // Attachment entries carry no message — the binary streams the file
+                    // from filePath when it drains its upload queue.
+                    fileName: log.fileName,
+                    fileSize: log.fileSize,
+                    filePath: log.filePath,
                 })
                 logEntries.push(logEntry)
             }

@@ -20,6 +20,7 @@ import WdioAutomationFramework from './frameworks/wdioAutomationFramework.js'
 import WebdriverIOModule from './modules/webdriverIOModule.js'
 import AccessibilityModule from './modules/accessibilityModule.js'
 import CustomTagsModule from './modules/customTagsModule.js'
+import UploadAttachmentModule from './modules/uploadAttachmentModule.js'
 import { isTurboScale, processAccessibilityResponse, shouldAddServiceVersion } from '../util.js'
 import ObservabilityModule from './modules/observabilityModule.js'
 import type { BrowserstackConfig, BrowserstackOptions, LaunchResponse } from '../types.js'
@@ -182,6 +183,10 @@ export class BrowserstackCLI {
             // Custom-tag (multi Test-Case-ID) tagging rides the per-test event_json
             // to TestHub, so it is gated on the testhub pipeline being active.
             this.modules[CustomTagsModule.MODULE_NAME] = new CustomTagsModule()
+
+            // Attachments ride a TEST_ATTACHMENT LogCreated event keyed on the test /
+            // hook uuid, so they are gated on the same pipeline.
+            this.modules[UploadAttachmentModule.MODULE_NAME] = new UploadAttachmentModule()
 
             if (startBinResponse.accessibility?.success){
                 process.env[BROWSERSTACK_ACCESSIBILITY] = 'true'
@@ -528,6 +533,14 @@ export class BrowserstackCLI {
     */
     setConfig(response: StartBinSessionResponse) {
         try {
+            // A degenerate bin-session response (auth failure, races on a parallel worker's
+            // ConnectBinSession) carries an empty config. JSON.parse would throw, leaving
+            // this.config on its previous value and the error indistinguishable from a
+            // malformed payload — keep the empty default and say so.
+            if (!response.config || !response.config.trim()) {
+                this.logger.warn('setConfig: bin session returned an empty config; continuing with defaults')
+                return
+            }
             this.config = JSON.parse(response.config)
             // Binary now nests apis under config.sessionData; prefer it, fall back to the flat config.apis (SDK-6821 Phase 3)
             const sessionData = this.config.sessionData as { apis?: unknown } | undefined
