@@ -32,6 +32,7 @@ import TestFramework from '../../../src/cli/frameworks/testFramework.js'
 import AutomationFramework from '../../../src/cli/frameworks/automationFramework.js'
 import WdioMochaTestFramework from '../../../src/cli/frameworks/wdioMochaTestFramework.js'
 import { TestFrameworkConstants } from '../../../src/cli/frameworks/constants/testFrameworkConstants.js'
+import { UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS } from '../../../src/constants.js'
 
 const TEST_UUID = 'test-uuid-1'
 const HOOK_UUID = 'hook-uuid-1'
@@ -60,6 +61,9 @@ describe('UploadAttachmentModule', () => {
 
     beforeEach(() => {
         vi.clearAllMocks()
+        // afterEach's restoreAllMocks drops the implementation too, so re-arm it here —
+        // otherwise every test after the first gets a non-promise back from the ack.
+        logCreatedEvent.mockResolvedValue({ success: true })
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bstack-attachment-test-'))
         attachmentPath = path.join(tmpDir, 'media.txt')
         fs.writeFileSync(attachmentPath, 'hello')
@@ -75,6 +79,7 @@ describe('UploadAttachmentModule', () => {
         // fs.statSync / lastActiveHook are spied per-test; without this they leak and the
         // next test passes for the wrong reason.
         vi.restoreAllMocks()
+        vi.useRealTimers()
         fs.rmSync(tmpDir, { recursive: true, force: true })
     })
 
@@ -160,6 +165,26 @@ describe('UploadAttachmentModule', () => {
         await register()
         await (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
         expect(logCreatedEvent).not.toHaveBeenCalled()
+    })
+
+    it('returns to the caller when the binary never acks the event', async () => {
+        vi.useFakeTimers()
+        logCreatedEvent.mockReturnValueOnce(new Promise(() => {}))
+
+        await register()
+        const call = (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+        await vi.advanceTimersByTimeAsync(UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS)
+
+        await expect(call).resolves.toBeUndefined()
+    })
+
+    it('does not throw when the ack rejects', async () => {
+        logCreatedEvent.mockRejectedValueOnce(new Error('gRPC channel closed'))
+
+        await register()
+        await expect(
+            (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+        ).resolves.toBeUndefined()
     })
 
     it('does not throw when there is no tracked test to attribute to', async () => {

@@ -13,6 +13,7 @@ import { TestFrameworkConstants } from '../frameworks/constants/testFrameworkCon
 import { CLIUtils } from '../cliUtils.js'
 import WdioMochaTestFramework from '../frameworks/wdioMochaTestFramework.js'
 import { GrpcClient } from '../grpcClient.js'
+import { UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS } from '../../constants.js'
 import type { AttachmentLevel, AttachmentOptions } from '../../types.js'
 
 /** Parity with the Java / Python / Node SDKs, which all reject above 100 MB. */
@@ -152,7 +153,7 @@ export default class UploadAttachmentModule extends BaseModule {
         const trackedContext = instance.getContext()
         const platformIndex = process.env.WDIO_WORKER_ID ? parseInt(process.env.WDIO_WORKER_ID.split('-')[0]) : 0
 
-        await GrpcClient.getInstance().logCreatedEvent({
+        const ack = GrpcClient.getInstance().logCreatedEvent({
             platformIndex,
             executionContext: {
                 hash: trackedContext.getId(),
@@ -174,6 +175,24 @@ export default class UploadAttachmentModule extends BaseModule {
             }]
         })
 
-        this.logger.debug(`uploadAttachment: sent ${target.level} attachment ${filePath} (${fileSize} bytes) for uuid=${target.uuid}`)
+        // This runs inside the customer's test body, so only the ack is raced — the event
+        // is already written by the time the timer can fire. Mapping the rejection into the
+        // race keeps a late gRPC error from surfacing as an unhandled rejection.
+        let timer: NodeJS.Timeout | undefined
+        const outcome = await Promise.race([
+            ack.then(() => 'ok', (error) => `failed: ${error}`),
+            new Promise<string>((resolve) => {
+                timer = setTimeout(() => resolve('unacked'), UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS)
+            })
+        ])
+        clearTimeout(timer)
+
+        if (outcome === 'ok') {
+            this.logger.debug(`uploadAttachment: sent ${target.level} attachment ${filePath} (${fileSize} bytes) for uuid=${target.uuid}`)
+        } else if (outcome === 'unacked') {
+            this.logger.warn(`uploadAttachment: ${filePath} was sent but the binary did not ack within ${UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS}ms; not waiting further`)
+        } else {
+            this.logger.warn(`uploadAttachment: could not record ${filePath} — ${outcome}`)
+        }
     }
 }

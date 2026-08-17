@@ -256,6 +256,11 @@ export const STOP_BUILD_ATTEMPT_TIMEOUT_MS = 10000
 export const STOP_BUILD_TOTAL_BUDGET_MS = 30000
 export const STOP_BUILD_BACKOFF_BASE_MS = 1000
 
+// uploadAttachment is called from inside the customer's test body, so the wait for the
+// binary's ack is bounded: the event is already on the wire when the timer fires, and a
+// wedged binary must not stall the test that called us.
+export const UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS = 10000
+
 // API Endpoint constants
 export const UPDATED_CLI_ENDPOINT = 'sdk/v1/update_cli'
 
