@@ -9,7 +9,8 @@ import {
     patchConsoleLogs,
     isTrue,
     getUniqueIdentifier,
-    getHookType
+    getHookType,
+    isBrowserstackExecutorScript
 } from './util.js'
 import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from './types.js'
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
@@ -242,6 +243,23 @@ export default class BrowserstackService implements Services.ServiceInstance {
         PerformanceTester.scenarioThatRan = this._scenariosThatRan
 
         if (this._browser) {
+            const patchBidiExecutorRouting = (resolveBrowser: () => WebdriverIO.Browser, label?: string) => {
+                try {
+                    this._routeBidiExecutorToHttp(resolveBrowser())
+                } catch (err) {
+                    BStackLogger.warn(`Failed to patch execute/executeAsync for BiDi browserstack_executor routing${label ? ` on ${label}` : ''}; executor commands may not work in BiDi sessions: ${err}`)
+                }
+            }
+
+            if (this._browser.isMultiremote) {
+                const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
+                Object.keys(this._caps).forEach((browserName) => {
+                    patchBidiExecutorRouting(() => multiRemoteBrowser.getInstance(browserName), browserName)
+                })
+            } else {
+                patchBidiExecutorRouting(() => this._browser as WebdriverIO.Browser)
+            }
+
             try {
                 const sessionId = this._browser.sessionId
 
@@ -885,6 +903,26 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 : `Update job with sessionId ${sessionId}`
             )
             return this._update(sessionId, requestBody)
+        })
+    }
+
+    _routeBidiExecutorToHttp (browser: WebdriverIO.Browser) {
+        if (!browser.isBidi || !isBrowserstackSession(browser)) {
+            return
+        }
+
+        browser.overwriteCommand('execute', async (originalExecute, script, ...args) => {
+            if (isBrowserstackExecutorScript(script)) {
+                return browser.executeScript(script, args)
+            }
+            return originalExecute(script, ...args)
+        })
+
+        browser.overwriteCommand('executeAsync', async (originalExecuteAsync, script, ...args) => {
+            if (isBrowserstackExecutorScript(script)) {
+                return browser.executeAsyncScript(script, args)
+            }
+            return originalExecuteAsync(script, ...args)
         })
     }
 
