@@ -78,6 +78,12 @@ import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants
 import { BStackLogger } from './bstackLogger.js'
 
 class _AccessibilityHandler {
+    /**
+     * Frameworks whose per-test lifecycle flows through beforeTest/afterTest.
+     * WDIO's jasmine adapter emits the same service hooks as mocha (SDK-7190);
+     * cucumber goes through beforeScenario/afterScenario instead.
+     */
+    private static readonly TEST_HOOK_FRAMEWORKS = ['mocha', 'jasmine']
     private _platformA11yMeta: PlatformA11yMeta
     private _caps: Capabilities.ResolvedTestrunnerCapabilities
     private _suiteFile?: string
@@ -276,7 +282,7 @@ class _AccessibilityHandler {
     async beforeTest (suiteTitle: string | undefined, test: Frameworks.Test) {
         try {
             if (
-                this._framework !== 'mocha' ||
+                !AccessibilityHandler.TEST_HOOK_FRAMEWORKS.includes(this._framework as string) ||
                 !this.shouldRunTestHooks(this._browser, this._accessibility)
             ) {
                 /* This is to be used when test events are sent */
@@ -284,8 +290,10 @@ class _AccessibilityHandler {
                 return
             }
 
+            /* jasmine test objects carry the spec name in `description` (`title` is unset) */
+            const testTitle = test.title ?? test.description
             // @ts-expect-error fix type
-            const shouldScanTest = this._autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title, this._accessibilityOptions)
+            const shouldScanTest = this._autoScanning && shouldScanTestForAccessibility(suiteTitle, testTitle, this._accessibilityOptions)
             const testIdentifier = this.getIdentifier(test)
             this._testIdentifier = testIdentifier
 
@@ -315,7 +323,7 @@ class _AccessibilityHandler {
     async afterTest (suiteTitle: string | undefined, test: Frameworks.Test) {
         BStackLogger.debug('Accessibility after test hook. Before sending test stop event')
         if (
-            this._framework !== 'mocha' ||
+            !AccessibilityHandler.TEST_HOOK_FRAMEWORKS.includes(this._framework as string) ||
             !this.shouldRunTestHooks(this._browser, this._accessibility)
         ) {
             return

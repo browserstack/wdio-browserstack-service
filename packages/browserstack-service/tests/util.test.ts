@@ -54,11 +54,12 @@ import {
     getAppA11yResults,
     isMultiRemoteCaps,
     getTestPlanId,
+    describeErrorWithCause,
 } from '../src/util.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import PerformanceTester from '../src/instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from '../src/instrumentation/performance/constants.js'
-import { BROWSERSTACK_OBSERVABILITY, TESTOPS_BUILD_COMPLETED_ENV, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_ACCESSIBILITY, BROWSERSTACK_TEST_PLAN_ID } from '../src/constants.js'
+import { BROWSERSTACK_OBSERVABILITY, TESTOPS_BUILD_COMPLETED_ENV, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_ACCESSIBILITY, BROWSERSTACK_TEST_PLAN_ID, STOP_BUILD_MAX_ATTEMPTS } from '../src/constants.js'
 import * as testHubUtils from '../src/testHub/utils.js'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -823,6 +824,36 @@ describe('getScenarioExamples', () => {
     })
 })
 
+describe('describeErrorWithCause', () => {
+    it('unwraps the cause chain that native fetch hides behind "fetch failed"', () => {
+        // SDK-7229: this exact shape — an opaque TypeError wrapping the real DNS failure —
+        // is what a corporate-network build stop produces. Interpolating the error alone
+        // yields only "TypeError: fetch failed", which is not actionable.
+        const cause = Object.assign(new Error('getaddrinfo ENOTFOUND collector-observability.browserstack.com'), {
+            code: 'ENOTFOUND', syscall: 'getaddrinfo'
+        })
+        const error = Object.assign(new TypeError('fetch failed'), { cause })
+
+        expect(describeErrorWithCause(error)).toEqual(
+            'TypeError: fetch failed <- caused by Error: getaddrinfo ENOTFOUND collector-observability.browserstack.com'
+        )
+    })
+
+    it('returns a plain error unchanged when there is no cause', () => {
+        expect(describeErrorWithCause(new Error('HTTP 502 Bad Gateway'))).toEqual('Error: HTTP 502 Bad Gateway')
+    })
+
+    it('handles non-error values and stops at the depth limit', () => {
+        expect(describeErrorWithCause('boom')).toEqual('boom')
+        expect(describeErrorWithCause(undefined)).toEqual('undefined')
+
+        const deep = Object.assign(new Error('a'), {
+            cause: Object.assign(new Error('b'), { cause: new Error('c') })
+        })
+        expect(describeErrorWithCause(deep, 2)).toEqual('Error: a <- caused by Error: b')
+    })
+})
+
 describe('stopBuildUpstream', () => {
     // Fake setTimeout (in addition to the module-level Date) so the SDK-7061 retry
     // backoff can be advanced deterministically without real wall-clock delay.
@@ -864,22 +895,65 @@ describe('stopBuildUpstream', () => {
         process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
         process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
 
-        // SDK-7061: the stop PUT is now retried up to 3x with a 500ms*attempt backoff.
-        // Reject every attempt so the loop exhausts and returns an error. Fake timers keep
-        // the ~1.5s of cumulative backoff out of wall-clock and make the run deterministic.
+        // SDK-7061 / SDK-7229: the stop PUT is retried up to STOP_BUILD_MAX_ATTEMPTS times
+        // with an exponential backoff. Reject every attempt so the loop exhausts and returns
+        // an error. Fake timers keep the cumulative backoff out of wall-clock time.
         useBackoffTimers()
         vi.mocked(fetch)
             .mockImplementationOnce(() => Promise.reject(new Error('network')))
             .mockImplementationOnce(() => Promise.reject(new Error('network')))
             .mockImplementationOnce(() => Promise.reject(new Error('network')))
+            .mockImplementationOnce(() => Promise.reject(new Error('network')))
 
         const promise = stopBuildUpstream()
-        await vi.advanceTimersByTimeAsync(2000)
+        await vi.advanceTimersByTimeAsync(60000)
         const result: any = await promise
 
         expect(vi.mocked(fetch).mock.calls[0][1]?.method).toEqual('PUT')
-        expect(vi.mocked(fetch).mock.calls.length).toEqual(3)
+        expect(vi.mocked(fetch).mock.calls.length).toEqual(STOP_BUILD_MAX_ATTEMPTS)
         expect(result.status).toEqual('error')
+    })
+
+    it('passes an abort signal so a hung stop request cannot stall shutdown', async () => {
+        process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
+        process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
+
+        vi.mocked(fetch).mockReturnValueOnce(Promise.resolve(Response.json({})))
+
+        await stopBuildUpstream()
+
+        // SDK-7229: previously the stop PUT carried no signal at all, so a connection that
+        // never settled blocked onComplete indefinitely.
+        expect((vi.mocked(fetch).mock.calls[0][1] as RequestInit)?.signal).toBeInstanceOf(AbortSignal)
+    })
+
+    it('times out a hung attempt and gives up within the total budget', async () => {
+        process.env[TESTOPS_BUILD_COMPLETED_ENV] = 'true'
+        process.env[BROWSERSTACK_TESTHUB_JWT] = 'jwt'
+
+        // SDK-7229: a request that never settles must be aborted per attempt, and the loop
+        // as a whole must stop at STOP_BUILD_TOTAL_BUDGET_MS rather than run the full
+        // attempt count. Capture/restore the shared default implementation so the persistent
+        // mockImplementation below cannot leak into later suites (afterEach only clears).
+        useBackoffTimers()
+        const defaultImpl = vi.mocked(fetch).getMockImplementation()
+        vi.mocked(fetch).mockImplementation(((_url: unknown, init: RequestInit) => new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(new Error('The operation was aborted')))
+        })) as unknown as typeof fetch)
+
+        try {
+            const promise = stopBuildUpstream()
+            await vi.advanceTimersByTimeAsync(120000)
+            const result: any = await promise
+
+            expect(result.status).toEqual('error')
+            expect(result.message).toContain('timed out')
+            // Budget-bound, so strictly fewer than the full attempt allowance.
+            expect(vi.mocked(fetch).mock.calls.length).toBeLessThan(STOP_BUILD_MAX_ATTEMPTS)
+            expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(1)
+        } finally {
+            vi.mocked(fetch).mockImplementation(defaultImpl as typeof fetch)
+        }
     })
 
     it('retries on a non-2xx response and returns error when all attempts fail', async () => {
@@ -893,12 +967,13 @@ describe('stopBuildUpstream', () => {
             .mockReturnValueOnce(Promise.resolve(Response.json({}, { status: 500, statusText: 'Server Error' })))
             .mockReturnValueOnce(Promise.resolve(Response.json({}, { status: 502, statusText: 'Bad Gateway' })))
             .mockReturnValueOnce(Promise.resolve(Response.json({}, { status: 503, statusText: 'Service Unavailable' })))
+            .mockReturnValueOnce(Promise.resolve(Response.json({}, { status: 503, statusText: 'Service Unavailable' })))
 
         const promise = stopBuildUpstream()
-        await vi.advanceTimersByTimeAsync(2000)
+        await vi.advanceTimersByTimeAsync(60000)
         const result: any = await promise
 
-        expect(vi.mocked(fetch).mock.calls.length).toEqual(3)
+        expect(vi.mocked(fetch).mock.calls.length).toEqual(STOP_BUILD_MAX_ATTEMPTS)
         expect(result.status).toEqual('error')
     })
 
@@ -914,7 +989,7 @@ describe('stopBuildUpstream', () => {
             .mockReturnValueOnce(Promise.resolve(Response.json({})))
 
         const promise = stopBuildUpstream()
-        await vi.advanceTimersByTimeAsync(2000)
+        await vi.advanceTimersByTimeAsync(60000)
         const result: any = await promise
 
         expect(vi.mocked(fetch).mock.calls.length).toEqual(2)
@@ -1676,10 +1751,13 @@ describe('uploadLogs', function () {
     it('should upload the logs', async function () {
         await uploadLogs('some_user', 'some_key', 'some_uuid')
         expect(fetch).toHaveBeenCalled()
+        // The suite runs with no resolvable wdio config, so config capture records the soft
+        // `config_not_found` warning. `success` staying true is the contract that matters:
+        // a missing config must never read as a failed log upload.
         expect(endSpy).toHaveBeenCalledWith(
             PERFORMANCE_SDK_EVENTS.EVENTS.SDK_UPLOAD_LOGS,
             true,
-            undefined
+            'config_capture: config_not_found'
         )
     })
 

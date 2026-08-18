@@ -146,10 +146,28 @@ export default class TestHubModule extends BaseModule {
         const { args } = this.pendingTestFinish
         this.pendingTestFinish = null
         this.logger.debug('flushPendingTestFinishEvent: sending deferred TEST/POST event')
-        return this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST' })
+        // SDK-7265: this is the only send of a mocha test's TestRunFinished, and the worker's last
+        // test relies on this single flush from service.after(). A dropped send orphans the test →
+        // Test Hub reaps it at its ~60-min idle timeout → the passing build is stamped `timeout`.
+        // Retry with backoff. `args` is captured locally and the shared slot is only cleared (never
+        // written back), so concurrent flushes can't clobber one another.
+        const maxAttempts = 3
+        const attempt = (n: number): Promise<void> =>
+            this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST' }).then((sent) => {
+                if (sent) {
+                    return
+                }
+                this.logger.debug(`flushPendingTestFinishEvent: attempt ${n}/${maxAttempts} failed`)
+                if (n >= maxAttempts) {
+                    this.logger.error('flushPendingTestFinishEvent: deferred TEST/POST send failed after all retries')
+                    return
+                }
+                return new Promise<void>((resolve) => setTimeout(resolve, 200 * n)).then(() => attempt(n + 1))
+            })
+        return attempt(1)
     }
 
-    async sendTestFrameworkEvent(args: Record<string, unknown>, stateOverride?: { testFrameworkState: string, testHookState: string }) {
+    async sendTestFrameworkEvent(args: Record<string, unknown>, stateOverride?: { testFrameworkState: string, testHookState: string }): Promise<boolean> {
         try {
             const testArgs = args as { test: Frameworks.Test, instance: TestFrameworkInstance }
             const instance = testArgs.instance as TestFrameworkInstance
@@ -185,8 +203,10 @@ export default class TestHubModule extends BaseModule {
             this.logger.debug(`sendTestFrameworkEvent payload: ${JSON.stringify(payload)}`)
             await GrpcClient.getInstance().testFrameworkEvent(payload)
             this.logger.debug(`sendTestFrameworkEvent complete for testState: ${testFrameworkState} hookState: ${testHookState}`)
+            return true
         } catch (error) {
             this.logger.error(`Error in sendTestFrameworkEvent: ${util.format(error)}`)
+            return false
         }
     }
 

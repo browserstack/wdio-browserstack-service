@@ -7,11 +7,14 @@ import { DATA_BATCH_ENDPOINT } from '../constants.js'
 import { BStackLogger } from '../bstackLogger.js'
 
 /**
- * Crash-resilient journal of test runs that have sent TestRunStarted but not yet
- * TestRunFinished. Each open run is persisted as a small file so that if the worker
- * (or the whole wdio process tree) is killed mid-test, the launcher's shutdown path
- * or the detached exit cleanup can still send a synthetic TestRunFinished — otherwise
- * the test case stays "in progress" on the Test Reporting & Analytics dashboard forever.
+ * Crash-resilient journal of test and hook runs that have sent TestRunStarted /
+ * HookRunStarted but not yet the matching finish. Each open run is persisted as a small
+ * file so that if the worker (or the whole wdio process tree) is killed mid-test or
+ * mid-hook, the launcher's shutdown path or the detached exit cleanup can still send a
+ * synthetic TestRunFinished / HookRunFinished — otherwise the entity stays "in progress"
+ * on the Test Reporting & Analytics dashboard until the backend watchdog times it out,
+ * inflating the reported build duration (SDK-7167: an orphaned AFTER_EACH cucumber hook
+ * added its 2h hook timeout to the build's duration on the new dashboard).
  */
 
 const OPEN_RUNS_DIR = path.join(process.cwd(), 'logs', 'bstack_open_runs')
@@ -72,23 +75,27 @@ export async function finalizeOrphanedRuns(): Promise<number> {
             return 0
         }
         const finishedAt = new Date().toISOString()
-        const events: UploadType[] = orphans.map((testData) => {
-            const startedAtMs = testData.started_at ? new Date(testData.started_at).getTime() : NaN
-            return {
-                event_type: 'TestRunFinished',
-                test_run: {
-                    ...testData,
-                    finished_at: finishedAt,
-                    result: 'failed',
-                    duration_in_ms: Number.isNaN(startedAtMs) ? undefined : Math.max(0, Date.now() - startedAtMs),
-                    failure: [{ backtrace: [ORPHAN_FAILURE_REASON] }],
-                    failure_reason: ORPHAN_FAILURE_REASON,
-                    failure_type: 'UnhandledError'
-                }
+        const events: UploadType[] = orphans.map((runData) => {
+            const startedAtMs = runData.started_at ? new Date(runData.started_at).getTime() : NaN
+            const finishedRun = {
+                ...runData,
+                finished_at: finishedAt,
+                result: 'failed',
+                duration_in_ms: Number.isNaN(startedAtMs) ? undefined : Math.max(0, Date.now() - startedAtMs),
+                failure: [{ backtrace: [ORPHAN_FAILURE_REASON] }],
+                failure_reason: ORPHAN_FAILURE_REASON,
+                failure_type: 'UnhandledError'
             }
+            // Hook payloads carry type 'hook' (same discriminator the listener uses to pick
+            // the hook_run/test_run envelope key) — finalize them as HookRunFinished so the
+            // backend closes the hook instead of dropping an unknown test_run uuid.
+            if (runData.type === 'hook') {
+                return { event_type: 'HookRunFinished', hook_run: finishedRun }
+            }
+            return { event_type: 'TestRunFinished', test_run: finishedRun }
         })
         await batchAndPostEvents(DATA_BATCH_ENDPOINT, 'ORPHANED_TEST_RUN_FINALIZATION', events)
-        BStackLogger.info(`Finalized ${events.length} orphaned test run(s) left behind by an interrupted run`)
+        BStackLogger.info(`Finalized ${events.length} orphaned test/hook run(s) left behind by an interrupted run`)
         return events.length
     } catch (e) {
         BStackLogger.debug('openRunsJournal: failed to finalize orphaned runs: ' + e)

@@ -79,6 +79,10 @@ class Listener {
             if (!shouldProcessEventForTesthub('HookRunStarted')) {
                 return
             }
+            // Journal the open hook (same as testStarted) so an interrupted run's exit
+            // cleanup can finalize it — an orphaned HookRunStarted otherwise stays open
+            // until the backend hook timeout and inflates the build duration (SDK-7167).
+            recordOpenRun(hookData)
             this.hookStartedStats.triggered()
             this.sendBatchEvents(this.getEventForHook('HookRunStarted', hookData))
         } catch (e) {
@@ -92,6 +96,7 @@ class Listener {
             if (!shouldProcessEventForTesthub('HookRunFinished')) {
                 return
             }
+            clearOpenRun(hookData.uuid)
             this.hookFinishedStats.triggered(hookData.result)
             this.sendBatchEvents(this.getEventForHook('HookRunFinished', hookData))
         } catch (e) {
