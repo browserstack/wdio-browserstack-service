@@ -55,7 +55,7 @@
   "dependencies": {
     "@browserstack/ai-sdk-node": "1.5.17",
     "@bufbuild/protobuf": "^2.5.2",
-    "@grpc/grpc-js": "^1.13.5",
+    "@grpc/grpc-js": "~1.13.5",
     "@percy/appium-app": "^2.0.9",
     "@percy/selenium-webdriver": "^2.2.2",
     "@types/gitconfiglocal": "^2.0.1",
