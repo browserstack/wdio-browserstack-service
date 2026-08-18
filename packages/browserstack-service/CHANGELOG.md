@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.34.1
+
+### Patch Changes
+
+- b9bb4eb: - Fixed `browserstack_executor` commands issued through `browser.execute()` or `browser.executeAsync()` being ignored in WebDriver BiDi sessions.
+
 ## 9.34.0
 
 ### Minor Changes
