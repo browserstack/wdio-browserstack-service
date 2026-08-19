@@ -1,5 +1,15 @@
 # @wdio/browserstack-service
 
+## 9.35.0
+
+### Minor Changes
+
+- 67c3d11: - Tests that never run because Mocha's `bail` halted a spec are now reported as `skipped`, instead of being left out of the report entirely — so a Test Run accounts for every test in that spec.
+
+### Patch Changes
+
+- f3a3a0a: - Updated `@grpc/grpc-js` to `^1.13.5`, resolving two high-severity advisories (CVE-2026-48068, CVE-2026-48069) reported by dependency scanners against earlier releases.
+
 ## 9.34.1
 
 ### Patch Changes
