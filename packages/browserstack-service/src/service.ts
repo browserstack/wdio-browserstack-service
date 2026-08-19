@@ -8,6 +8,7 @@ import {
     isBrowserstackSession,
     patchConsoleLogs,
     isTrue,
+    isFalse,
     getUniqueIdentifier,
     getHookType,
     isBrowserstackExecutorScript
@@ -88,6 +89,13 @@ export default class BrowserstackService implements Services.ServiceInstance {
     private _percyCaptureMode: string | undefined = undefined
     private _percyHandler?: PercyHandler
     private _turboScale
+    /**
+     * Only mocha's own bail drops the rest of a spec. wdio's top-level `bail` is a launcher
+     * spec-scheduling filter (it stops queueing further specs once N runners have failed) and
+     * never reaches mocha, so under it every test in the current spec still runs — enumerating
+     * on it would report tests as skipped that are about to execute.
+     */
+    private _mochaBail: boolean = false
 
     constructor (
         options: BrowserstackConfig & Options.Testrunner,
@@ -105,6 +113,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
         this._percy = isTrue(process.env.BROWSERSTACK_PERCY)
         this._percyCaptureMode = process.env.BROWSERSTACK_PERCY_CAPTURE_MODE
         this._turboScale = this._options.turboScale
+        // mirror mocha's own truthiness check on the option rather than isTrue(), which is a
+        // strict 'true' string compare and would miss a numeric `bail: 1`
+        const bailOpt: unknown = this._config?.mochaOpts?.bail
+        this._mochaBail = this._config?.framework === 'mocha' && Boolean(bailOpt) && !isFalse(bailOpt)
 
         PerformanceTester.startMonitoring('performance-report-service.csv')
         if (shouldProcessEventForTesthub('')) {
@@ -560,12 +572,67 @@ export default class BrowserstackService implements Services.ServiceInstance {
             }
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result: results })
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result: results, suiteTitle: this._suiteTitle })
+            await this.reportBailSkippedTests(test, results)
             return
         }
 
         await this._accessibilityHandler?.afterTest(this._suiteTitle, test)
         await this._insightsHandler?.afterTest(test, results)
         await this._percyHandler?.afterTest()
+    }
+
+    /**
+     * Whether this failure will be retried, in which case mocha has not dropped anything yet and
+     * the tests after it are still going to run.
+     *
+     * `results.retries` only tracks wdio's spec-file retries — `@wdio/utils` builds it as
+     * `{ attempts: 0, limit: repeatTest }` and `@wdio/mocha-framework` never feeds `mochaOpts.retries`
+     * into it, so under mocha-level retries it stays `{0, 0}` and tells us nothing. Read mocha's own
+     * runnable state for that case, otherwise the cascade fires on the first attempt and reports
+     * tests as skipped that the retry then actually runs.
+     */
+    private hasRetryPending(test: Frameworks.Test, results: Frameworks.TestResult): boolean {
+        const mochaTest = test.ctx?.test as { currentRetry?: () => number, retries?: () => number } | undefined
+        if (typeof mochaTest?.currentRetry === 'function' && typeof mochaTest.retries === 'function') {
+            if (mochaTest.currentRetry() < mochaTest.retries()) {
+                return true
+            }
+        }
+        return Boolean(results.retries && results.retries.attempts < results.retries.limit)
+    }
+
+    /**
+     * mocha's `bail` aborts the run on the first failure, so every test the spec had not reached
+     * yet is dropped without emitting any event and never appears on the dashboard. Report them
+     * as skipped — same cascade the failed-hook path uses, from the spec's root suite so sibling
+     * describes are covered too (bail kills the whole spec, not just the failing describe).
+     *
+     * The root can span more than one file when specs are grouped — `MochaAdapter` adds every spec
+     * it is handed to one mocha instance. Cascading across them is still correct: bail aborts that
+     * whole runner, so those tests do not run either.
+     */
+    private async reportBailSkippedTests(test: Frameworks.Test, results: Frameworks.TestResult) {
+        if (!this._mochaBail || results.passed || results.skipped) {
+            return
+        }
+        try {
+            // inside the boundary: hasRetryPending reaches into mocha's own runnable, which this
+            // SDK does not own
+            if (this.hasRetryPending(test, results)) {
+                return
+            }
+            const framework = BrowserstackCLI.getInstance().getTestFramework()
+            let suite = test.ctx?.test?.parent
+            if (!framework || !suite) {
+                return
+            }
+            while (suite.parent) {
+                suite = suite.parent
+            }
+            await reportSuiteSkipped(framework, suite)
+        } catch (err) {
+            BStackLogger.debug(`Failed reporting bail-skipped tests: ${err}`)
+        }
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'after' })
