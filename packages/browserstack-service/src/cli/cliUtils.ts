@@ -1,40 +1,40 @@
+import got from 'got'
+import { exec } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
-import { platform, arch, homedir } from 'node:os'
+import { arch, homedir, platform } from 'node:os'
 import path from 'node:path'
 import util, { promisify } from 'node:util'
-import { exec } from 'node:child_process'
+import { threadId } from 'node:worker_threads'
 import type { ZipFile, Options as yauzlOptions } from 'yauzl'
 import yauzl from 'yauzl'
-import got from 'got'
-import { threadId } from 'node:worker_threads'
 
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const { version: bstackServiceVersion } = require('../../package.json')
 
+import type { Capabilities, Options } from '@wdio/types'
+import { UPDATED_CLI_ENDPOINT } from '../constants.js'
+import { EVENTS as PerformanceEvents } from '../instrumentation/performance/constants.js'
+import PerformanceTester from '../instrumentation/performance/performance-tester.js'
+import type { BrowserstackConfig, BrowserstackOptions, TestManagementOptions, TestObservabilityOptions } from '../types.js'
 import {
-    isNullOrEmpty,
-    nestedKeyValue,
     createDir,
-    isWritable,
-    setReadWriteAccess,
-    isTrue,
-    nodeRequest,
-    getBrowserStackUser,
     getBrowserStackKey,
+    getBrowserStackUser,
     isFalse,
+    isNullOrEmpty,
+    isTrue,
     isTurboScale,
+    isWritable,
+    nestedKeyValue,
+    nodeRequest,
+    setReadWriteAccess,
     shouldAddServiceVersion,
 } from '../util.js'
-import PerformanceTester from '../instrumentation/performance/performance-tester.js'
-import { EVENTS as PerformanceEvents } from '../instrumentation/performance/constants.js'
-import { BStackLogger as logger } from './cliLogger.js'
-import { UPDATED_CLI_ENDPOINT } from '../constants.js'
-import type { Options, Capabilities } from '@wdio/types'
-import type { BrowserstackConfig, BrowserstackOptions, TestManagementOptions, TestObservabilityOptions } from '../types.js'
-import { TestFrameworkConstants } from './frameworks/constants/testFrameworkConstants.js'
 import APIUtils from './apiUtils.js'
+import { BStackLogger as logger } from './cliLogger.js'
+import { TestFrameworkConstants } from './frameworks/constants/testFrameworkConstants.js'
 
 export class CLIUtils {
     static automationFrameworkDetail = {}
