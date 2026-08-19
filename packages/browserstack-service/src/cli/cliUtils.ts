@@ -187,6 +187,7 @@ export class CLIUtils {
             const nullDevice = platform() === 'win32' ? 'NUL' : '/dev/null'
             queryParams.cli_version = await this.runShellCommand(`${existingCliPath} version 2>${nullDevice}`)
         }
+        logger.debug("throwing error");
         throw new Error('401 Unauthorized')
         const response = await this.requestToUpdateCLI(queryParams, config)
         if (nestedKeyValue(response, ['updated_cli_version'])) {
