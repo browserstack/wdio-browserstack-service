@@ -1,5 +1,62 @@
 # @wdio/browserstack-service
 
+## 9.35.0
+
+### Minor Changes
+
+- 67c3d11: - Tests that never run because Mocha's `bail` halted a spec are now reported as `skipped`, instead of being left out of the report entirely — so a Test Run accounts for every test in that spec.
+
+### Patch Changes
+
+- f3a3a0a: - Updated `@grpc/grpc-js` to `^1.13.5`, resolving two high-severity advisories (CVE-2026-48068, CVE-2026-48069) reported by dependency scanners against earlier releases.
+
+## 9.34.1
+
+### Patch Changes
+
+- b9bb4eb: - Fixed `browserstack_executor` commands issued through `browser.execute()` or `browser.executeAsync()` being ignored in WebDriver BiDi sessions.
+
+## 9.34.0
+
+### Minor Changes
+
+- aa16aa1: - The debug logs the service uploads at the end of a run now include a copy of your `wdio.conf` file (and the local config files it imports) plus your `package.json`, with values under known credential keys removed on a best-effort basis, so BrowserStack support can investigate configuration issues without asking you to reproduce them.
+  - Set `disableAutoCaptureLogs: true` in the service options, or `BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS=true`, to turn this upload off entirely.
+
+### Patch Changes
+
+- 69ede2a: - Fixed inflated build durations on the Test Observability dashboard for WebdriverIO + Cucumber runs: hooks interrupted mid-run are now closed instead of staying "in progress" until the hook timeout.
+- f75b180: - Fixed WebdriverIO (Mocha) builds occasionally being reported as timed out even though the test run finished successfully.
+- 0986e13: - Fixed App Automate and Automate session names staying on the static `sessionName` capability instead of the test title, for suites that reload the session between tests or whose run ends before the WebdriverIO `after` hook.
+- 941b677: - Made the Test Reporting build-completion signal more resilient on restricted corporate networks, so builds are less likely to be left showing as "running" after a run ends.
+  - Each delivery attempt is now individually time-bounded, so a hung connection can no longer stall the end of a run.
+  - When the signal still cannot be delivered, the log now records the underlying network reason (for example a DNS or proxy failure) instead of a generic `fetch failed`.
+- 52f0cf4: - Fixed test results not appearing in Test Reporting for WebdriverIO + Mocha when the project is not a git repository.
+  - Fixed the BrowserStack binary not updating once a copy was already present, which could leave a machine on an old binary indefinitely.
+
+## 9.33.2
+
+### Patch Changes
+
+- b688f05: - Fixed Accessibility Automation producing no report for WebdriverIO suites running on the jasmine framework. Accessibility scans now run for jasmine specs, as they already did for mocha.
+
+## 9.33.1
+
+### Patch Changes
+
+- 4b19d7a: - Fixed App Automate session names not updating to the test title when the app is provided via the `appium:app` capability.
+- 929b1f5: - Fixed WebdriverIO test results sometimes not appearing (builds staying "in progress") when the build-completion signal failed or the test runner was interrupted.
+
+## 9.33.0
+
+### Minor Changes
+
+- e99828d: - Fixed SDK logs not being uploaded when a test run is interrupted (Ctrl-C or CI job cancellation); interrupted runs are now correctly reported with their termination reason.
+
+### Patch Changes
+
+- 74c2682: - Read the `apis` service-URL map from the binary's new `config.sessionData` bucket (SDK-6821 session.config split), with the flat `config.apis` as backward-compat fallback. Single-point change in `setConfig`; verified `npm run build` clean and the vitest suite shows zero new failures vs main (68 pre-existing environmental failures identical on both).
+
 ## 9.32.1
 
 ### Patch Changes

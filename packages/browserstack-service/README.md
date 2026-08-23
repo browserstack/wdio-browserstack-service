@@ -76,6 +76,14 @@ export const config = {
 
 You can explore all the features of Test Reporting and Analytics in [this sandbox](https://automation.browserstack.com/) or read more about it [here](https://www.browserstack.com/docs/test-reporting-and-analytics/overview/what-is-test-observability).
 
+#### Reporting of tests skipped by `bail`
+
+With `mochaOpts: { bail: true }`, Mocha halts a spec on its first failure and the remaining tests in that file never run. Those tests are now reported with the status `skipped`, so the report accounts for every test in the spec rather than silently omitting them. Tests in sibling `describe` blocks in the same file are covered too.
+
+Requires `mocha` as the framework and Test Reporting enabled.
+
+Note that WebdriverIO's own top-level `bail` option is a different setting: it counts failed *spec files* and stops scheduling further ones, rather than stopping tests within a spec. Tests in spec files that never start are not currently reported.
+
 ### browserstackLocal
 Set this to true to enable routing connections from BrowserStack cloud through your computer.
 

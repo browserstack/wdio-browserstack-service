@@ -183,7 +183,12 @@ class _InsightsHandler {
         switch (hookType) {
         case 'BEFORE_EACH':
         case 'AFTER_EACH':
-            return (hook as CucumberHook).hookId
+            // hookId is cucumber's hook *registration* id — every scenario invoking the same
+            // Before()/After() presents the same value. Suffix the current scenario's run uuid
+            // so a still-open entry orphaned in an earlier scenario is never clobbered by a
+            // later invocation before sweepUnfinished() can close it (SDK-7167). The uuid is
+            // stable between a hook's before/after events, so pairing is unaffected.
+            return `${(hook as CucumberHook).hookId}_${InsightsHandler.currentTest.uuid}`
         case 'BEFORE_ALL':
         case 'AFTER_ALL':
             // Can only work for single beforeAll or afterAll
@@ -254,16 +259,31 @@ class _InsightsHandler {
         }
         if (event === 'before') {
             this.setCurrentHook({ uuid: hookUUID })
-            const hookMetaData = {
+            const hookMetaData: TestMeta = {
                 uuid: hookUUID,
                 startedAt: (new Date()).toISOString(),
                 testRunId: InsightsHandler.currentTest.uuid,
-                hookType: hookType
+                hookType: hookType,
+                // Tag as a hook and stash identity so the teardown sweep can synthesise a
+                // terminal HookRunFinished if this hook's 'after' event never arrives —
+                // an orphaned start otherwise holds the hook open until the backend hook
+                // timeout and inflates the build duration on the dashboard (SDK-7167).
+                kind: 'hook',
+                name: this.getCucumberHookName(hookType),
+                scopes: [this._cucumberData.feature?.name || ''],
+                fileName: this._cucumberData.uri
             }
 
             this._tests[hookId] = hookMetaData
             this.listener.hookStarted(this.getHookRunDataForCucumber(hookMetaData, 'HookRunStarted'))
         } else {
+            if (!this._tests[hookId]) {
+                // No stashed start for this hook id: its 'before' event was dropped (e.g.
+                // classified as a step-level hook then). Emitting a finish the backend cannot
+                // match to a start would orphan it — skip, mirroring the mocha-path guard.
+                BStackLogger.warn(`Skipping HookRunFinished for cucumber hook '${hookId}' — no matching HookRunStarted was recorded.`)
+                return
+            }
             this._tests[hookId].finishedAt = (new Date()).toISOString()
             this.setCurrentHook({ uuid: this._tests[hookId].uuid, finished: true })
             this.listener.hookFinished(this.getHookRunDataForCucumber(this._tests[hookId], 'HookRunFinished', result))
@@ -497,9 +517,10 @@ class _InsightsHandler {
      * test/hook so the backend closes the entity instead of leaving it in_progress and
      * letting the build watchdog inflate the duration.
      *
-     * Scoped to mocha. Cucumber hooks are keyed differently (getCucumberHookUniqueId) and
-     * their lifecycle differs, so they are intentionally left out here — closing them safely
-     * would need cucumber-specific keying and is a known gap for a follow-up.
+     * Covers mocha and cucumber. Cucumber entries are keyed by hook-definition id / scenario
+     * unique id rather than title, but both stash kind + identity at start time, so the same
+     * kind-tag scan closes them (SDK-7167: an AFTER_EACH hook whose finish was never emitted
+     * held the hook open until the backend's 2h hook timeout, inflating the build duration).
      *
      * Each entry was tagged with kind at start time so we emit HookRunFinished for hooks and
      * TestRunFinished for tests without re-deriving the kind from the title. Entries without a
@@ -508,7 +529,7 @@ class _InsightsHandler {
      * entity lands in a terminal state rather than pending.
      */
     public async sweepUnfinished() {
-        if (this._framework !== 'mocha') {
+        if (this._framework !== 'mocha' && this._framework !== 'cucumber') {
             return
         }
 
@@ -516,8 +537,8 @@ class _InsightsHandler {
             const meta = this._tests[fullTitle]
             // Already finished, or no kind tag — nothing to sweep.
             //
-            // Kind-less entries are CLI/gRPC-path tests seeded by setTestData (cucumber/legacy
-            // entries are also kind-less and skipped for the same reason). A CLI-path test's
+            // Kind-less entries are CLI/gRPC-path tests seeded by setTestData (legacy entries
+            // are also kind-less and skipped for the same reason). A CLI-path test's
             // test_run lifecycle is owned by the binary (trackEvent -> gRPC -> stopBinSession), NOT
             // the JS listener pipeline this sweep emits on. Sweeping them would double-emit a finish
             // on a transport that never opened them, so they are correctly skipped here. Any genuine
@@ -597,7 +618,14 @@ class _InsightsHandler {
         }
 
         if (meta.kind === 'hook') {
-            testData.hook_type = meta.name ? getHookType(meta.name.toLowerCase()) : 'undefined'
+            // Cucumber hook meta stashes the classified hookType directly; mocha hook meta
+            // only has the title-derived name, so fall back to parsing it.
+            testData.hook_type = meta.hookType || (meta.name ? getHookType(meta.name.toLowerCase()) : 'undefined')
+            // Cucumber hooks carry the owning test-run id — keep it so the backend can
+            // attribute the synthetic finish to the right scenario.
+            if (meta.testRunId) {
+                testData.test_run_id = meta.testRunId
+            }
         }
 
         return testData
@@ -621,13 +649,24 @@ class _InsightsHandler {
         this._cucumberData.scenario = world.pickle
         this._cucumberData.scenariosStarted = true
         this._cucumberData.stepsStarted = false
+        // No step can be in flight at scenario start. A step whose afterStep never fired
+        // (aborted/killed mid-step) would otherwise leave a stale entry here for the rest of
+        // the worker, misclassifying every later scenario's AFTER_EACH hooks as step-level
+        // and silently dropping their events.
+        this._cucumberData.steps = []
         const pickleData = world.pickle
         const gherkinDocument = world.gherkinDocument
         const featureData = gherkinDocument.feature
         const uniqueId = getUniqueIdentifierForCucumber(world)
         const testMetaData: TestMeta = {
             uuid: uuid,
-            startedAt: (new Date()).toISOString()
+            startedAt: (new Date()).toISOString(),
+            // Tag as a test and stash identity so the teardown sweep can synthesise a terminal
+            // TestRunFinished if this scenario never reaches afterScenario (SDK-7167).
+            kind: 'test',
+            name: pickleData?.name,
+            scopes: [featureData?.name || ''],
+            fileName: gherkinDocument?.uri
         }
 
         if (pickleData) {
@@ -650,6 +689,12 @@ class _InsightsHandler {
 
     async afterScenario (world: ITestCaseHookParameter) {
         this._cucumberData.scenario = undefined
+        // Stamp the finish on the stashed meta so the teardown sweep recognises this scenario
+        // as closed and does not double-emit a synthetic TestRunFinished for it.
+        const uniqueId = getUniqueIdentifierForCucumber(world)
+        if (this._tests[uniqueId]) {
+            this._tests[uniqueId].finishedAt = (new Date()).toISOString()
+        }
         this.flushCBTDataQueue()
         this.listener.testFinished(this.getTestRunDataForCucumber(world, 'TestRunFinished'))
     }

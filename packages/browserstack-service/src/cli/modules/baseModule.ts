@@ -1,5 +1,8 @@
 import { BStackLogger } from '../cliLogger.js'
 import type { SDKClient } from '../../grpc/index.js'
+import AutomationFramework from '../frameworks/automationFramework.js'
+import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
+import { hasAppCap } from '../../util.js'
 
 /**
  * Base class for BrowserStack modules
@@ -53,5 +56,14 @@ export default class BaseModule {
         this.config = config
 
         BStackLogger.debug(`Configured module ${this.getModuleName()} with binSessionId=${binSessionId}, platformIndex=${platformIndex}`)
+    }
+
+    // Shared App Automate detection from the tracked framework capabilities: the app cap survives
+    // only in the raw INPUT capabilities (the resolved caps BrowserStack echoes back drop it), so
+    // check both. Reused by AutomateModule + PercyModule to keep endpoint/product routing consistent.
+    protected hasAppCapInFrameworkState(): boolean {
+        const autoInstance = AutomationFramework.getTrackedInstance()
+        return [AutomationFrameworkConstants.KEY_INPUT_CAPABILITIES, AutomationFrameworkConstants.KEY_CAPABILITIES]
+            .some(key => hasAppCap(AutomationFramework.getState(autoInstance, key) as WebdriverIO.Capabilities | undefined))
     }
 }

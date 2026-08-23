@@ -2,22 +2,8 @@ import type { AppConfig, BrowserstackConfig } from './types.js'
 import type { Capabilities, Options } from '@wdio/types'
 import { v4 as uuidv4 } from 'uuid'
 import TestOpsConfig from './testOps/testOpsConfig.js'
-import { isTrue, isUndefined } from './util.js'
+import { hasAppCap, isTrue, isUndefined } from './util.js'
 import { BStackLogger } from './bstackLogger.js'
-
-const APP_AUTOMATE_CAP_KEYS = ['appium:app', 'appium:bundleId', 'appium:appPackage', 'appium:appActivity'] as const
-
-function hasAppCap(cap: WebdriverIO.Capabilities | undefined): boolean {
-    if (!cap || typeof cap !== 'object') {
-        return false
-    }
-    const record = cap as Record<string, unknown>
-    if (APP_AUTOMATE_CAP_KEYS.some(key => !isUndefined(record[key]))) {
-        return true
-    }
-    const appiumOptions = record['appium:options'] as Record<string, unknown> | undefined
-    return !!(appiumOptions && !isUndefined(appiumOptions.app))
-}
 
 function detectAppAutomate(capabilities?: Capabilities.TestrunnerCapabilities): boolean {
     if (!capabilities) {
@@ -89,6 +75,8 @@ class BrowserStackConfig {
     public percyBuildId?: number | null
     public isPercyAutoEnabled = false
     public sdkRunID: string
+    public killSignal?: string
+    public logsUploaded: boolean = false
 
     constructor(
         options: BrowserstackConfig & Options.Testrunner,
@@ -114,6 +102,10 @@ class BrowserStackConfig {
 
     sentFunnelData() {
         this.funnelDataSent = true
+    }
+
+    setKillSignal(signal: string) {
+        this.killSignal = signal
     }
 
 }

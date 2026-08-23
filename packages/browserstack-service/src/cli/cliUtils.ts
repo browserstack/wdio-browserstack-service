@@ -289,6 +289,7 @@ export class CLIUtils {
             const finalBinaryPath = await this.downloadLatestBinary(
                 nestedKeyValue(response, ['url']),
                 cliDir,
+                nestedKeyValue(response, ['updated_cli_version']),
             )
             PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
             return finalBinaryPath
@@ -475,11 +476,46 @@ export class CLIUtils {
         })
     }
 
+    /**
+     * Version encoded in a binary download URL, e.g.
+     * `.../binary-macos-arm64-1.48.0.zip` -> `1.48.0`. Null when the URL does
+     * not carry one (custom BROWSERSTACK_BINARY_URL).
+     */
+    static getVersionFromBinaryUrl(binDownloadUrl: string): string | null {
+        return /-(\d+\.\d+\.\d+)\.zip(?:\?|$)/.exec(binDownloadUrl || '')?.[1] ?? null
+    }
+
+    /**
+     * Whether the binary on disk is already the version we were asked to fetch.
+     * A peer worker winning the download race leaves the *target* version here;
+     * a merely-pre-existing binary is stale. Only the former may short-circuit
+     * the download — see `downloadLatestBinary`.
+     */
+    static async isBinaryAtVersion(
+        binaryPath: string,
+        expectedVersion: string | null,
+    ): Promise<boolean> {
+        if (!expectedVersion) {
+            return false
+        }
+        try {
+            const actual = await CLIUtils.runShellCommand(`${binaryPath} version`)
+            return actual.trim() === expectedVersion
+        } catch {
+            return false
+        }
+    }
+
     static downloadLatestBinary = async (
         binDownloadUrl: string,
         cliDir: string,
+        expectedVersion?: string | null,
     ): Promise<string | null> => {
         const lockPath = path.join(cliDir, 'download.lock')
+        // Prefer the version the server reported; the URL is only a fallback and
+        // carries no version when BROWSERSTACK_BINARY_URL overrides it.
+        const targetVersion =
+            expectedVersion || CLIUtils.getVersionFromBinaryUrl(binDownloadUrl)
 
         const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -553,16 +589,20 @@ export class CLIUtils {
                                 continue
                             }
                         }
-                        // Check if existing binary appeared while waiting
+                        // Check if the target binary appeared while waiting
                         const existingBinary =
                             CLIUtils.getExistingCliPath(cliDir)
                         if (
                             existingBinary &&
                             fs.existsSync(existingBinary) &&
-                            fs.statSync(existingBinary).size > 0
+                            fs.statSync(existingBinary).size > 0 &&
+                            (await CLIUtils.isBinaryAtVersion(
+                                existingBinary,
+                                targetVersion,
+                            ))
                         ) {
                             logger.debug(
-                                `Binary appeared while waiting for lock: ${existingBinary}`,
+                                `Binary v${targetVersion} appeared while waiting for lock: ${existingBinary}`,
                             )
                             return { alreadyExists: existingBinary }
                         }
@@ -650,15 +690,19 @@ export class CLIUtils {
 
             releaseLock = lockResult
 
-            // Re-check after acquiring lock
+            // Re-check after acquiring lock. Only a binary already at the target
+            // version means a peer won the race; any other binary here is the
+            // stale one we were sent to replace, so it must not short-circuit
+            // the download.
             const existingBinary = CLIUtils.getExistingCliPath(cliDir)
             if (
                 existingBinary &&
                 fs.existsSync(existingBinary) &&
-                fs.statSync(existingBinary).size > 0
+                fs.statSync(existingBinary).size > 0 &&
+                (await CLIUtils.isBinaryAtVersion(existingBinary, targetVersion))
             ) {
                 logger.debug(
-                    `Binary already exists after acquiring lock: ${existingBinary}`,
+                    `Binary already at v${targetVersion} after acquiring lock: ${existingBinary}`,
                 )
                 endDownload()
                 releaseLock()
@@ -674,6 +718,19 @@ export class CLIUtils {
             const downloadedFileStream = fs.createWriteStream(zipFilePath)
 
             return new Promise<string | null>((resolve, reject) => {
+                // Registered before the first await: createWriteStream opens
+                // asynchronously, so an error can land before processDownload
+                // gets far enough to attach its own handler — with no listener
+                // that becomes an uncaught exception in the user's test process.
+                downloadedFileStream.on('error', function (err: Error) {
+                    logger.error(
+                        `Got Error while downloading cli binary file: ${err}`,
+                    )
+                    endDownload(false, util.format(err))
+                    releaseLock?.()
+                    reject(err)
+                })
+
                 const processDownload = async () => {
                     const abortController = new AbortController()
                     const timeout = setTimeout(
@@ -691,15 +748,6 @@ export class CLIUtils {
                     if (!response.body) {
                         throw new Error('No response body received')
                     }
-
-                    downloadedFileStream.on('error', function (err: Error) {
-                        logger.error(
-                            `Got Error while downloading cli binary file: ${err}`,
-                        )
-                        endDownload(false, util.format(err))
-                        releaseLock?.()
-                        reject(err)
-                    })
 
                     try {
                         const arrayBuffer = await response.arrayBuffer()
@@ -735,7 +783,17 @@ export class CLIUtils {
                     }
                 }
 
-                processDownload()
+                // A rejection before the stream handlers are wired (e.g. fetch
+                // itself failing) would otherwise leave this promise pending
+                // forever and hang the launcher.
+                processDownload().catch((err: Error) => {
+                    // Nothing is piped into the stream on this path, so close it
+                    // explicitly — otherwise the fd and the temp zip both leak.
+                    downloadedFileStream.destroy()
+                    endDownload(false, util.format(err))
+                    releaseLock?.()
+                    reject(err)
+                })
             })
         } catch (err) {
             releaseLock?.()

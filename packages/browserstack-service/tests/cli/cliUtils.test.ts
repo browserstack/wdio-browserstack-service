@@ -427,7 +427,11 @@ describe('CLIUtils', () => {
             const result = await CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, mockConfig)
 
             expect(result).toBe(mockNewBinaryPath)
-            expect(CLIUtils.downloadLatestBinary).toHaveBeenCalledWith(mockResponse.url, mockCliDir)
+            expect(CLIUtils.downloadLatestBinary).toHaveBeenCalledWith(
+                mockResponse.url,
+                mockCliDir,
+                mockResponse.updated_cli_version,
+            )
         })
 
         it('uses SHELL_EXECUTE_ERROR when runShellCommand fails', async () => {

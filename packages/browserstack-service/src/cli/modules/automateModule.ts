@@ -25,6 +25,7 @@ interface TestResult {
 
 interface SessionData {
     lastTestName: string
+    appliedName?: string // last name successfully PUT for this session, for de-duping
     testResults: Map<string, TestResult> // testName -> TestResult
 }
 
@@ -95,6 +96,42 @@ export default class AutomateModule extends BaseModule {
         }
 
         TestFramework.setState(instace, TestFrameworkConstants.KEY_AUTOMATE_SESSION_NAME, name)
+
+        // SDK-7270: name the session NOW, while it is still the live session, instead of
+        // relying solely on the onAfterExecute sweep at worker teardown. Sessions are closed
+        // as soon as the suite reloads them (`browser.reloadSession()` per test), and a worker
+        // that never reaches `after()` — interrupted run, hard exit, crash — never fires
+        // onAfterExecute at all, leaving every session on the creation-time `sessionName`
+        // capability. Restores the pre-9.27 behaviour, where the rename was issued per test.
+        await this.flushSessionName(sessionId)
+    }
+
+    /**
+     * PUT the session's current name if it has not already been applied.
+     * De-duped via `appliedName` so the onAfterExecute sweep does not re-send it.
+     */
+    private async flushSessionName(sessionId: string): Promise<void> {
+        const testContextOptions = this.config.testContextOptions as TestContextOptions
+        if (testContextOptions.skipSessionName) {
+            return
+        }
+
+        if (!sessionId) {
+            return
+        }
+
+        const sessionData = this.sessionMap.get(sessionId)
+        if (!sessionData || !sessionData.lastTestName || sessionData.appliedName === sessionData.lastTestName) {
+            return
+        }
+
+        const name = sessionData.lastTestName
+        await this.markSessionName(sessionId, name, {
+            user: this.config.userName as string,
+            key: this.config.accessKey as string
+        })
+        sessionData.appliedName = name
+        this.sessionMap.set(sessionId, sessionData)
     }
 
     async onAfterTest(args: Record<string, unknown>) {
@@ -180,9 +217,8 @@ export default class AutomateModule extends BaseModule {
                     }
                 }
 
-                if (!testContextOptions.skipSessionName) {
-                    await this.markSessionName(sessionId, sessionData.lastTestName, { user: userName, key: accessKey })
-                }
+                // Final sweep — a no-op for sessions already named per-test in onBeforeTest.
+                await this.flushSessionName(sessionId)
 
                 if (!testContextOptions.skipSessionStatus) {
                     await this.markSessionStatus(sessionId, sessionStatus, failureReason, { user: userName, key: accessKey })
@@ -195,16 +231,23 @@ export default class AutomateModule extends BaseModule {
         this.sessionMap.clear()
     }
 
+    // An App Automate session is identified by the service-level app / skipAppOverride flag,
+    // OR an app supplied only via the appium:app / appium:options.app capability — which the
+    // service-level config (this.config) does not carry. Mirrors accessibilityModule.isAppAutomateSession.
+    private isAppAutomate(): boolean {
+        if (this.config.app || isTrue(this.config.skipAppOverride)) {
+            return true
+        }
+        return this.hasAppCapInFrameworkState()
+    }
+
     async markSessionName(sessionId: string, sessionName: string, config: { user: string; key: string; }): Promise<void> {
         return await PerformanceTester.measureWrapper(
             PERFORMANCE_SDK_EVENTS.AUTOMATE_EVENTS.SESSION_NAME,
             async (sessionId: string, sessionName: string, config: { user: string; key: string; }) => {
                 try {
                     const auth = Buffer.from(`${config.user}:${config.key}`).toString('base64')
-                    // skipAppOverride runs App Automate without an app value, so route session
-                    // name/status to the App Automate endpoint on the flag too (config echoed from
-                    // the binary carries skipAppOverride via the binconfig service options).
-                    const isAppAutomate = this.config.app || isTrue(this.config.skipAppOverride)
+                    const isAppAutomate = this.isAppAutomate()
                     if (isAppAutomate) {
                         this.logger.info('Marking session name for App Automate')
                     } else {
@@ -244,10 +287,7 @@ export default class AutomateModule extends BaseModule {
             async (sessionId: string, sessionStatus: 'passed' | 'failed', sessionErrorMessage: string | undefined, config: { user: string; key: string; }) => {
                 try {
                     const auth = Buffer.from(`${config.user}:${config.key}`).toString('base64')
-                    // skipAppOverride runs App Automate without an app value, so route session
-                    // name/status to the App Automate endpoint on the flag too (config echoed from
-                    // the binary carries skipAppOverride via the binconfig service options).
-                    const isAppAutomate = this.config.app || isTrue(this.config.skipAppOverride)
+                    const isAppAutomate = this.isAppAutomate()
                     if (isAppAutomate) {
                         this.logger.info('Marking session status for App Automate')
                     } else {

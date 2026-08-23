@@ -104,6 +104,22 @@ export interface BrowserstackConfig {
      */
     testManagementOptions?: TestManagementOptions;
     /**
+     * By default the service uploads its own debug logs, your `package.json` and a copy of
+     * your wdio config file at the end of a run, so BrowserStack support can debug issues
+     * without asking you to reproduce them.
+     *
+     * Values under known credential keys are removed before upload on a best-effort basis:
+     * BrowserStack credentials, common third-party secret names (`clientSecret`,
+     * `AWS_SECRET_ACCESS_KEY`, …), inline PEM blocks and basic-auth URLs. It is key-name
+     * driven, so a secret stored under an unrecognised name can still be included — if your
+     * config holds secrets you would rather not send, set this to true.
+     *
+     * Set this to true to disable that upload entirely.
+     * Can also be set with the `BROWSERSTACK_DISABLE_AUTO_CAPTURE_LOGS=true` env var.
+     * @default false
+     */
+    disableAutoCaptureLogs?: boolean;
+    /**
      * Set this to true to enable BrowserStack Percy which will take screenshots
      * and snapshots for your tests run on Browserstack
      * @default false
@@ -256,7 +272,8 @@ export interface TestMeta {
     testRunId?: string,
     // Explicitly records whether this entry is a hook or a test so a teardown sweep can emit the
     // correct synthetic finish event without re-deriving the kind from the title. Tagged at
-    // beforeHook/beforeTest time. Only used for the mocha never-finished sweep.
+    // beforeHook/beforeTest/processCucumberHook/beforeScenario time. Only used for the
+    // never-finished sweep (mocha and cucumber).
     kind?: 'hook' | 'test',
     // Identity captured at start time so the sweep can build a terminal finish payload without the
     // live framework test object (which is gone by teardown).
@@ -469,6 +486,7 @@ export interface EventProperties {
     isCLIEnabled?: boolean
     finishedMetadata?: {
         reason: string
+        signal?: string
     }
 }
 

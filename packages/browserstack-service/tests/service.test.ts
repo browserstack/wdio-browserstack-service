@@ -113,6 +113,8 @@ beforeEach(() => {
     browser = {
         execute: vi.fn(),
         executeScript: vi.fn(),
+        executeAsyncScript: vi.fn(),
+        overwriteCommand: vi.fn(),
         on: vi.fn(),
         sessionId: sessionId,
         config: {},
@@ -625,6 +627,135 @@ describe('before', () => {
 
         expect(service['_failReasons']).toEqual([])
         expect(service['_sessionBaseUrl']).toEqual('https://api.browserstack.com/automate-turboscale/v1/sessions')
+    })
+
+    it('should overwrite execute command to route browserstack_executor via executeScript', async () => {
+        (browser as any).isBidi = true
+        const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+        await service.before(service['_config'] as any, [], browser)
+
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
+
+        const overwrite = vi.mocked(browser.overwriteCommand).mock.calls[0][1] as Function
+        const originalExecute = vi.fn()
+
+        await overwrite(originalExecute, 'browserstack_executor: {"action":"annotate"}')
+        expect(browser.executeScript).toHaveBeenCalledWith('browserstack_executor: {"action":"annotate"}', [])
+        expect(originalExecute).not.toHaveBeenCalled()
+
+        await overwrite(originalExecute, 'return document.title')
+        expect(originalExecute).toHaveBeenCalledWith('return document.title')
+
+        const extraArg = { key: 'value' }
+        await overwrite(originalExecute, 'return arguments[0]', extraArg)
+        expect(originalExecute).toHaveBeenCalledWith('return arguments[0]', extraArg)
+    })
+
+    it('should route executor scripts with leading whitespace and leave look-alike scripts on BiDi', async () => {
+        (browser as any).isBidi = true
+        const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+        service['_routeBidiExecutorToHttp'](browser)
+
+        const overwrite = vi.mocked(browser.overwriteCommand).mock.calls[0][1] as Function
+        const originalExecute = vi.fn()
+
+        const padded = '\n  browserstack_executor: {"action":"annotate"}'
+        await overwrite(originalExecute, padded)
+        expect(browser.executeScript).toHaveBeenCalledWith(padded, [])
+        expect(originalExecute).not.toHaveBeenCalled()
+
+        const lookAlike = 'return document.title.includes("browserstack_executor:")'
+        await overwrite(originalExecute, lookAlike)
+        expect(originalExecute).toHaveBeenCalledWith(lookAlike)
+    })
+
+    it('should not overwrite execute command for non-BiDi sessions', async () => {
+        (browser as any).isBidi = false
+        const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+        await service.before(service['_config'] as any, [], browser)
+
+        expect(browser.overwriteCommand).not.toHaveBeenCalled()
+    })
+
+    it('should overwrite executeAsync command to route browserstack_executor via executeAsyncScript', async () => {
+        (browser as any).isBidi = true
+        const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+        service['_routeBidiExecutorToHttp'](browser)
+
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('executeAsync', expect.any(Function))
+
+        const overwrite = vi.mocked(browser.overwriteCommand).mock.calls
+            .find(([command]) => command === 'executeAsync')?.[1] as Function
+        const originalExecuteAsync = vi.fn()
+
+        await overwrite(originalExecuteAsync, 'browserstack_executor: {"action":"annotate"}')
+        expect(browser.executeAsyncScript).toHaveBeenCalledWith('browserstack_executor: {"action":"annotate"}', [])
+        expect(originalExecuteAsync).not.toHaveBeenCalled()
+
+        const extraArg = { key: 'value' }
+        await overwrite(originalExecuteAsync, 'arguments[0](1)', extraArg)
+        expect(originalExecuteAsync).toHaveBeenCalledWith('arguments[0](1)', extraArg)
+    })
+
+    it('should not overwrite execute command for non-BrowserStack BiDi sessions', async () => {
+        (browser as any).isBidi = true
+        const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+        // describe('_update') leaves a file-wide getCloudProvider spy returning 'browserstack',
+        // so stub the session check itself for this one call rather than restoring it.
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValueOnce(false)
+        service['_routeBidiExecutorToHttp'](browser)
+
+        expect(browser.overwriteCommand).not.toHaveBeenCalled()
+    })
+
+    it('should overwrite execute on each instance for multiremote', async () => {
+        const browserA = { executeScript: vi.fn(), executeAsyncScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionA', isBidi: true }
+        const browserB = { executeScript: vi.fn(), executeAsyncScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
+        const multiRemoteBrowser = {
+            ...browser,
+            isMultiremote: true,
+            getInstance: vi.fn().mockImplementation((name: string) => name === 'browserA' ? browserA : browserB)
+        } as unknown as WebdriverIO.MultiRemoteBrowser
+
+        const service = new BrowserstackService({} as any, { browserA: {}, browserB: {} } as any, {
+            user: 'foo', key: 'bar'
+        })
+        await service.before(service['_config'] as any, [], multiRemoteBrowser as any)
+
+        expect(browserA.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
+        expect(browserB.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
+
+        const overwriteA = vi.mocked(browserA.overwriteCommand).mock.calls[0][1] as Function
+        await overwriteA(vi.fn(), 'browserstack_executor: {"action":"annotate"}')
+        expect(browserA.executeScript).toHaveBeenCalledWith('browserstack_executor: {"action":"annotate"}', [])
+        expect(browserB.executeScript).not.toHaveBeenCalled()
+
+        const originalExecuteA = vi.fn()
+        const extraArg = { key: 'value' }
+        await overwriteA(originalExecuteA, 'return arguments[0]', extraArg)
+        expect(originalExecuteA).toHaveBeenCalledWith('return arguments[0]', extraArg)
+    })
+
+    it('should keep patching remaining multiremote instances when one instance fails to resolve', async () => {
+        const browserA = { executeScript: vi.fn(), executeAsyncScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionA', isBidi: true }
+        const browserB = { executeScript: vi.fn(), executeAsyncScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
+        const multiRemoteBrowser = {
+            ...browser,
+            isMultiremote: true,
+            getInstance: vi.fn()
+                .mockImplementationOnce(() => {
+                    throw new Error('no such instance')
+                })
+                .mockImplementation((name: string) => name === 'browserA' ? browserA : browserB)
+        } as unknown as WebdriverIO.MultiRemoteBrowser
+
+        const service = new BrowserstackService({} as any, { browserA: {}, browserB: {} } as any, {
+            user: 'foo', key: 'bar'
+        })
+        await service.before(service['_config'] as any, [], multiRemoteBrowser as any)
+
+        expect(browserA.overwriteCommand).not.toHaveBeenCalled()
+        expect(browserB.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
     })
 })
 
@@ -2425,5 +2556,159 @@ describe('_isAppAutomate honors skipAppOverride', () => {
     it('returns false for a web session with no app and no skipAppOverride', () => {
         const svc = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} } as any)
         expect(svc._isAppAutomate()).toBe(false)
+    })
+})
+
+describe('afterTest bail skip cascade (SDK-7063)', () => {
+    let getInstanceSpy: ReturnType<typeof vi.spyOn>
+
+    // reportSkippedTest de-dupes on `${parent} - ${title}` in a module-scope Set that outlives
+    // each test, so every case here needs its own titles.
+    const buildTree = (tag: string) => {
+        const root: any = { title: '', tests: [], suites: [], parent: undefined }
+        const suiteA: any = { title: `${tag} Suite A`, tests: [], suites: [], parent: root }
+        const suiteB: any = { title: `${tag} Suite B`, tests: [], suites: [], parent: root }
+        root.suites.push(suiteA, suiteB)
+
+        const ran: any = { title: `${tag} A1`, state: 'passed', parent: suiteA, file: '/spec/a.js' }
+        const failing: any = { title: `${tag} A2`, state: 'failed', parent: suiteA, file: '/spec/a.js' }
+        const dropped: any = { title: `${tag} A3`, parent: suiteA, file: '/spec/a.js' }
+        suiteA.tests.push(ran, failing, dropped)
+        // sibling top-level describe — only reachable because the cascade walks up to root
+        suiteB.tests.push({ title: `${tag} B1`, parent: suiteB, file: '/spec/a.js' })
+
+        failing.ctx = { test: { parent: suiteA } }
+        return { failing, root }
+    }
+
+    const makeService = (config: Record<string, unknown>) => new BrowserstackService(
+        { testObservability: false } as any,
+        [] as any,
+        { user: 'foo', key: 'bar', ...config } as any
+    )
+
+    const runAfterTest = async (svc: BrowserstackService, failing: any, results: Record<string, unknown>) => {
+        const trackEvent = vi.fn().mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => ({ trackEvent })
+        } as any)
+        await svc.afterTest(failing, undefined as never, results as any)
+        return trackEvent
+    }
+
+    // WHICH tests got reported, not just how many events fired — a cascade that swept the wrong
+    // tests still produces the same call count. Pairs with the count assertions, which catch the
+    // opposite failure (a test emitted twice).
+    const skippedTitles = (trackEvent: ReturnType<typeof vi.fn>) => [...new Set(
+        trackEvent.mock.calls
+            .filter(([, , payload]: any[]) => payload?.result?.skipped === true)
+            .map(([, , payload]: any[]) => payload.test.title as string)
+    )].sort()
+
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+    })
+
+    it('reports un-run tests across sibling describes when mocha bail is on', async () => {
+        const { failing } = buildTree('bail1')
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
+        const trackEvent = await runAfterTest(svc, failing, { passed: false })
+
+        // 2 events close the failing test (LOG_REPORT/POST + TEST/POST), then 4 per skipped test.
+        // A3 (same describe) and B1 (SIBLING describe) => 2 skipped => 8.
+        expect(trackEvent).toHaveBeenCalledTimes(2 + 8)
+        // exactly the un-run tests: A1 already passed and A2 is the failure being reported,
+        // so sweeping either of them in would be a defect the count alone cannot see
+        expect(skippedTitles(trackEvent)).toEqual(['bail1 A3', 'bail1 B1'])
+    })
+
+    it('does not cascade when only wdio-level bail is set', async () => {
+        // wdio's `bail` never halts a spec, so those tests still run — reporting them
+        // as skipped here would double-report them.
+        const { failing } = buildTree('bail2')
+        const svc = makeService({ framework: 'mocha', bail: 1 })
+        const trackEvent = await runAfterTest(svc, failing, { passed: false })
+
+        expect(trackEvent).toHaveBeenCalledTimes(2)
+        expect(skippedTitles(trackEvent)).toEqual([])
+    })
+
+    it('does not cascade while a wdio spec-file retry is still queued', async () => {
+        const { failing } = buildTree('bail3')
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
+        const trackEvent = await runAfterTest(svc, failing, {
+            passed: false,
+            retries: { attempts: 0, limit: 2 }
+        })
+
+        expect(trackEvent).toHaveBeenCalledTimes(2)
+        expect(skippedTitles(trackEvent)).toEqual([])
+    })
+
+    it('does not cascade while a MOCHA-level retry is still queued', async () => {
+        // wdio's `results.retries` only tracks spec-file retries — @wdio/mocha-framework never
+        // feeds mochaOpts.retries into it, so it reads {0,0} here and cannot be relied on.
+        // Without reading mocha's own runnable state the cascade fires on attempt 1 and reports
+        // tests as skipped that the retry then actually runs.
+        const { failing } = buildTree('bail5')
+        failing.ctx.test.currentRetry = () => 0
+        failing.ctx.test.retries = () => 1
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true, retries: 1 } })
+        const trackEvent = await runAfterTest(svc, failing, {
+            passed: false,
+            retries: { attempts: 0, limit: 0 }
+        })
+
+        expect(trackEvent).toHaveBeenCalledTimes(2)
+        expect(skippedTitles(trackEvent)).toEqual([])
+    })
+
+    it('cascades once the final mocha retry has been used', async () => {
+        const { failing } = buildTree('bail6')
+        failing.ctx.test.currentRetry = () => 1
+        failing.ctx.test.retries = () => 1
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true, retries: 1 } })
+        const trackEvent = await runAfterTest(svc, failing, {
+            passed: false,
+            retries: { attempts: 0, limit: 0 }
+        })
+
+        expect(trackEvent).toHaveBeenCalledTimes(2 + 8)
+        expect(skippedTitles(trackEvent)).toEqual(['bail6 A3', 'bail6 B1'])
+    })
+
+    it('does not cascade when the test passed', async () => {
+        const { failing } = buildTree('bail4')
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
+        const trackEvent = await runAfterTest(svc, failing, { passed: true })
+
+        expect(trackEvent).toHaveBeenCalledTimes(2)
+        expect(skippedTitles(trackEvent)).toEqual([])
+    })
+
+    it('does not cascade when the test was itself skipped', async () => {
+        // a skipped test does not abort the spec, and the pre-existing skip paths already
+        // report it — cascading here would double-report the rest of the suite
+        const { failing } = buildTree('bail7')
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
+        const trackEvent = await runAfterTest(svc, failing, { passed: false, skipped: true })
+
+        // A2 is the test being reported and its own result is legitimately `skipped`; what must
+        // NOT appear is A3/B1, which the cascade would have added.
+        expect(trackEvent).toHaveBeenCalledTimes(2)
+        expect(skippedTitles(trackEvent)).toEqual(['bail7 A2'])
+    })
+
+    it('never throws out of afterTest when mocha state is hostile', async () => {
+        // afterTest is awaited by wdio; anything escaping this cascade would surface as a
+        // framework-level error in the user's run
+        const { failing } = buildTree('bail8')
+        failing.ctx.test.currentRetry = () => { throw new Error('mocha exploded') }
+        failing.ctx.test.retries = () => 1
+        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
+
+        const trackEvent = await runAfterTest(svc, failing, { passed: false })
+        expect(skippedTitles(trackEvent)).toEqual([])
     })
 })

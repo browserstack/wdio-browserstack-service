@@ -19,6 +19,7 @@ import type { BrowserstackConfig, BrowserstackOptions, App, AppConfig, AppUpload
 import {
     BSTACK_SERVICE_VERSION,
     NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV, RERUN_ENV, RERUN_TESTS_ENV,
+    AUTOLOGCAPTURE_NOTIFICATION,
     BROWSERSTACK_TESTHUB_UUID,
     VALID_APP_EXTENSION,
     BROWSERSTACK_PERCY,
@@ -50,6 +51,7 @@ import {
     validateSkipAppOverride
 } from './util.js'
 import CrashReporter from './crash-reporter.js'
+import { initWdioConfigPath, isAutoCaptureLogsDisabled, publishAutoCaptureDisabled } from './configCapture.js'
 import { finalizeOrphanedRuns } from './testOps/openRunsJournal.js'
 import { BStackLogger } from './bstackLogger.js'
 import { PercyLogger } from './Percy/PercyLogger.js'
@@ -249,6 +251,16 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_PRE_TEST)
     async onPrepare (config: Options.Testrunner, capabilities: Capabilities.TestrunnerCapabilities | WebdriverIO.Capabilities) {
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.INIT)
+
+        // Resolve the user's wdio config path ONCE, here, while the freshly parsed config
+        // still carries the CLI's `config-path` positional, and publish it on the env for
+        // the upload path. Re-deriving it at archive time from cwd is the exact bug
+        // SDK-5993 fixed in the Node SDK (silently dropped the config on every monorepo /
+        // subdir CI run). Best-effort: never blocks the run.
+        if (!publishAutoCaptureDisabled(this._options)) {
+            BStackLogger.info(AUTOLOGCAPTURE_NOTIFICATION)
+            initWdioConfigPath(config)
+        }
 
         // skipAppOverride: emit the fixed warning once + handle the 3 edge cases before anything
         // else. Runs once here in the launcher (main process). Edge-2 (explicit false + no app) is a
@@ -629,8 +641,12 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             // SDK-4671: before stopping the build, synthesize TestRunFinished for any
             // test runs whose worker died mid-test, else they stay 'in progress' on TRA.
             await finalizeOrphanedRuns()
+            // SDK-7061: capture the stop result so we only mark the build stopped when it
+            // actually succeeded. A failed stop must leave buildStopped=false so the
+            // process-exit cleanup re-stop path can still close the build.
+            let stopResult: { status?: string } | undefined
             try {
-                await (isCLIEnabled ? BrowserstackCLI.getInstance().stop() : stopBuildUpstream())
+                stopResult = await (isCLIEnabled ? BrowserstackCLI.getInstance().stop() : stopBuildUpstream()) as { status?: string } | undefined
                 PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.STOP)
             } catch (err) {
                 BStackLogger.error(`Error while stopping CLI ${err}`)
@@ -639,7 +655,11 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             if (process.env[BROWSERSTACK_OBSERVABILITY] && process.env[BROWSERSTACK_TESTHUB_UUID]) {
                 console.log(`\nVisit https://automation-rengg-lts.bsstag.com/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]} to view build report, insights, and many more debugging information all at one place!\n`)
             }
-            this.browserStackConfig.testObservability.buildStopped = true
+            // CLI path manages its own build lifecycle; for the direct-HTTP path only
+            // mark stopped when stopBuildUpstream returned success (SDK-7061).
+            if (isCLIEnabled || stopResult?.status === 'success') {
+                this.browserStackConfig.testObservability.buildStopped = true
+            }
 
             await PerformanceTester.stopAndGenerate('performance-launcher.html')
             if (process.env[PERF_MEASUREMENT_ENV]) {
@@ -830,8 +850,18 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         // return path (no creds, archive failure, upload no-response, exception), so
         // measureWrapper is no longer needed here.
         const clientBuildUuid = this._getClientBuildUuid()
-        const response = await uploadLogs(getBrowserStackUser(this._config), getBrowserStackKey(this._config), clientBuildUuid)
-        if (response) {
+        const response = await uploadLogs(
+            getBrowserStackUser(this._config),
+            getBrowserStackKey(this._config),
+            clientBuildUuid,
+            { disableAutoCaptureLogs: isAutoCaptureLogsDisabled(this._options), config: this._config }
+        )
+        // Treat a truthy response carrying a non-success status as a server-side
+        // rejection, not a delivery — a delivered upload must not be repeated by
+        // the exit-time cleanup rescue; failed/skipped uploads stay eligible for it.
+        const delivered = !!response && !(response.status && response.status !== 'success')
+        if (delivered) {
+            this.browserStackConfig.logsUploaded = true
             BStackLogger.info(`Upload response: ${JSON.stringify(response, null, 2)}`)
             BStackLogger.logToFile(`Response - ${format(response)}`, 'debug')
         }
