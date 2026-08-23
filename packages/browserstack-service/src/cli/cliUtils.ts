@@ -252,6 +252,25 @@ export class CLIUtils {
             }
             queryParams.cli_version = version
         }
+
+        // Early-return: if BROWSERSTACK_BINARY_URL is set (regression envs), skip the
+        // update_cli precheck entirely and download directly from the override. Prod path
+        // (env unset) falls through to the normal flow below — unchanged.
+        // Mirrors browserstack-javaagent LTS-daily-reg-javaagent (SdkCliUtils.java),
+        // browserstack-node-agent PR #1920, and browserstack-python-sdk reg patch.
+        const binaryUrlOverride = process.env.BROWSERSTACK_BINARY_URL
+        if (!isNullOrEmpty(binaryUrlOverride)) {
+            logger.info(
+                `BROWSERSTACK_BINARY_URL is set, skipping CLI update API call. Downloading binary from: ${binaryUrlOverride}`,
+            )
+            const finalBinaryPath = await this.downloadLatestBinary(
+                binaryUrlOverride as string,
+                cliDir,
+            )
+            PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
+            return finalBinaryPath
+        }
+
         const response = await this.requestToUpdateCLI(queryParams, config)
         if (nestedKeyValue(response, ['updated_cli_version'])) {
             logger.debug(
