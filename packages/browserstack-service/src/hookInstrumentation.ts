@@ -1,39 +1,7 @@
 import type { Options } from '@wdio/types'
 
 import { BStackLogger } from './bstackLogger.js'
-
-/**
- * Config hooks that run in the worker with a live session.
- *
- * Excluded: launcher hooks (no driver), `beforeSession` (no session yet), `afterSession` (session
- * being deleted), and `beforeCommand`/`afterCommand` (per-command, already observable).
- */
-export const BROWSER_CONTEXT_HOOKS = [
-    'before',
-    'beforeSuite',
-    'beforeHook',
-    'beforeTest',
-    'afterTest',
-    'afterHook',
-    'afterSuite',
-    'after',
-    // cucumber's own lifecycle: same driver, different names
-    'beforeFeature',
-    'beforeScenario',
-    'beforeStep',
-    'afterStep',
-    'afterScenario',
-    'afterFeature'
-] as const
-
-/**
- * Config hooks that can run before the first test/scenario, while a driver is alive.
- *
- * `beforeSuite` (mocha) and `beforeFeature` (cucumber) both land inside that window: the Mocha
- * adapter registers beforeSuite as a root before-all, and beforeFeature precedes the first
- * scenario.
- */
-export const PRE_TEST_WINDOW_HOOKS = ['before', 'beforeSuite', 'beforeFeature'] as const
+import { BROWSER_CONTEXT_HOOKS, HOOK_WINDOW_LOG_PREFIX, PRE_TEST_WINDOW_HOOKS } from './constants.js'
 
 type HookFn = (...args: unknown[]) => unknown
 
@@ -110,10 +78,10 @@ const instrument = (hookName: string, index: number, fn: HookFn): HookFn => {
     const wrapped = function (this: unknown, ...args: unknown[]) {
         const startedAt = Date.now()
         const finish = (outcome: string) => quietly(() =>
-            BStackLogger.debug(`[hook-window] ${label} ${outcome} in ${Date.now() - startedAt}ms`))
+            BStackLogger.debug(`${HOOK_WINDOW_LOG_PREFIX} ${label} ${outcome} in ${Date.now() - startedAt}ms`))
 
         quietly(() => {
-            BStackLogger.debug(`[hook-window] ${label} started`)
+            BStackLogger.debug(`${HOOK_WINDOW_LOG_PREFIX} ${label} started`)
             activeHooks.push(hookName)
         })
 
@@ -181,7 +149,7 @@ export function instrumentBrowserContextHooks(config?: Options.Testrunner): void
             if (!Array.isArray(handlers) || handlers.length === 0) {
                 continue
             }
-            quietly(() => BStackLogger.debug(`[hook-window] instrumenting ${hookName}: ${handlers.length} handler(s)`))
+            quietly(() => BStackLogger.debug(`${HOOK_WINDOW_LOG_PREFIX} instrumenting ${hookName}: ${handlers.length} handler(s)`))
             record[hookName] = handlers.map((handler, index) => {
                 if (typeof handler !== 'function') {
                     return handler

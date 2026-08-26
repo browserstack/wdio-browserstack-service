@@ -3,7 +3,8 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 vi.mock('../src/bstackLogger.js', () => ({ BStackLogger: { debug: vi.fn() } }))
 
 import { BStackLogger } from '../src/bstackLogger.js'
-import { instrumentBrowserContextHooks, getPreTestWindowFailure, getActiveHookName, BROWSER_CONTEXT_HOOKS } from '../src/hookInstrumentation.js'
+import { instrumentBrowserContextHooks, getPreTestWindowFailure, getActiveHookName } from '../src/hookInstrumentation.js'
+import { BROWSER_CONTEXT_HOOKS } from '../src/constants.js'
 
 describe('pre-test window failures', () => {
     beforeEach(() => {

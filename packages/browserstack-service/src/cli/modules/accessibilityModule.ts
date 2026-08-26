@@ -12,7 +12,7 @@ import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
 import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
-import { BROWSERSTACK_WDIO_CONFIG_FILE_PATH } from '../../constants.js'
+import { BROWSERSTACK_WDIO_CONFIG_FILE_PATH, PRE_TEST_HOOK_TITLE_FALLBACK, PRE_TEST_HOOK_TITLE_PREFIX } from '../../constants.js'
 import { getActiveHookName, getPreTestWindowFailure } from '../../hookInstrumentation.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -160,8 +160,8 @@ export default class AccessibilityModule extends BaseModule {
             test: {
                 file: process.env[BROWSERSTACK_WDIO_CONFIG_FILE_PATH] || process.cwd(),
                 title: hook
-                    ? `wdio "${hook}" hook`
-                    : 'wdio config-level hook'
+                    ? `${PRE_TEST_HOOK_TITLE_PREFIX} "${hook}" hook`
+                    : PRE_TEST_HOOK_TITLE_FALLBACK
             }
         }
     }
