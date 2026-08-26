@@ -16,11 +16,24 @@ export const BROWSER_CONTEXT_HOOKS = [
     'afterTest',
     'afterHook',
     'afterSuite',
-    'after'
+    'after',
+    // cucumber's own lifecycle: same driver, different names
+    'beforeFeature',
+    'beforeScenario',
+    'beforeStep',
+    'afterStep',
+    'afterScenario',
+    'afterFeature'
 ] as const
 
-/** Config hooks that can run before the first test, while a driver is alive. */
-export const PRE_TEST_WINDOW_HOOKS = ['before', 'beforeSuite'] as const
+/**
+ * Config hooks that can run before the first test/scenario, while a driver is alive.
+ *
+ * `beforeSuite` (mocha) and `beforeFeature` (cucumber) both land inside that window: the Mocha
+ * adapter registers beforeSuite as a root before-all, and beforeFeature precedes the first
+ * scenario.
+ */
+export const PRE_TEST_WINDOW_HOOKS = ['before', 'beforeSuite', 'beforeFeature'] as const
 
 type HookFn = (...args: unknown[]) => unknown
 

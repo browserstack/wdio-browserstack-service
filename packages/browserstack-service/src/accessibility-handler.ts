@@ -282,6 +282,15 @@ class _AccessibilityHandler {
         if (!this._accessibility) {
             return
         }
+
+        // Gate for the window between driver creation and the first test/scenario. WDIO's
+        // config-level hooks run there and are no test-framework hooks, so nothing else registers
+        // the session and their commands went unscanned. beforeTest/beforeScenario/beforeHook each
+        // recompute it. Same fix as the CLI flow's onBeforeExecute, for mocha-direct and cucumber.
+        if (this._autoScanning) {
+            AccessibilityHandler._a11yScanSessionMap[sessionId] = true
+        }
+
         if (!('overwriteCommand' in this._browser && Array.isArray(accessibilityScripts.commandsToWrap))) {
             return
         }

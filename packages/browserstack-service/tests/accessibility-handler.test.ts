@@ -689,6 +689,40 @@ describe('afterTest', () => {
     })
 })
 
+describe('pre-test scan gate (non-CLI flow)', () => {
+    beforeEach(() => {
+        accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'mocha', true, false, accessibilityOpts)
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
+        vi.spyOn(utils, 'validateCapsWithA11y').mockReturnValue(true)
+    })
+
+    it('opens the gate in before(), so config-level hook commands scan', async () => {
+        await accessibilityHandler.before('session-direct')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-direct']).toBe(true)
+    })
+
+    it('leaves it closed when autoScanning is off', async () => {
+        const handler = new AccessibilityHandler(browser, caps, options, false, config, 'mocha', true, false,
+            { ...accessibilityOpts, autoScanning: false } as never)
+
+        await handler.before('session-noauto')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-noauto']).toBeUndefined()
+    })
+
+    it('is recomputed per test, so a filtered test still closes it', async () => {
+        await accessibilityHandler.before('session-direct-2')
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-direct-2']).toBe(true)
+
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(false)
+        await accessibilityHandler.beforeTest('suite', { title: 'excluded', parent: 'suite' } as never)
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-direct-2']).toBe(false)
+    })
+})
+
 describe('onSessionReload', () => {
     beforeEach(() => {
         accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'framework', true, false, accessibilityOpts)
