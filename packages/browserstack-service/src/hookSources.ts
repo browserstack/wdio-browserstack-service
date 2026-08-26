@@ -1,8 +1,16 @@
 import fs from 'node:fs'
 
-import { MAX_CAPTURED_CONFIG_FILE_BYTES, MAX_HOOK_SOURCE_CHARS, WDIO_HOOK_NAMES } from './constants.js'
+import { redactSensitiveContent } from './configCapture.js'
+import { MAX_CAPTURED_CONFIG_FILE_BYTES, MAX_HOOK_SOURCE_CHARS, TRACKED_HOOK_IDENTIFIERS, WDIO_HOOK_NAMES } from './constants.js'
 
 export type HookSources = Record<string, string>
+
+export interface ExtractedHooks {
+    /** hook name -> source, REDACTED and therefore safe to log and upload */
+    sources: HookSources
+    /** tracked identifier -> the hooks that call it, derived BEFORE redaction */
+    identifiers: Record<string, string[]>
+}
 
 /**
  * Walk forward from an opening brace to its match, so a hook body is captured whole.
@@ -128,17 +136,19 @@ const findBodyBrace = (text: string, fromIndex: number): number | undefined => {
  * A config that imports its hooks from elsewhere (`...require('./hooks.conf')`) yields the
  * reference, not the body.
  */
-export function extractUserHookSources(configPath: string): HookSources {
+export function extractUserHookSources(configPath: string): ExtractedHooks {
     const sources: HookSources = {}
+    const identifiers: Record<string, string[]> = {}
+    const empty = { sources, identifiers }
 
     let text: string
     try {
         if (fs.statSync(configPath).size > MAX_CAPTURED_CONFIG_FILE_BYTES) {
-            return sources
+            return empty
         }
         text = fs.readFileSync(configPath, 'utf8')
     } catch {
-        return sources
+        return empty
     }
 
     for (const hookName of WDIO_HOOK_NAMES) {
@@ -167,22 +177,44 @@ export function extractUserHookSources(configPath: string): HookSources {
                 continue
             }
             const captured = `${head.trim()}${body}`
-            sources[hookName] = captured.length > MAX_HOOK_SOURCE_CHARS
-                ? `${captured.slice(0, MAX_HOOK_SOURCE_CHARS)}… [truncated]`
-                : captured
+
+            // Identifier scan runs on the RAW body, before redaction. redactSensitiveContent
+            // replaces a whole matching LINE, so `await browser.reloadSession({ userName, accessKey })`
+            // — reloading with fresh credentials, a real pattern — collapses to `[REDACTED]` and the
+            // call disappears. Scanning first keeps the detection while the stored copy stays safe.
+            for (const identifier of TRACKED_HOOK_IDENTIFIERS) {
+                if (mentions(captured, identifier)) {
+                    identifiers[identifier] = [...(identifiers[identifier] || []), hookName]
+                }
+            }
+
+            // Hook bodies are customer code and this log is uploaded, so the stored copy is
+            // redacted with the same routine that guards an uploaded config file. The logger's own
+            // scrub is narrower — it misses authToken, password, clientSecret, URL userinfo and PEM
+            // blocks — so relying on it would publish those in the clear.
+            const safe = redactSensitiveContent(captured)
+            sources[hookName] = safe.length > MAX_HOOK_SOURCE_CHARS
+                ? `${safe.slice(0, MAX_HOOK_SOURCE_CHARS)}… [truncated]`
+                : safe
             break
         }
     }
 
-    return sources
+    return { sources, identifiers }
 }
+
+const mentions = (source: string, identifier: string): boolean =>
+    new RegExp(`(?<![A-Za-z0-9_$])${identifier}(?![A-Za-z0-9_$])`).test(source)
 
 /**
  * Hook names whose source mentions `identifier` — e.g. which hooks call `reloadSession`.
+ *
+ * Note this reads whatever it is given: on the REDACTED sources it can miss a call that shared a
+ * line with a credential. `extractUserHookSources` reports `identifiers` from the raw text for
+ * exactly that reason; prefer it.
  */
 export function hooksUsing(sources: HookSources, identifier: string): string[] {
-    const needle = new RegExp(`(?<![A-Za-z0-9_$])${identifier}(?![A-Za-z0-9_$])`)
     return Object.entries(sources)
-        .filter(([, source]) => needle.test(source))
+        .filter(([, source]) => mentions(source, identifier))
         .map(([hookName]) => hookName)
 }

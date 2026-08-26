@@ -53,7 +53,7 @@ import {
 } from './util.js'
 import CrashReporter from './crash-reporter.js'
 import { initWdioConfigPath, isAutoCaptureLogsDisabled, publishAutoCaptureDisabled } from './configCapture.js'
-import { extractUserHookSources, hooksUsing, type HookSources } from './hookSources.js'
+import { extractUserHookSources, type HookSources } from './hookSources.js'
 import { finalizeOrphanedRuns } from './testOps/openRunsJournal.js'
 import { BStackLogger } from './bstackLogger.js'
 import { PercyLogger } from './Percy/PercyLogger.js'
@@ -273,7 +273,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 return {}
             }
 
-            const sources = extractUserHookSources(configPath)
+            const { sources, identifiers } = extractUserHookSources(configPath)
             const declared = Object.keys(sources)
             if (declared.length === 0) {
                 BStackLogger.debug('user hook sources: none declared in the config file')
@@ -285,7 +285,9 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 BStackLogger.debug(`user hook source [${hookName}]:\n${source}`)
             }
 
-            const reloadHooks = hooksUsing(sources, 'reloadSession')
+            // Read from `identifiers`, not from the redacted sources: redaction drops a whole
+            // line, so a reloadSession call sharing a line with credentials would vanish.
+            const reloadHooks = identifiers.reloadSession || []
             if (reloadHooks.length > 0) {
                 BStackLogger.debug(`reloadSession used in hooks: ${reloadHooks.join(',')}`)
                 process.env[BROWSERSTACK_HOOKS_WITH_RELOAD_SESSION] = reloadHooks.join(',')
