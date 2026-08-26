@@ -46,6 +46,7 @@ import { AutomationFrameworkConstants } from './cli/frameworks/constants/automat
 import TestFramework from './cli/frameworks/testFramework.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
+import AccessibilityModule from './cli/modules/accessibilityModule.js'
 
 import util from 'node:util'
 
@@ -896,7 +897,13 @@ export default class BrowserstackService implements Services.ServiceInstance {
             if (instance) {
                 AutomationFramework.setState(instance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID, newSessionId)
             }
+            // Carry the accessibility scan gate over to the new session id. Updating the state
+            // above without this is what orphans it: the gate is keyed on the session id, so the
+            // rest of the reloading test would go unscanned.
+            const accessibilityModule = BrowserstackCLI.getInstance().modules?.[AccessibilityModule.MODULE_NAME] as AccessibilityModule | undefined
+            accessibilityModule?.onSessionReload(oldSessionId, newSessionId)
         }
+        this._accessibilityHandler?.onSessionReload(oldSessionId, newSessionId)
 
         const { setSessionName, setSessionStatus } = this._options
         const ignoreHooksStatus = this._options.testObservabilityOptions?.ignoreHooksStatus === true

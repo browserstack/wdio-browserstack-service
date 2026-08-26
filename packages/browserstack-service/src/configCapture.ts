@@ -15,9 +15,11 @@ import {
     BROWSERSTACK_WDIO_CONFIG_STRATEGY,
     CAPTURE_CONFIG_IMPORT_DEPTH,
     DEFAULT_WDIO_CONFIG_BASENAME,
+    MAX_ALIAS_MANIFEST_EXTENDS_DEPTH,
     MAX_CAPTURED_CONFIG_FILES,
     MAX_CAPTURED_CONFIG_FILE_BYTES,
     MAX_PACKAGE_JSON_WALK_UP,
+    PATH_ALIAS_MANIFESTS,
     REDACTED_KEYS,
     SUPPORTED_WDIO_CONFIG_EXTENSIONS,
     WDIO_CLI_SUBCOMMANDS
@@ -313,9 +315,7 @@ const readCappedFile = (filePath: string): { content?: string, reason?: string }
  */
 const isConfigFileName = (filePath: string): boolean => /\.conf(ig)?\.[^.]+$/i.test(path.basename(filePath))
 
-const resolveRelativeImport = (specifier: string, fromFile: string): string | undefined => {
-    const base = path.resolve(path.dirname(fromFile), specifier)
-
+const probeConfigCandidate = (base: string): string | undefined => {
     if (isReadableFile(base) && SUPPORTED_WDIO_CONFIG_EXTENSIONS.includes(path.extname(base))) {
         return isConfigFileName(base) ? base : undefined
     }
@@ -339,31 +339,222 @@ const resolveRelativeImport = (specifier: string, fromFile: string): string | un
     return undefined
 }
 
+const resolveRelativeImport = (specifier: string, fromFile: string): string | undefined =>
+    probeConfigCandidate(path.resolve(path.dirname(fromFile), specifier))
+
+/**
+ * Strip comments and trailing commas so a tsconfig can be JSON.parse'd.
+ *
+ * tsconfig is JSONC and real ones are full of comments, so a plain JSON.parse fails on the
+ * majority of them. String literals are tracked because a Windows path (`"C:\\a"`) and a URL
+ * in a comment both contain sequences that a naive strip would treat as delimiters.
+ */
+const parseJsonc = (text: string): Record<string, unknown> | undefined => {
+    let out = ''
+    let inString = false
+    let inLine = false
+    let inBlock = false
+
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i]
+        const next = text[i + 1]
+
+        if (inLine) {
+            if (char === '\n') {
+                inLine = false
+                out += char
+            }
+            continue
+        }
+        if (inBlock) {
+            if (char === '*' && next === '/') {
+                inBlock = false
+                i++
+            }
+            continue
+        }
+        if (inString) {
+            out += char
+            if (char === '\\') {
+                out += next ?? ''
+                i++
+            } else if (char === '"') {
+                inString = false
+            }
+            continue
+        }
+        if (char === '"') {
+            inString = true
+            out += char
+            continue
+        }
+        if (char === '/' && next === '/') {
+            inLine = true
+            i++
+            continue
+        }
+        if (char === '/' && next === '*') {
+            inBlock = true
+            i++
+            continue
+        }
+        out += char
+    }
+
+    try {
+        return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1')) as Record<string, unknown>
+    } catch {
+        return undefined
+    }
+}
+
+interface AliasPattern {
+    /* text before the single `*`, or the whole pattern for an exact alias */
+    prefix: string
+    /* text after the `*`; empty for a prefix-only or exact alias */
+    suffix: string
+    /* absolute target paths, `*` still in place */
+    targets: string[]
+    /* exact aliases must match the specifier in full */
+    exact: boolean
+}
+
+/**
+ * `compilerOptions.paths` from the nearest tsconfig/jsconfig, following `extends`.
+ *
+ * Split configs are routinely wired with aliases rather than relative paths — the customer
+ * whose bundle prompted this imports every one of its configs as `@wdioConfs/...` — and an
+ * alias-only project used to hand us a single entry config that spreads files we never see.
+ */
+const collectAliasPatterns = (manifestPath: string, depth = 0): AliasPattern[] => {
+    const parsed = parseJsonc(readCappedFile(manifestPath).content || '')
+    if (!parsed) {
+        return []
+    }
+
+    const manifestDir = path.dirname(manifestPath)
+    const compilerOptions = (parsed.compilerOptions || {}) as Record<string, unknown>
+    const paths = (compilerOptions.paths || {}) as Record<string, unknown>
+    // No baseUrl is legal since TS 4.4, and then targets resolve against the tsconfig itself.
+    const baseUrl = typeof compilerOptions.baseUrl === 'string'
+        ? path.resolve(manifestDir, compilerOptions.baseUrl)
+        : manifestDir
+
+    const patterns: AliasPattern[] = []
+    for (const [pattern, rawTargets] of Object.entries(paths)) {
+        const targets = (Array.isArray(rawTargets) ? rawTargets : [])
+            .filter((target): target is string => typeof target === 'string')
+            .map((target) => path.resolve(baseUrl, target))
+        if (targets.length === 0) {
+            continue
+        }
+        const star = pattern.indexOf('*')
+        patterns.push(star === -1
+            ? { prefix: pattern, suffix: '', targets, exact: true }
+            : { prefix: pattern.slice(0, star), suffix: pattern.slice(star + 1), targets, exact: false })
+    }
+
+    // `extends` is resolved relative to the extending file; a bare specifier is a shared
+    // config package, which is worth one node_modules probe and no more.
+    const extendsList = Array.isArray(parsed.extends)
+        ? parsed.extends.filter((entry): entry is string => typeof entry === 'string')
+        : (typeof parsed.extends === 'string' ? [parsed.extends] : [])
+
+    if (depth < MAX_ALIAS_MANIFEST_EXTENDS_DEPTH) {
+        for (const entry of extendsList) {
+            const candidates = entry.startsWith('.')
+                ? [path.resolve(manifestDir, entry), path.resolve(manifestDir, `${entry}.json`)]
+                : [path.join(manifestDir, 'node_modules', entry), path.join(manifestDir, 'node_modules', entry, 'tsconfig.json')]
+            const parent = candidates.find(isReadableFile)
+            if (parent) {
+                // Own patterns win: the extending file overrides its base.
+                patterns.push(...collectAliasPatterns(parent, depth + 1))
+            }
+        }
+    }
+
+    return patterns
+}
+
+const findAliasPatterns = (entryPath: string): AliasPattern[] => {
+    for (const manifest of PATH_ALIAS_MANIFESTS) {
+        const found = findUpwards(path.dirname(entryPath), manifest)
+        if (found) {
+            const patterns = collectAliasPatterns(found)
+            if (patterns.length > 0) {
+                return patterns
+            }
+        }
+    }
+    return []
+}
+
+const resolveAliasImport = (specifier: string, patterns: AliasPattern[]): string | undefined => {
+    for (const { prefix, suffix, targets, exact } of patterns) {
+        let wildcard: string | undefined
+        if (exact) {
+            if (specifier !== prefix) {
+                continue
+            }
+            wildcard = ''
+        } else {
+            if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix) ||
+                specifier.length < prefix.length + suffix.length) {
+                continue
+            }
+            wildcard = specifier.slice(prefix.length, specifier.length - (suffix.length || 0))
+        }
+
+        for (const target of targets) {
+            const resolved = probeConfigCandidate(target.replace('*', wildcard))
+            if (resolved) {
+                return resolved
+            }
+        }
+    }
+    return undefined
+}
+
 /**
  * Collect local files a config pulls in (`wdio.shared.conf.ts` style splits), so a
  * captured config is not just a two-line file that spreads a base config we never see.
  *
- * Only RELATIVE specifiers are followed — bare specifiers are npm packages, never the
- * customer's own config. Depth and count are capped so this can never walk a source tree.
+ * Two kinds of specifier are followed: RELATIVE ones, and bare ones that a tsconfig
+ * `paths` alias maps back into the project. Anything else is an npm package. Every
+ * candidate still has to be named like a config (`*.conf.*` / `*.config.*`), so an
+ * alias table pointing at `src/*` cannot turn this into a source-tree crawl, and depth
+ * and count stay capped.
  */
 const collectLocalImports = (entryPath: string, entryContent: string, budget: number): Array<{ filePath: string, content: string }> => {
     const found: Array<{ filePath: string, content: string }> = []
     const seen = new Set([entryPath])
     let frontier: Array<{ filePath: string, content: string }> = [{ filePath: entryPath, content: entryContent }]
+    // Resolved lazily: only an unresolved bare specifier needs the alias table, so a
+    // project that splits its config relatively never reads a tsconfig at all.
+    let aliasPatterns: AliasPattern[] | undefined
 
     for (let depth = 0; depth < CAPTURE_CONFIG_IMPORT_DEPTH && found.length < budget; depth++) {
         const next: Array<{ filePath: string, content: string }> = []
 
         for (const { filePath, content } of frontier) {
-            // `from './x'`, `import './x'`, `import('./x')`, `require('./x')`
-            const importRegex = /(?:from|import|require)\s*\(?\s*['"](\.[^'"]*)['"]/g
+            // `from 'x'`, `import 'x'`, `import('x')`, `require('x')`
+            const importRegex = /(?:from|import|require)\s*\(?\s*['"]([^'"]+)['"]/g
             let match: RegExpExecArray | null
 
             while ((match = importRegex.exec(content)) !== null) {
                 if (found.length >= budget) {
                     break
                 }
-                const resolved = resolveRelativeImport(match[1], filePath)
+                const specifier = match[1]
+                let resolved: string | undefined
+                if (specifier.startsWith('.')) {
+                    resolved = resolveRelativeImport(specifier, filePath)
+                } else {
+                    if (aliasPatterns === undefined) {
+                        aliasPatterns = findAliasPatterns(entryPath)
+                    }
+                    resolved = aliasPatterns.length > 0 ? resolveAliasImport(specifier, aliasPatterns) : undefined
+                }
                 if (!resolved || seen.has(resolved) || resolved.includes(`${path.sep}node_modules${path.sep}`)) {
                     continue
                 }

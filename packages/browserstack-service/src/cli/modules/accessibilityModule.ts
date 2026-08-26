@@ -102,6 +102,39 @@ export default class AccessibilityModule extends BaseModule {
         this.currentHookRunUuid = null
     }
 
+    /**
+     * browser.reloadSession() hands the worker a NEW session id while the driver object, the
+     * wrapped commands and the currently running test all stay exactly the same. The scan gate
+     * is keyed on the session id, so the entry registered for the old id is orphaned the moment
+     * the reload lands: every command issued for the rest of that test looks up a key that does
+     * not exist and is silently not scanned. Nothing re-registers until the NEXT onBeforeTest,
+     * so a test that reloads mid-way loses all coverage after the reload.
+     *
+     * Migrating the entry rather than re-deriving it preserves whatever the gate currently says,
+     * including a stopA11yScanning() the user called before reloading.
+     */
+    onSessionReload(oldSessionId: unknown, newSessionId: unknown) {
+        try {
+            if (!oldSessionId || !newSessionId || oldSessionId === newSessionId) {
+                return
+            }
+            const oldKey = oldSessionId as number
+            const newKey = newSessionId as number
+
+            if (this.accessibilityMap.has(oldKey)) {
+                this.accessibilityMap.set(newKey, this.accessibilityMap.get(oldKey) as boolean)
+                this.accessibilityMap.delete(oldKey)
+                this.logger.debug(`Accessibility scan gate migrated across session reload to ${String(newSessionId)}`)
+            }
+            if (this.LOG_DISABLED_SHOWN.has(oldKey)) {
+                this.LOG_DISABLED_SHOWN.set(newKey, this.LOG_DISABLED_SHOWN.get(oldKey) as boolean)
+                this.LOG_DISABLED_SHOWN.delete(oldKey)
+            }
+        } catch (error) {
+            this.logger.error(`Exception in accessibility onSessionReload: ${error}`)
+        }
+    }
+
     async onBeforeExecute() {
         try {
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
@@ -212,6 +245,22 @@ export default class AccessibilityModule extends BaseModule {
                             this.logger.debug(`Skipping command wrap for ${command.name}: ${wrapError}`)
                         }
                     })
+            }
+
+            // Open the scan gate for the window between driver creation and the first test.
+            // WDIO's own config-level hooks (`before`, `beforeSession`) run here, and they are
+            // not test-framework hooks, so neither onHookStart nor onBeforeTest has fired yet
+            // and the gate would have no entry for this session at all: every command issued
+            // from a config-level before() went unscanned, while still counting as expected
+            // coverage. Real suites do substantial UI work in that hook (app launch, login,
+            // account selection), so the screens it walks through are exactly the ones a
+            // customer expects covered.
+            //
+            // Unconditionally true, matching onHookStart: per-test include/exclude filters need
+            // a test to evaluate and there is none yet, and the following onBeforeTest recomputes
+            // the gate for the test proper.
+            if (this.autoScanning && sessionId !== undefined && sessionId !== null) {
+                this.accessibilityMap.set(sessionId, true)
             }
 
         } catch (error) {

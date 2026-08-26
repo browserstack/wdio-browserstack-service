@@ -166,6 +166,28 @@ class _AccessibilityHandler {
         }
     }
 
+    /**
+     * A reload replaces the session id under a driver object that otherwise carries on
+     * unchanged. `_sessionId` is captured once in `before()`, so without this every later
+     * scan-gate lookup and every results call keeps addressing the session that already ended.
+     */
+    onSessionReload(oldSessionId: string, newSessionId: string) {
+        try {
+            if (!newSessionId || oldSessionId === newSessionId) {
+                return
+            }
+            if (oldSessionId in AccessibilityHandler._a11yScanSessionMap) {
+                AccessibilityHandler._a11yScanSessionMap[newSessionId] = AccessibilityHandler._a11yScanSessionMap[oldSessionId]
+                delete AccessibilityHandler._a11yScanSessionMap[oldSessionId]
+            }
+            if (this._sessionId === oldSessionId || this._sessionId === null) {
+                this._sessionId = newSessionId
+            }
+        } catch (error) {
+            BStackLogger.debug(`Exception while migrating accessibility state across session reload: ${error}`)
+        }
+    }
+
     async before(sessionId: string) {
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.CONFIG_EVENTS.ACCESSIBILITY)
 

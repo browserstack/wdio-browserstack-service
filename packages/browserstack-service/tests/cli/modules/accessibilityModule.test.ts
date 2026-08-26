@@ -199,6 +199,75 @@ describe('AccessibilityModule', () => {
         })
     })
 
+    describe('onBeforeExecute - pre-test scan gate (config-level before hook)', () => {
+        it('opens the scan gate at driver creation so config-level before() commands scan', async () => {
+            // WDIO's config-level before()/beforeSession() are not test-framework hooks, so
+            // neither onHookStart nor onBeforeTest has run when they fire their commands.
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+                if (key.includes('CAPABILITIES')) {
+                    return { browserName: 'chrome' }
+                }
+                return 12345
+            })
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.get(12345 as never)).toBe(true)
+        })
+
+        it('leaves the gate closed when autoScanning is off', async () => {
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+                if (key.includes('CAPABILITIES')) {
+                    return { browserName: 'chrome' }
+                }
+                return 12345
+            })
+            accessibilityModule.autoScanning = false
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.has(12345 as never)).toBe(false)
+        })
+    })
+
+    describe('onSessionReload', () => {
+        it('carries the scan gate over to the new session id', () => {
+            accessibilityModule.accessibilityMap.set('old' as never, true)
+
+            accessibilityModule.onSessionReload('old', 'new')
+
+            expect(accessibilityModule.accessibilityMap.get('new' as never)).toBe(true)
+            expect(accessibilityModule.accessibilityMap.has('old' as never)).toBe(false)
+        })
+
+        it('preserves a gate the user had closed with stopA11yScanning', () => {
+            accessibilityModule.accessibilityMap.set('old' as never, false)
+
+            accessibilityModule.onSessionReload('old', 'new')
+
+            expect(accessibilityModule.accessibilityMap.get('new' as never)).toBe(false)
+        })
+
+        it('does nothing when the old session was never registered', () => {
+            accessibilityModule.onSessionReload('old', 'new')
+
+            expect(accessibilityModule.accessibilityMap.has('new' as never)).toBe(false)
+        })
+
+        it('ignores a no-op reload and missing ids', () => {
+            accessibilityModule.accessibilityMap.set('same' as never, true)
+
+            accessibilityModule.onSessionReload('same', 'same')
+            accessibilityModule.onSessionReload(undefined, 'new')
+            accessibilityModule.onSessionReload('old', undefined)
+
+            expect(accessibilityModule.accessibilityMap.get('same' as never)).toBe(true)
+            expect(accessibilityModule.accessibilityMap.has('new' as never)).toBe(false)
+        })
+    })
+
     describe('onBeforeTest', () => {
         it('should set up accessibility metadata for test', async () => {
             const mockArgs = {

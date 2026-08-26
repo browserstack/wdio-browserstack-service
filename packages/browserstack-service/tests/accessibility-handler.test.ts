@@ -689,6 +689,33 @@ describe('afterTest', () => {
     })
 })
 
+describe('onSessionReload', () => {
+    beforeEach(() => {
+        accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'framework', true, false, accessibilityOpts)
+    })
+
+    it('moves the scan flag and the tracked session id onto the reloaded session', () => {
+        accessibilityHandler['_sessionId'] = 'old-session'
+        AccessibilityHandler['_a11yScanSessionMap']['old-session'] = true
+
+        accessibilityHandler.onSessionReload('old-session', 'new-session')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['new-session']).toBe(true)
+        expect(AccessibilityHandler['_a11yScanSessionMap']['old-session']).toBeUndefined()
+        expect(accessibilityHandler['_sessionId']).toBe('new-session')
+    })
+
+    it('is a no-op for a reload that changes nothing', () => {
+        accessibilityHandler['_sessionId'] = 'same'
+        AccessibilityHandler['_a11yScanSessionMap']['same'] = true
+
+        accessibilityHandler.onSessionReload('same', 'same')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['same']).toBe(true)
+        expect(accessibilityHandler['_sessionId']).toBe('same')
+    })
+})
+
 describe('getIdentifier', () => {
     let getUniqueIdentifierSpy: any
     let getUniqueIdentifierForCucumberSpy: any

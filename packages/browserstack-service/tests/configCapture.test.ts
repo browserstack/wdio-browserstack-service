@@ -513,6 +513,83 @@ describe('collectConfigFilesForUpload', () => {
         expect(files.map((f) => f.name)).toEqual(['wdio.conf.ts'])
     })
 
+    it('follows a bare specifier that a tsconfig paths alias maps back into the project', () => {
+        // The shape that prompted this: a customer whose entry config imports every other
+        // config through an alias, so relative-only following captured the entry alone.
+        write('tsconfig.json', JSON.stringify({
+            compilerOptions: { baseUrl: '.', paths: { '@confs/*': ['configs/*'] } }
+        }))
+        write('wdio.conf.ts', [
+            "import { main } from '@confs/wdio-main.conf'",
+            'export const config = { ...main }'
+        ].join('\n'))
+        write('configs/wdio-main.conf.ts', 'export const main = { maxInstances: 7 }')
+
+        const { files } = collectConfigFilesForUpload({} as never)
+
+        expect(files.map((f) => f.name).sort()).toEqual(['wdio-main.conf.ts', 'wdio.conf.ts'])
+        expect(files.find((f) => f.name === 'wdio-main.conf.ts')!.content).toContain('maxInstances: 7')
+    })
+
+    it('resolves an alias target against baseUrl, not the config directory', () => {
+        write('tsconfig.json', JSON.stringify({
+            compilerOptions: { baseUrl: 'src', paths: { '@confs/*': ['wdio/*'] } }
+        }))
+        write('wdio.conf.ts', "import '@confs/base.conf'\nexport const config = {}")
+        write('src/wdio/base.conf.ts', 'export const base = { maxInstances: 3 }')
+
+        const { files } = collectConfigFilesForUpload({} as never)
+
+        expect(files.map((f) => f.name).sort()).toEqual(['base.conf.ts', 'wdio.conf.ts'])
+    })
+
+    it('reads an alias table out of JSONC (comments and trailing commas)', () => {
+        write('tsconfig.json', [
+            '{',
+            '  // real tsconfigs are commented',
+            '  "compilerOptions": {',
+            '    /* block comment */',
+            '    "baseUrl": ".",',
+            '    "paths": { "@confs/*": ["configs/*"], },',
+            '  },',
+            '}'
+        ].join('\n'))
+        write('wdio.conf.ts', "import '@confs/base.conf'\nexport const config = {}")
+        write('configs/base.conf.ts', 'export const base = {}')
+
+        const { files } = collectConfigFilesForUpload({} as never)
+
+        expect(files.map((f) => f.name).sort()).toEqual(['base.conf.ts', 'wdio.conf.ts'])
+    })
+
+    it('picks up an alias table inherited through extends', () => {
+        write('tsconfig.base.json', JSON.stringify({
+            compilerOptions: { baseUrl: '.', paths: { '@confs/*': ['configs/*'] } }
+        }))
+        write('tsconfig.json', JSON.stringify({ extends: './tsconfig.base.json' }))
+        write('wdio.conf.ts', "import '@confs/base.conf'\nexport const config = {}")
+        write('configs/base.conf.ts', 'export const base = {}')
+
+        const { files } = collectConfigFilesForUpload({} as never)
+
+        expect(files.map((f) => f.name).sort()).toEqual(['base.conf.ts', 'wdio.conf.ts'])
+    })
+
+    it('does not let an alias table widen capture to ordinary source', () => {
+        // `@app/*` -> `src/*` is a normal alias, and following it would archive application
+        // code. The config-name filter is what keeps this a config capture.
+        write('tsconfig.json', JSON.stringify({
+            compilerOptions: { baseUrl: '.', paths: { '@app/*': ['src/*'] } }
+        }))
+        write('wdio.conf.ts', "import { helper } from '@app/helpers/utils'\nexport const config = {}")
+        write('src/helpers/utils.ts', 'export const helper = 1 // ORDINARY_SOURCE')
+
+        const { files } = collectConfigFilesForUpload({} as never)
+
+        expect(files.map((f) => f.name)).toEqual(['wdio.conf.ts'])
+        expect(files.map((f) => f.content).join('\n')).not.toContain('ORDINARY_SOURCE')
+    })
+
     it('de-duplicates archive names when two captured files share a basename', () => {
         write('wdio.conf.ts', 'import "./nested/wdio.conf.ts"\nexport const config = {}')
         write('nested/wdio.conf.ts', 'export const config = {}')

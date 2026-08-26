@@ -85,6 +85,11 @@ export const MAX_CAPTURED_CONFIG_FILES = 6
 export const CAPTURE_CONFIG_IMPORT_DEPTH = 1
 /* How far to walk up from the config dir looking for the project's package.json */
 export const MAX_PACKAGE_JSON_WALK_UP = 5
+/* JSONC manifests read for `compilerOptions.paths`, so a config that imports its siblings
+   through an alias (`@confs/wdio-main.conf`) is followed like a relative import */
+export const PATH_ALIAS_MANIFESTS = ['tsconfig.json', 'jsconfig.json']
+/* How many `extends` links to follow out of an alias manifest (a base plus overrides) */
+export const MAX_ALIAS_MANIFEST_EXTENDS_DEPTH = 3
 
 /**
  * Keys whose line is scrubbed before a config file enters the archive.
