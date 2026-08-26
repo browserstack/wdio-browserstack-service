@@ -902,8 +902,12 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // rest of the reloading test would go unscanned.
             const accessibilityModule = BrowserstackCLI.getInstance().modules?.[AccessibilityModule.MODULE_NAME] as AccessibilityModule | undefined
             accessibilityModule?.onSessionReload(oldSessionId, newSessionId)
+        } else {
+            // Classic path only. The handler is constructed in both flows, but `before(sessionId)`
+            // — which is what records `_sessionId` and populates the scan map — runs only when the
+            // binary is not up, so in the CLI flow this object holds no state to migrate.
+            this._accessibilityHandler?.onSessionReload(oldSessionId, newSessionId)
         }
-        this._accessibilityHandler?.onSessionReload(oldSessionId, newSessionId)
 
         const { setSessionName, setSessionStatus } = this._options
         const ignoreHooksStatus = this._options.testObservabilityOptions?.ignoreHooksStatus === true

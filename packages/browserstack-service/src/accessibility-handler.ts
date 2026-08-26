@@ -180,7 +180,7 @@ class _AccessibilityHandler {
                 AccessibilityHandler._a11yScanSessionMap[newSessionId] = AccessibilityHandler._a11yScanSessionMap[oldSessionId]
                 delete AccessibilityHandler._a11yScanSessionMap[oldSessionId]
             }
-            if (this._sessionId === oldSessionId || this._sessionId === null) {
+            if (this._sessionId === oldSessionId) {
                 this._sessionId = newSessionId
             }
         } catch (error) {

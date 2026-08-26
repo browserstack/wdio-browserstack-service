@@ -191,6 +191,32 @@ describe('onReload()', () => {
         expect(service['_failReasons']).toEqual([])
     })
 
+    it('migrates the classic accessibility state, but only when the binary is not running', async () => {
+        // The handler is constructed in both flows, yet `before(sessionId)` — which records
+        // _sessionId and fills the scan map — runs only in the non-CLI flow, so migrating it
+        // under the CLI would be operating on an object holding no state.
+        service['_browser'] = browser
+        // _printSessionURL does a live fetch, which this suite does not stub for every path —
+        // several of the pre-existing failures in this file are exactly that. Not what is under
+        // test here.
+        const printSpy = vi.spyOn(service as any, '_printSessionURL').mockResolvedValue(undefined)
+        const handler = { onSessionReload: vi.fn() }
+        service['_accessibilityHandler'] = handler as any
+
+        await service.onReload('1', '2')
+        expect(handler.onSessionReload).toHaveBeenCalledWith('1', '2')
+
+        handler.onSessionReload.mockClear()
+        const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance')
+            .mockReturnValue({ isRunning: () => true, modules: {} } as any)
+
+        await service.onReload('1', '2')
+        expect(handler.onSessionReload).not.toHaveBeenCalled()
+
+        getInstanceSpy.mockRestore()
+        printSpy.mockRestore()
+    })
+
     it('should return if no browser object', async () => {
         const updateSpy = vi.spyOn(service, '_update')
         service['_browser'] = undefined
