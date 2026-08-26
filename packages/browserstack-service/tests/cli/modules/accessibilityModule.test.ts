@@ -39,6 +39,19 @@ vi.mock('../../../src/util.js', () => ({
     o11yClassErrorHandler: vi.fn().mockImplementation((cls) => cls)
 }))
 
+// hoisted: vi.mock factories are lifted above module scope, and `getInstance` is a plain
+// function rather than a spy so the suite-wide clearAllMocks/resetAllMocks cannot strip its
+// return value out from under the module constructor.
+const { mockTrackEvent } = vi.hoisted(() => ({ mockTrackEvent: vi.fn() }))
+vi.mock('../../../src/cli/index.js', () => ({
+    BrowserstackCLI: {
+        getInstance: () => ({
+            options: {},
+            getTestFramework: () => ({ trackEvent: mockTrackEvent })
+        })
+    }
+}))
+
 vi.mock('../../../src/cli/grpcClient.js', () => ({
     GrpcClient: {
         getInstance: vi.fn().mockReturnValue({
@@ -109,6 +122,7 @@ describe('AccessibilityModule', () => {
 
     afterEach(() => {
         vi.resetAllMocks()
+        mockTrackEvent.mockReset()
     })
 
     describe('constructor', () => {
@@ -216,6 +230,18 @@ describe('AccessibilityModule', () => {
             expect(accessibilityModule.accessibilityMap.get(12345 as never)).toBe(true)
         })
 
+        it('does not leave a hook run uuid set once the first test starts', async () => {
+            // The config-level hook window is tracked as a real BEFORE_ALL hook (service.before),
+            // so currentHookRunUuid comes from the framework. It must not survive into the test
+            // body: onHookEnd is the only other thing that clears it, and a tracked config hook
+            // whose POST never landed would otherwise stamp every test-body scan as a hook scan.
+            accessibilityModule.currentHookRunUuid = 'config-level-hook-uuid'
+
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'S', test: { title: 't' } })
+
+            expect(accessibilityModule.currentHookRunUuid).toBeNull()
+        })
+
         it('leaves the gate closed when autoScanning is off', async () => {
             vi.mocked(validateCapsWithA11y).mockReturnValue(true)
             vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
@@ -229,6 +255,46 @@ describe('AccessibilityModule', () => {
             await accessibilityModule.onBeforeExecute()
 
             expect(accessibilityModule.accessibilityMap.has(12345 as never)).toBe(false)
+        })
+    })
+
+    describe('pre-test window hook run', () => {
+        // The config-level before() window has no test-framework hook of its own, so scans from it
+        // had no parent. One is opened on demand — and ONLY on demand, or every suite in the fleet
+        // would report a hook it never ran.
+        it('opens a BEFORE_ALL hook run the first time a scan needs a parent, once only', async () => {
+            await accessibilityModule['ensurePreTestHookRun']()
+            await accessibilityModule['ensurePreTestHookRun']()
+
+            const opens = mockTrackEvent.mock.calls.filter((c) => c[1] === HookState.PRE)
+            expect(opens).toHaveLength(1)
+            expect(opens[0][0]).toBe(TestFrameworkState.BEFORE_ALL)
+            expect((opens[0][2] as { test: { title: string } }).test.title).toContain('pre-test window')
+        })
+
+        it('opens nothing while a framework hook is already the scan parent', async () => {
+            accessibilityModule.currentHookRunUuid = 'framework-hook-uuid'
+
+            await accessibilityModule['ensurePreTestHookRun']()
+
+            expect(mockTrackEvent).not.toHaveBeenCalled()
+        })
+
+        it('closes the hook run when the first test starts', async () => {
+            await accessibilityModule['ensurePreTestHookRun']()
+            mockTrackEvent.mockClear()
+
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'S', test: { title: 't' } })
+
+            const closes = mockTrackEvent.mock.calls.filter((c) => c[1] === HookState.POST)
+            expect(closes).toHaveLength(1)
+            expect((closes[0][2] as { result: { passed: boolean } }).result.passed).toBe(true)
+        })
+
+        it('never closes a hook run it did not open', async () => {
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'S', test: { title: 't' } })
+
+            expect(mockTrackEvent.mock.calls.filter((c) => c[1] === HookState.POST)).toHaveLength(0)
         })
     })
 
