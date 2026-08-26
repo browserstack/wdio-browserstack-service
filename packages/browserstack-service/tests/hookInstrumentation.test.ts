@@ -2,7 +2,8 @@ import { describe, expect, it, beforeEach, vi } from 'vitest'
 
 vi.mock('../src/bstackLogger.js', () => ({ BStackLogger: { debug: vi.fn() } }))
 
-import { instrumentBrowserContextHooks, getPreTestWindowFailure, getHookFailure, getActiveHookName } from '../src/hookInstrumentation.js'
+import { BStackLogger } from '../src/bstackLogger.js'
+import { instrumentBrowserContextHooks, getPreTestWindowFailure, getHookFailure, getActiveHookName, BROWSER_CONTEXT_HOOKS } from '../src/hookInstrumentation.js'
 
 describe('pre-test window failures', () => {
     beforeEach(() => {
@@ -76,5 +77,28 @@ describe('active hook name', () => {
         await expect((config as { before: Array<() => Promise<void>> }).before[0]()).rejects.toThrow('BOOM')
 
         expect(getActiveHookName()).toBeUndefined()
+    })
+})
+
+describe('coverage of the patched set', () => {
+    it('logs a start and a finish for every hook in BROWSER_CONTEXT_HOOKS', async () => {
+        // Guards the list against drift: adding a hook name without it actually being wrapped
+        // would otherwise show up only as a silence in a device log.
+        const config = Object.fromEntries(
+            BROWSER_CONTEXT_HOOKS.map((name) => [name, [async () => undefined]])
+        ) as unknown as never
+
+        instrumentBrowserContextHooks(config)
+        vi.mocked(BStackLogger.debug).mockClear()
+
+        for (const name of BROWSER_CONTEXT_HOOKS) {
+            await (config as unknown as Record<string, Array<() => Promise<void>>>)[name][0]()
+        }
+
+        const logged = vi.mocked(BStackLogger.debug).mock.calls.map((c) => String(c[0]))
+        for (const name of BROWSER_CONTEXT_HOOKS) {
+            expect(logged.some((l) => l.includes(`[hook-window] ${name}#0`) && l.includes('started'))).toBe(true)
+            expect(logged.some((l) => l.includes(`[hook-window] ${name}#0`) && l.includes('finished'))).toBe(true)
+        }
     })
 })
