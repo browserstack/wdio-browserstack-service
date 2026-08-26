@@ -53,8 +53,14 @@ vi.mock('../../../src/cli/index.js', () => ({
     }
 }))
 
-const { mockGetHookFailure } = vi.hoisted(() => ({ mockGetHookFailure: vi.fn() }))
-vi.mock('../../../src/hookInstrumentation.js', () => ({ getPreTestWindowFailure: mockGetHookFailure }))
+const { mockGetHookFailure, mockGetActiveHookName } = vi.hoisted(() => ({
+    mockGetHookFailure: vi.fn(),
+    mockGetActiveHookName: vi.fn()
+}))
+vi.mock('../../../src/hookInstrumentation.js', () => ({
+    getPreTestWindowFailure: mockGetHookFailure,
+    getActiveHookName: mockGetActiveHookName
+}))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({
     GrpcClient: {
@@ -255,6 +261,26 @@ describe('AccessibilityModule', () => {
             expect(opens).toHaveLength(1)
             expect(opens[0][0]).toBe(TestFrameworkState.BEFORE_ALL)
             expect((opens[0][2] as { test: { title: string } }).test.title).toContain('pre-test window')
+        })
+
+        it('names the hook run after the hook that was executing, not a fixed label', async () => {
+            // beforeSuite runs in the same window as before(), so a fixed 'before' label would
+            // name the wrong hook whenever the first scan lands in beforeSuite.
+            mockGetActiveHookName.mockReturnValue('beforeSuite')
+
+            await accessibilityModule['ensurePreTestHookRun']()
+
+            const open = mockTrackEvent.mock.calls.find((c) => c[1] === HookState.PRE)
+            expect((open![2] as { test: { title: string } }).test.title).toBe('wdio beforeSuite() hook (pre-test window)')
+        })
+
+        it('falls back to a neutral name when no hook is identifiable', async () => {
+            mockGetActiveHookName.mockReturnValue(undefined)
+
+            await accessibilityModule['ensurePreTestHookRun']()
+
+            const open = mockTrackEvent.mock.calls.find((c) => c[1] === HookState.PRE)
+            expect((open![2] as { test: { title: string } }).test.title).toBe('wdio config-level hook (pre-test window)')
         })
 
         it('reports the hook run as FAILED when the config-level before() threw', async () => {

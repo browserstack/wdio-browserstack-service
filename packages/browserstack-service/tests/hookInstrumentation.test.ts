@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, vi } from 'vitest'
 
 vi.mock('../src/bstackLogger.js', () => ({ BStackLogger: { debug: vi.fn() } }))
 
-import { instrumentBrowserContextHooks, getPreTestWindowFailure, getHookFailure } from '../src/hookInstrumentation.js'
+import { instrumentBrowserContextHooks, getPreTestWindowFailure, getHookFailure, getActiveHookName } from '../src/hookInstrumentation.js'
 
 describe('pre-test window failures', () => {
     beforeEach(() => {
@@ -49,5 +49,32 @@ describe('pre-test window failures', () => {
         await (config as { before: Array<() => Promise<unknown>> }).before[0]()
 
         expect(getPreTestWindowFailure()).toBeUndefined()
+    })
+})
+
+describe('active hook name', () => {
+    it('reports which hook is executing, and nothing once it has finished', async () => {
+        const seen: Array<string | undefined> = []
+        const config = {
+            before: [async () => { seen.push(getActiveHookName()) }],
+            beforeSuite: [async () => { seen.push(getActiveHookName()) }]
+        } as never
+
+        instrumentBrowserContextHooks(config)
+        const c = config as unknown as { before: Array<() => Promise<void>>, beforeSuite: Array<() => Promise<void>> }
+        await c.before[0]()
+        await c.beforeSuite[0]()
+
+        expect(seen).toEqual(['before', 'beforeSuite'])
+        expect(getActiveHookName()).toBeUndefined()
+    })
+
+    it('unwinds even when the hook throws', async () => {
+        const config = { before: [async () => { throw new Error('BOOM') }] } as never
+
+        instrumentBrowserContextHooks(config)
+        await expect((config as { before: Array<() => Promise<void>> }).before[0]()).rejects.toThrow('BOOM')
+
+        expect(getActiveHookName()).toBeUndefined()
     })
 })

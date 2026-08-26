@@ -38,6 +38,18 @@ const INSTRUMENTED = Symbol('bstackHookInstrumented')
  */
 const hookFailures: Record<string, string> = {}
 
+/**
+ * Names of the hooks currently executing, innermost last.
+ *
+ * A stack rather than a single value because WDIO fires same-named handlers concurrently
+ * (`Promise.all`) and nests hook kinds — so "which hook am I inside right now" is only answerable
+ * at the moment it is asked. Anything reporting on a hook window uses this to name it after the
+ * hook that was actually running, instead of a fixed label that may name the wrong one.
+ */
+const activeHooks: string[] = []
+
+export const getActiveHookName = (): string | undefined => activeHooks[activeHooks.length - 1]
+
 export const getHookFailure = (hookName: string): string | undefined => hookFailures[hookName]
 
 /**
@@ -88,16 +100,24 @@ const instrument = (hookName: string, index: number, fn: HookFn): HookFn => {
     const recordFailure = (error: unknown) => {
         hookFailures[hookName] = (error as Error)?.message || String(error)
     }
+    const leave = () => {
+        const at = activeHooks.lastIndexOf(hookName)
+        if (at !== -1) {
+            activeHooks.splice(at, 1)
+        }
+    }
     const wrapped = function (this: unknown, ...args: unknown[]) {
         const startedAt = Date.now()
         const finish = (outcome: string) => BStackLogger.debug(`[hook-window] ${label} ${outcome} in ${Date.now() - startedAt}ms`)
 
         BStackLogger.debug(`[hook-window] ${label} started`)
+        activeHooks.push(hookName)
         let result: unknown
         try {
             result = fn.apply(this, args)
         } catch (error) {
             recordFailure(error)
+            leave()
             finish(`threw: ${(error as Error)?.message}`)
             throw error
         }
@@ -105,17 +125,20 @@ const instrument = (hookName: string, index: number, fn: HookFn): HookFn => {
         if (result && typeof (result as Promise<unknown>).then === 'function') {
             return (result as Promise<unknown>).then(
                 (value) => {
+                    leave()
                     finish('finished')
                     return value
                 },
                 (error) => {
                     recordFailure(error)
+                    leave()
                     finish(`rejected: ${(error as Error)?.message}`)
                     throw error
                 }
             )
         }
 
+        leave()
         finish('finished')
         return result
     } as HookFn
@@ -152,6 +175,7 @@ export function instrumentBrowserContextHooks(config?: Options.Testrunner): void
         for (const hookName of BROWSER_CONTEXT_HOOKS) {
             delete hookFailures[hookName]
         }
+        activeHooks.length = 0
         for (const hookName of BROWSER_CONTEXT_HOOKS) {
             const handlers = record[hookName]
             if (!Array.isArray(handlers) || handlers.length === 0) {

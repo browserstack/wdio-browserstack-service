@@ -13,7 +13,7 @@ import accessibilityScripts from '../../scripts/accessibility-scripts.js'
 import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import { BROWSERSTACK_WDIO_CONFIG_FILE_PATH } from '../../constants.js'
-import { getPreTestWindowFailure } from '../../hookInstrumentation.js'
+import { getActiveHookName, getPreTestWindowFailure } from '../../hookInstrumentation.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
 import PerformanceTester from '../../instrumentation/performance/performance-tester.js'
@@ -50,6 +50,10 @@ export default class AccessibilityModule extends BaseModule {
     // overwhelming majority of suites. 'attempted' is distinct from 'open' so a failed PRE is
     // neither retried on every command nor closed by a POST that would pair with nothing.
     private preTestHookState: 'idle' | 'attempted' | 'open' | 'closed' = 'idle'
+    // The config hook that was executing when the window was opened. Captured once: the binary
+    // takes the hook's name from the record pushed at PRE, and by POST time a different hook is
+    // running, so recomputing it there would describe the wrong one.
+    private preTestHookLabel: string | undefined
 
     constructor(accessibilityConfig: Accessibility, isNonBstackA11y: boolean) {
         super()
@@ -127,6 +131,7 @@ export default class AccessibilityModule extends BaseModule {
         }
         // Mark before awaiting: concurrent commands must not each open their own hook run.
         this.preTestHookState = 'attempted'
+        this.preTestHookLabel = getActiveHookName()
         try {
             const framework = BrowserstackCLI.getInstance()?.getTestFramework()
             if (!framework) {
@@ -165,10 +170,16 @@ export default class AccessibilityModule extends BaseModule {
      * wdio config path onto the environment by this point.
      */
     private preTestHookArgs() {
+        // Named after the hook that was actually running when the window opened — `before`,
+        // `beforeSuite`, whatever it was — because a fixed label would name the wrong hook half
+        // the time, and this name is what a person reads on the dashboard.
+        const hook = this.preTestHookLabel
         return {
             test: {
                 file: process.env[BROWSERSTACK_WDIO_CONFIG_FILE_PATH] || process.cwd(),
-                title: 'wdio config-level before hook (pre-test window)'
+                title: hook
+                    ? `wdio ${hook}() hook (pre-test window)`
+                    : 'wdio config-level hook (pre-test window)'
             }
         }
     }
