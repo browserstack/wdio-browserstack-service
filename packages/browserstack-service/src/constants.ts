@@ -93,6 +93,8 @@ export const WDIO_HOOK_NAMES = [
     'onComplete', 'onReload', 'beforeCommand', 'afterCommand', 'beforeFeature', 'afterFeature',
     'beforeScenario', 'afterScenario', 'beforeStep', 'afterStep'
 ] as const
+/* Identifiers whose use inside a hook changes how a session behaves, so worth recording */
+export const TRACKED_HOOK_IDENTIFIERS = ['reloadSession'] as const
 /* Per-hook cap: enough for a real hook, small enough that the log stays readable */
 export const MAX_HOOK_SOURCE_CHARS = 8000
 /* Names the hooks-with-reloadSession list is published under, for the worker processes */

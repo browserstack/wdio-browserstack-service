@@ -32,7 +32,7 @@ describe('extractUserHookSources', () => {
             '}'
         ].join('\n'))
 
-        const sources = extractUserHookSources(file)
+        const { sources } = extractUserHookSources(file)
 
         expect(Object.keys(sources)).toEqual(['before'])
         expect(sources.before).toContain('mobile: startActivity')
@@ -47,7 +47,7 @@ describe('extractUserHookSources', () => {
             '}'
         ].join('\n'))
 
-        const sources = extractUserHookSources(file)
+        const { sources } = extractUserHookSources(file)
 
         expect(sources.beforeTest).toContain('test.title')
         expect(sources.afterSuite).toContain('deleteSession')
@@ -64,7 +64,7 @@ describe('extractUserHookSources', () => {
             '}'
         ].join('\n'))
 
-        const sources = extractUserHookSources(file)
+        const { sources } = extractUserHookSources(file)
 
         expect(sources.beforeTest).toContain('console.log(test.title)')
     })
@@ -80,7 +80,7 @@ describe('extractUserHookSources', () => {
             '}'
         ].join('\n'))
 
-        const sources = extractUserHookSources(file)
+        const { sources } = extractUserHookSources(file)
 
         expect(sources.before).toContain('reloadSession')
         expect(sources.before.trim().endsWith('}')).toBe(true)
@@ -93,14 +93,57 @@ describe('extractUserHookSources', () => {
             '}'
         ].join('\n'))
 
-        const sources = extractUserHookSources(file)
+        const { sources } = extractUserHookSources(file)
 
         expect(Object.keys(sources)).toEqual(['beforeTest'])
     })
 
     it('returns nothing for a config that declares no hooks, and never throws on a bad path', () => {
-        expect(extractUserHookSources(write('export const config = { specs: ["./a.js"] }'))).toEqual({})
-        expect(extractUserHookSources(path.join(tmpRoot, 'missing.conf.ts'))).toEqual({})
+        expect(extractUserHookSources(write('export const config = { specs: ["./a.js"] }')).sources).toEqual({})
+        expect(extractUserHookSources(path.join(tmpRoot, 'missing.conf.ts')).sources).toEqual({})
+    })
+})
+
+describe('redaction of captured hook sources', () => {
+    it('redacts credentials the logger\'s own scrub misses', () => {
+        // BStackLogger.redactCredentials only knows user/key/userName/accessKey, so these six
+        // shapes reached the uploaded log in the clear before this went through
+        // redactSensitiveContent.
+        const file = write([
+            'export const config = {',
+            '    before: async function () {',
+            '        const authToken = "SENTINEL_authToken_value"',
+            '        const password = "SENTINEL_password_value"',
+            '        const clientSecret = "SENTINEL_clientSecret_value"',
+            '        const AWS_SECRET_ACCESS_KEY = "SENTINEL_awsSecret_value"',
+            '        await browser.url("https://admin:SENTINEL_userinfo@internal.corp/login")',
+            '        await browser.execute("login", { token: "SENTINEL_token_value" })',
+            '    }',
+            '}'
+        ].join('\n'))
+
+        const { sources } = extractUserHookSources(file)
+
+        for (const secret of ['SENTINEL_authToken_value', 'SENTINEL_password_value', 'SENTINEL_clientSecret_value', 'SENTINEL_awsSecret_value', 'SENTINEL_userinfo', 'SENTINEL_token_value']) {
+            expect(sources.before).not.toContain(secret)
+        }
+        expect(sources.before).toContain('[REDACTED]')
+    })
+
+    it('still reports reloadSession when its line carries credentials', () => {
+        // Redaction replaces the whole line, so scanning the redacted copy would lose this call.
+        const file = write([
+            'export const config = {',
+            '    before: async function () {',
+            '        await browser.reloadSession({ userName: "u", accessKey: "k" })',
+            '    }',
+            '}'
+        ].join('\n'))
+
+        const { sources, identifiers } = extractUserHookSources(file)
+
+        expect(identifiers.reloadSession).toEqual(['before'])
+        expect(sources.before).not.toContain('"k"')
     })
 })
 
