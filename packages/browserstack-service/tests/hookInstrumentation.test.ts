@@ -1,9 +1,9 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 
 vi.mock('../src/bstackLogger.js', () => ({ BStackLogger: { debug: vi.fn() } }))
 
 import { BStackLogger } from '../src/bstackLogger.js'
-import { instrumentBrowserContextHooks, getPreTestWindowFailure, getHookFailure, getActiveHookName, BROWSER_CONTEXT_HOOKS } from '../src/hookInstrumentation.js'
+import { instrumentBrowserContextHooks, getPreTestWindowFailure, getActiveHookName, BROWSER_CONTEXT_HOOKS } from '../src/hookInstrumentation.js'
 
 describe('pre-test window failures', () => {
     beforeEach(() => {
@@ -17,7 +17,6 @@ describe('pre-test window failures', () => {
         instrumentBrowserContextHooks(config)
         await expect((config as { before: Array<() => Promise<void>> }).before[0]()).rejects.toThrow('BOOM from before')
 
-        expect(getHookFailure('before')).toBe('BOOM from before')
         expect(getPreTestWindowFailure()).toBe('before: BOOM from before')
     })
 
@@ -100,5 +99,65 @@ describe('coverage of the patched set', () => {
             expect(logged.some((l) => l.includes(`[hook-window] ${name}#0`) && l.includes('started'))).toBe(true)
             expect(logged.some((l) => l.includes(`[hook-window] ${name}#0`) && l.includes('finished'))).toBe(true)
         }
+    })
+})
+
+describe('instrumentation cannot break the hook it wraps', () => {
+    afterEach(() => {
+        vi.mocked(BStackLogger.debug).mockReset()
+    })
+
+    it('runs the handler even when our own logging throws', async () => {
+        vi.mocked(BStackLogger.debug).mockImplementation(() => { throw new Error('logger is gone') })
+        let ran = false
+        const config = { before: [async () => { ran = true; return 'value' }] } as never
+
+        instrumentBrowserContextHooks(config)
+        const handler = (config as unknown as { before: Array<() => Promise<unknown>> }).before[0]
+
+        await expect(handler()).resolves.toBe('value')
+        expect(ran).toBe(true)
+    })
+
+    it('still propagates the handler\'s own error, unchanged', async () => {
+        const boom = new Error('user hook failed')
+        const config = { before: [async () => { throw boom }] } as never
+
+        instrumentBrowserContextHooks(config)
+        const handler = (config as unknown as { before: Array<() => Promise<void>> }).before[0]
+
+        await expect(handler()).rejects.toBe(boom)
+    })
+
+    it('does not choke on a return value with a hostile then getter', () => {
+        const hostile = { get then() { throw new Error('no touching') } }
+        const config = { before: [() => hostile] } as never
+
+        instrumentBrowserContextHooks(config)
+        const handler = (config as unknown as { before: Array<() => unknown> }).before[0]
+
+        expect(handler()).toBe(hostile)
+    })
+
+    it('keeps instrumenting the remaining handlers when one cannot be wrapped', () => {
+        // reading `.name` is enough to break wrapping for this one
+        const hostile = new Proxy(() => 'hostile', {
+            get(target, key) {
+                if (key === 'name') {
+                    throw new Error('no name for you')
+                }
+                return Reflect.get(target, key)
+            }
+        })
+        const normal = () => 'normal'
+        const config = { before: [hostile, normal] } as never
+
+        instrumentBrowserContextHooks(config)
+        const handlers = (config as unknown as { before: Array<() => string> }).before
+
+        expect(handlers[0]).toBe(hostile)                 // handed back untouched
+        expect(handlers[1]).not.toBe(normal)              // the one after it still got wrapped
+        expect(handlers[0]()).toBe('hostile')
+        expect(handlers[1]()).toBe('normal')
     })
 })

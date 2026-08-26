@@ -41,18 +41,12 @@ export default class AccessibilityModule extends BaseModule {
     // Any scan fired while this is set is stamped with it as thHookRunUuid so the backend
     // (SeleniumHub appAllyScan → hook_run_uuid) can reconcile the scan onto the wrapping test.
     currentHookRunUuid: string | null = null
-    // Lifecycle of the hook run that carries scans fired BEFORE any test exists — i.e. from
-    // WDIO's config-level before()/beforeSession(), which are not test-framework hooks and get no
-    // hook run of their own.
-    //
-    // Opened LAZILY, on the first such scan, and never otherwise: a suite with no config-level
-    // hook (or one that touches no driver) must not report a phantom hook to TRA, and that is the
-    // overwhelming majority of suites. 'attempted' is distinct from 'open' so a failed PRE is
-    // neither retried on every command nor closed by a POST that would pair with nothing.
+    // Hook run covering scans fired before any test exists (WDIO's config-level hooks, which get
+    // no hook run of their own). 'attempted' is distinct from 'open' so a failed PRE is neither
+    // retried per command nor closed by a POST that would pair with nothing.
     private preTestHookState: 'idle' | 'attempted' | 'open' | 'closed' = 'idle'
-    // The config hook that was executing when the window was opened. Captured once: the binary
-    // takes the hook's name from the record pushed at PRE, and by POST time a different hook is
-    // running, so recomputing it there would describe the wrong one.
+    // Captured at PRE: the binary names a hook from the record pushed there, and by POST a
+    // different hook is running.
     private preTestHookLabel: string | undefined
 
     constructor(accessibilityConfig: Accessibility, isNonBstackA11y: boolean) {
@@ -118,21 +112,18 @@ export default class AccessibilityModule extends BaseModule {
     }
 
     /**
-     * Open a BEFORE_ALL hook run for the pre-test window, if one is warranted.
-     *
-     * Called from the scan path, so it fires only when there is actually a scan needing a parent.
-     * The framework stamps the run uuid (KEY_HOOK_ID) and this module's own onHookStart observer
-     * picks it up, which is what puts thHookRunUuid on the scan; the binary turns the same event
-     * into HookRunStarted, so App-A11y's lookup of that uuid in BTCER resolves.
+     * Open a BEFORE_ALL hook run for the pre-test window, on demand from the scan path — so a
+     * suite with no config-level hook reports nothing extra. The framework stamps the uuid,
+     * onHookStart picks it up onto the scan, and the binary emits HookRunStarted for it.
      */
     private async ensurePreTestHookRun() {
         if (this.preTestHookState !== 'idle' || this.currentHookRunUuid !== null) {
             return
         }
-        // Mark before awaiting: concurrent commands must not each open their own hook run.
+        // marked before awaiting: concurrent commands must not each open their own hook run
         this.preTestHookState = 'attempted'
-        this.preTestHookLabel = getActiveHookName()
         try {
+            this.preTestHookLabel = getActiveHookName()
             const framework = BrowserstackCLI.getInstance()?.getTestFramework()
             if (!framework) {
                 return
@@ -152,10 +143,8 @@ export default class AccessibilityModule extends BaseModule {
         this.preTestHookState = 'closed'
         try {
             const framework = BrowserstackCLI.getInstance()?.getTestFramework()
-            // A config-level before() that threw must not be reported green. WDIO swallows the
-            // error (executeHooksWithArgs resolves WITH it rather than rejecting), so the run
-            // stays exit-0 and every reporter shows success — reporting `passed` here would make
-            // the dashboard actively assert something false rather than merely omit it.
+            // WDIO swallows a throwing config hook, so nothing else marks it failed; reporting
+            // `passed` here would assert something false rather than merely omit it.
             const failure = getPreTestWindowFailure()
             const result = failure ? { passed: false, error: { message: failure } } : { passed: true }
             await framework?.trackEvent(TestFrameworkState.BEFORE_ALL, HookState.POST, { ...this.preTestHookArgs(), result })
@@ -164,15 +153,8 @@ export default class AccessibilityModule extends BaseModule {
         }
     }
 
-    /**
-     * The binary runs path.relative() over this file path when building the hook record, so an
-     * absent path would throw there and drop the event. configCapture has already resolved the
-     * wdio config path onto the environment by this point.
-     */
+    /** The binary runs path.relative() over `file`, so an absent path would drop the event. */
     private preTestHookArgs() {
-        // Named after the hook that was actually running when the window opened — `before`,
-        // `beforeSuite`, whatever it was — because a fixed label would name the wrong hook half
-        // the time, and this name is what a person reads on the dashboard.
         const hook = this.preTestHookLabel
         return {
             test: {
@@ -345,17 +327,10 @@ export default class AccessibilityModule extends BaseModule {
                     })
             }
 
-            // Open the scan gate for the window between driver creation and the first test.
-            // WDIO's own config-level hooks (`before`, `beforeSession`) run here, and they are not
-            // test-framework hooks, so neither onHookStart nor onBeforeTest has fired yet and the
-            // gate would have no entry for this session at all: every command issued from a
-            // config-level before() went unscanned while still counting as expected coverage. Real
-            // suites do substantial UI work there (app launch, login, account selection), so those
-            // screens are exactly the ones a customer expects covered.
-            //
-            // Unconditionally true, matching onHookStart: per-test include/exclude filters need a
-            // test to evaluate and there is none yet, and the following onBeforeTest recomputes the
-            // gate for the test proper.
+            // Gate for the window between driver creation and the first test: WDIO's config-level
+            // hooks run there, and being no test-framework hooks, nothing else registers the
+            // session — so their commands went unscanned while still counting as expected
+            // coverage. Unconditional like onHookStart; onBeforeTest recomputes it per test.
             const sessionId = this.currentSessionId()
             if (this.autoScanning && sessionId !== undefined && sessionId !== null) {
                 this.accessibilityMap.set(sessionId, true)
@@ -404,10 +379,8 @@ export default class AccessibilityModule extends BaseModule {
     async onBeforeTest(args: Record<string, unknown>) {
         try {
             this.logger.debug('Accessibility before test hook. Starting accessibility scan for this test case.')
-            // The pre-test window is over: close its hook run (if one was opened) before clearing
-            // the uuid, so the POST pairs against the record the PRE pushed. onHookEnd is the only
-            // other thing that clears this, so without the clear a spec with no framework hooks
-            // would stamp every test-body scan with the pre-test hook uuid.
+            // Window over: close its hook run before clearing the uuid, or a spec with no
+            // framework hooks would stamp every test-body scan as a hook scan.
             await this.closePreTestHookRun()
             this.currentHookRunUuid = null
             const suiteTitle = (typeof args.suiteTitle === 'string' ? args.suiteTitle : '') || ''
