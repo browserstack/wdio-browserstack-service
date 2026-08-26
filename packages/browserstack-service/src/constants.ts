@@ -85,11 +85,18 @@ export const MAX_CAPTURED_CONFIG_FILES = 6
 export const CAPTURE_CONFIG_IMPORT_DEPTH = 1
 /* How far to walk up from the config dir looking for the project's package.json */
 export const MAX_PACKAGE_JSON_WALK_UP = 5
-/* JSONC manifests read for `compilerOptions.paths`, so a config that imports its siblings
-   through an alias (`@confs/wdio-main.conf`) is followed like a relative import */
-export const PATH_ALIAS_MANIFESTS = ['tsconfig.json', 'jsconfig.json']
-/* How many `extends` links to follow out of an alias manifest (a base plus overrides) */
-export const MAX_ALIAS_MANIFEST_EXTENDS_DEPTH = 3
+
+/* WDIO hook names read out of the config file for diagnostics, in lifecycle order */
+export const WDIO_HOOK_NAMES = [
+    'onPrepare', 'onWorkerStart', 'onWorkerEnd', 'beforeSession', 'before', 'beforeSuite',
+    'beforeHook', 'afterHook', 'beforeTest', 'afterTest', 'afterSuite', 'after', 'afterSession',
+    'onComplete', 'onReload', 'beforeCommand', 'afterCommand', 'beforeFeature', 'afterFeature',
+    'beforeScenario', 'afterScenario', 'beforeStep', 'afterStep'
+] as const
+/* Per-hook cap: enough for a real hook, small enough that the log stays readable */
+export const MAX_HOOK_SOURCE_CHARS = 8000
+/* Names the hooks-with-reloadSession list is published under, for the worker processes */
+export const BROWSERSTACK_HOOKS_WITH_RELOAD_SESSION = 'BROWSERSTACK_HOOKS_WITH_RELOAD_SESSION'
 
 /**
  * Keys whose line is scrubbed before a config file enters the archive.

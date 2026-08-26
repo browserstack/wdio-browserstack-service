@@ -24,7 +24,6 @@ import CustomTagsHandler from './custom-tags-handler.js'
 import { classifyMochaHookTitle, setCurrentMochaHookWindow } from './customTags.js'
 import type TestHubModule from './cli/modules/testHubModule.js'
 import { BStackLogger } from './bstackLogger.js'
-import { instrumentBrowserContextHooks } from './hookInstrumentation.js'
 import PercyHandler from './Percy/Percy-Handler.js'
 import Listener from './testOps/listener.js'
 import { saveWorkerData } from './data-store.js'
@@ -119,10 +118,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // strict 'true' string compare and would miss a numeric `bail: 1`
         const bailOpt: unknown = this._config?.mochaOpts?.bail
         this._mochaBail = this._config?.framework === 'mocha' && Boolean(bailOpt) && !isFalse(bailOpt)
-
-        // Make the boundaries of the user's own session-scoped config hooks observable. Logging
-        // only; patched here because the runner reads these arrays after the service is built.
-        instrumentBrowserContextHooks(this._config)
 
         PerformanceTester.startMonitoring('performance-report-service.csv')
         if (shouldProcessEventForTesthub('')) {
