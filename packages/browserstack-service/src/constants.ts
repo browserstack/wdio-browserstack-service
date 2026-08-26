@@ -86,20 +86,6 @@ export const CAPTURE_CONFIG_IMPORT_DEPTH = 1
 /* How far to walk up from the config dir looking for the project's package.json */
 export const MAX_PACKAGE_JSON_WALK_UP = 5
 
-/* WDIO hook names read out of the config file for diagnostics, in lifecycle order */
-export const WDIO_HOOK_NAMES = [
-    'onPrepare', 'onWorkerStart', 'onWorkerEnd', 'beforeSession', 'before', 'beforeSuite',
-    'beforeHook', 'afterHook', 'beforeTest', 'afterTest', 'afterSuite', 'after', 'afterSession',
-    'onComplete', 'onReload', 'beforeCommand', 'afterCommand', 'beforeFeature', 'afterFeature',
-    'beforeScenario', 'afterScenario', 'beforeStep', 'afterStep'
-] as const
-/* Identifiers whose use inside a hook changes how a session behaves, so worth recording */
-export const TRACKED_HOOK_IDENTIFIERS = ['reloadSession'] as const
-/* Per-hook cap: enough for a real hook, small enough that the log stays readable */
-export const MAX_HOOK_SOURCE_CHARS = 8000
-/* Names the hooks-with-reloadSession list is published under, for the worker processes */
-export const BROWSERSTACK_HOOKS_WITH_RELOAD_SESSION = 'BROWSERSTACK_HOOKS_WITH_RELOAD_SESSION'
-
 /**
  * Keys whose line is scrubbed before a config file enters the archive.
  * `user` / `key` are WDIO's own top-level credential options, hence the bare entries.

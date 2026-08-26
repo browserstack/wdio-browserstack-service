@@ -26,8 +26,7 @@ import {
     BROWSERSTACK_OBSERVABILITY,
     WDIO_NAMING_PREFIX,
     BROWSERSTACK_TEST_REPORTING,
-    TEST_REPORTING_PROJECT_NAME,
-    BROWSERSTACK_HOOKS_WITH_RELOAD_SESSION
+    TEST_REPORTING_PROJECT_NAME
 } from './constants.js'
 import {
     launchTestSession,
@@ -53,7 +52,6 @@ import {
 } from './util.js'
 import CrashReporter from './crash-reporter.js'
 import { initWdioConfigPath, isAutoCaptureLogsDisabled, publishAutoCaptureDisabled } from './configCapture.js'
-import { extractUserHookSources, type HookSources } from './hookSources.js'
 import { finalizeOrphanedRuns } from './testOps/openRunsJournal.js'
 import { BStackLogger } from './bstackLogger.js'
 import { PercyLogger } from './Percy/PercyLogger.js'
@@ -75,7 +73,6 @@ type BrowserstackLocal = BrowserstackLocalLauncher.Local & {
 }
 
 export default class BrowserstackLauncherService implements Services.ServiceInstance {
-    private _hookSources: HookSources = {}
     browserstackLocal?: BrowserstackLocal
     private _buildName?: string
     private _projectName?: string
@@ -115,8 +112,6 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         if (!isUndefined(process.env[TEST_REPORTING_PROJECT_NAME])){
             process.env.TEST_OBSERVABILITY_PROJECT_NAME = process.env[TEST_REPORTING_PROJECT_NAME]
         }
-
-        this._hookSources = this._captureHookSources()
 
         if (!isUndefined(process.env.TEST_REPORTING_BUILD_NAME)) {
             process.env.TEST_OBSERVABILITY_BUILD_NAME = process.env.TEST_REPORTING_BUILD_NAME
@@ -254,52 +249,6 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_PRE_TEST)
-    /**
-     * Log the source of the hooks the user's config declares.
-     *
-     * Debugging an SDK issue that lives in a customer's hook currently means guessing: the
-     * uploaded logs carry the config file only when it is the entry file, and the parsed hooks
-     * are bound functions, which stringify to `[native code]`. Reading them out of the file puts
-     * the actual bodies in the log next to the failure.
-     *
-     * Also records which hooks call `reloadSession`, published on the environment so a worker can
-     * read it: a reload inside a hook changes the session under the driver, which is the shape
-     * behind several session-attribution defects.
-     */
-    private _captureHookSources (): HookSources {
-        try {
-            const { configPath } = initWdioConfigPath(this._config)
-            if (!configPath) {
-                return {}
-            }
-
-            const { sources, identifiers } = extractUserHookSources(configPath)
-            const declared = Object.keys(sources)
-            if (declared.length === 0) {
-                BStackLogger.debug('user hook sources: none declared in the config file')
-                return sources
-            }
-
-            BStackLogger.debug(`user hook sources (${declared.length}): ${declared.join(', ')}`)
-            for (const [hookName, source] of Object.entries(sources)) {
-                BStackLogger.debug(`user hook source [${hookName}]:\n${source}`)
-            }
-
-            // Read from `identifiers`, not from the redacted sources: redaction drops a whole
-            // line, so a reloadSession call sharing a line with credentials would vanish.
-            const reloadHooks = identifiers.reloadSession || []
-            if (reloadHooks.length > 0) {
-                BStackLogger.debug(`reloadSession used in hooks: ${reloadHooks.join(',')}`)
-                process.env[BROWSERSTACK_HOOKS_WITH_RELOAD_SESSION] = reloadHooks.join(',')
-            }
-
-            return sources
-        } catch (error) {
-            BStackLogger.debug(`hook source capture failed: ${(error as Error).message}`)
-            return {}
-        }
-    }
-
     async onPrepare (config: Options.Testrunner, capabilities: Capabilities.TestrunnerCapabilities | WebdriverIO.Capabilities) {
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.INIT)
 
