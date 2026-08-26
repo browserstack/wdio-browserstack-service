@@ -13,6 +13,7 @@ import accessibilityScripts from '../../scripts/accessibility-scripts.js'
 import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import { BROWSERSTACK_WDIO_CONFIG_FILE_PATH } from '../../constants.js'
+import { getHookFailure } from '../../hookInstrumentation.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
 import PerformanceTester from '../../instrumentation/performance/performance-tester.js'
@@ -146,7 +147,13 @@ export default class AccessibilityModule extends BaseModule {
         this.preTestHookState = 'closed'
         try {
             const framework = BrowserstackCLI.getInstance()?.getTestFramework()
-            await framework?.trackEvent(TestFrameworkState.BEFORE_ALL, HookState.POST, { ...this.preTestHookArgs(), result: { passed: true } })
+            // A config-level before() that threw must not be reported green. WDIO swallows the
+            // error (executeHooksWithArgs resolves WITH it rather than rejecting), so the run
+            // stays exit-0 and every reporter shows success — reporting `passed` here would make
+            // the dashboard actively assert something false rather than merely omit it.
+            const failure = getHookFailure('before')
+            const result = failure ? { passed: false, error: { message: failure } } : { passed: true }
+            await framework?.trackEvent(TestFrameworkState.BEFORE_ALL, HookState.POST, { ...this.preTestHookArgs(), result })
         } catch (error) {
             this.logger.debug(`Could not close the hook run for the pre-test window: ${error}`)
         }

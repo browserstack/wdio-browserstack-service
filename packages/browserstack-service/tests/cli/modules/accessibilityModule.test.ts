@@ -53,6 +53,9 @@ vi.mock('../../../src/cli/index.js', () => ({
     }
 }))
 
+const { mockGetHookFailure } = vi.hoisted(() => ({ mockGetHookFailure: vi.fn() }))
+vi.mock('../../../src/hookInstrumentation.js', () => ({ getHookFailure: mockGetHookFailure }))
+
 vi.mock('../../../src/cli/grpcClient.js', () => ({
     GrpcClient: {
         getInstance: vi.fn().mockReturnValue({
@@ -252,6 +255,23 @@ describe('AccessibilityModule', () => {
             expect(opens).toHaveLength(1)
             expect(opens[0][0]).toBe(TestFrameworkState.BEFORE_ALL)
             expect((opens[0][2] as { test: { title: string } }).test.title).toContain('pre-test window')
+        })
+
+        it('reports the hook run as FAILED when the config-level before() threw', async () => {
+            // WDIO swallows a throwing config hook (executeHooksWithArgs resolves with the error),
+            // so the run stays exit-0 and every reporter is green. Reporting `passed` here would
+            // make the dashboard assert something false rather than merely omit it.
+            mockGetHookFailure.mockReturnValue('BOOM: config-level before hook failed')
+            await accessibilityModule['ensurePreTestHookRun']()
+            mockTrackEvent.mockClear()
+
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'S', test: { title: 't' } })
+
+            const close = mockTrackEvent.mock.calls.find((c) => c[1] === HookState.POST)
+            expect(close).toBeDefined()
+            const result = (close![2] as { result: { passed: boolean, error?: { message: string } } }).result
+            expect(result.passed).toBe(false)
+            expect(result.error?.message).toContain('BOOM')
         })
 
         it('opens nothing while a framework hook is already the scan parent', async () => {

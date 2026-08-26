@@ -29,6 +29,18 @@ type HookFn = (...args: unknown[]) => unknown
 const INSTRUMENTED = Symbol('bstackHookInstrumented')
 
 /**
+ * Failure message per hook name, for the hooks WDIO reports to nobody.
+ *
+ * `executeHooksWithArgs` resolves with the error instead of rejecting — deliberately, so a
+ * throwing config hook cannot fail the run — which means a failed `before()` leaves the exit code
+ * at 0, the reporters green and the dashboard reading "passed". Anything that reports on that
+ * window needs a way to know it actually blew up, and this wrapper is the only thing that sees it.
+ */
+const hookFailures: Record<string, string> = {}
+
+export const getHookFailure = (hookName: string): string | undefined => hookFailures[hookName]
+
+/**
  * Wrap one handler so its entry and exit are observable, preserving its shape exactly.
  *
  * Sync handlers stay sync: an `async` wrapper would turn every sync hook into a promise and a
@@ -45,6 +57,9 @@ const instrument = (hookName: string, index: number, fn: HookFn): HookFn => {
     // (`hook.bind(service)`), so both the user's config hooks and other services' hooks read as
     // `bound <name>`. Logged anyway — it separates a named user function from an anonymous one.
     const label = `${hookName}#${index}${fn.name ? ` (${fn.name})` : ''}`
+    const recordFailure = (error: unknown) => {
+        hookFailures[hookName] = (error as Error)?.message || String(error)
+    }
     const wrapped = function (this: unknown, ...args: unknown[]) {
         const startedAt = Date.now()
         const finish = (outcome: string) => BStackLogger.debug(`[hook-window] ${label} ${outcome} in ${Date.now() - startedAt}ms`)
@@ -54,6 +69,7 @@ const instrument = (hookName: string, index: number, fn: HookFn): HookFn => {
         try {
             result = fn.apply(this, args)
         } catch (error) {
+            recordFailure(error)
             finish(`threw: ${(error as Error)?.message}`)
             throw error
         }
@@ -65,6 +81,7 @@ const instrument = (hookName: string, index: number, fn: HookFn): HookFn => {
                     return value
                 },
                 (error) => {
+                    recordFailure(error)
                     finish(`rejected: ${(error as Error)?.message}`)
                     throw error
                 }
