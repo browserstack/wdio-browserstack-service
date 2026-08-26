@@ -40,6 +40,19 @@ vi.mock('../../../src/util.js', () => ({
     isBrowserstackSession: vi.fn().mockReturnValue(true)
 }))
 
+// hoisted: vi.mock factories are lifted above module scope, and `getInstance` is a plain
+// function rather than a spy so the suite-wide clearAllMocks/resetAllMocks cannot strip its
+// return value out from under the module constructor.
+const { mockTrackEvent } = vi.hoisted(() => ({ mockTrackEvent: vi.fn() }))
+vi.mock('../../../src/cli/index.js', () => ({
+    BrowserstackCLI: {
+        getInstance: () => ({
+            options: {},
+            getTestFramework: () => ({ trackEvent: mockTrackEvent })
+        })
+    }
+}))
+
 vi.mock('../../../src/cli/grpcClient.js', () => ({
     GrpcClient: {
         getInstance: vi.fn().mockReturnValue({
@@ -110,6 +123,7 @@ describe('AccessibilityModule', () => {
 
     afterEach(() => {
         vi.resetAllMocks()
+        mockTrackEvent.mockReset()
     })
 
     describe('constructor', () => {
@@ -197,6 +211,71 @@ describe('AccessibilityModule', () => {
             await accessibilityModule.onBeforeExecute()
 
             expect(mockBrowser.getAccessibilityResultsSummary).toBeUndefined()
+        })
+    })
+
+    describe('pre-test scan gate and its hook run', () => {
+        const withA11yOn = () => {
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+                if (key.includes('CAPABILITIES')) {
+                    return { browserName: 'chrome' }
+                }
+                return 'live-session'
+            })
+        }
+
+        it('opens the scan gate at driver creation, so config-level before() commands scan', async () => {
+            // WDIO's config-level before()/beforeSession() are not test-framework hooks, so
+            // neither onHookStart nor onBeforeTest has run when they fire their commands.
+            withA11yOn()
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.get('live-session')).toBe(true)
+        })
+
+        it('leaves the gate closed when autoScanning is off', async () => {
+            withA11yOn()
+            accessibilityModule.autoScanning = false
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.has('live-session')).toBe(false)
+        })
+
+        it('opens a BEFORE_ALL hook run the first time a scan needs a parent, once only', async () => {
+            await accessibilityModule['ensurePreTestHookRun']()
+            await accessibilityModule['ensurePreTestHookRun']()
+
+            const opens = mockTrackEvent.mock.calls.filter((c) => c[1] === HookState.PRE)
+            expect(opens).toHaveLength(1)
+            expect(opens[0][0]).toBe(TestFrameworkState.BEFORE_ALL)
+            expect((opens[0][2] as { test: { title: string } }).test.title).toContain('pre-test window')
+        })
+
+        it('opens nothing while a framework hook is already the scan parent', async () => {
+            accessibilityModule.currentHookRunUuid = 'framework-hook-uuid'
+
+            await accessibilityModule['ensurePreTestHookRun']()
+
+            expect(mockTrackEvent).not.toHaveBeenCalled()
+        })
+
+        it('closes the hook run when the first test starts, and never closes one it did not open', async () => {
+            await accessibilityModule['ensurePreTestHookRun']()
+            mockTrackEvent.mockClear()
+
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'S', test: { title: 't' } })
+
+            const closes = mockTrackEvent.mock.calls.filter((c) => c[1] === HookState.POST)
+            expect(closes).toHaveLength(1)
+            expect((closes[0][2] as { result: { passed: boolean } }).result.passed).toBe(true)
+            expect(accessibilityModule.currentHookRunUuid).toBeNull()
+
+            mockTrackEvent.mockClear()
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'S', test: { title: 't2' } })
+            expect(mockTrackEvent.mock.calls.filter((c) => c[1] === HookState.POST)).toHaveLength(0)
         })
     })
 
