@@ -41,6 +41,34 @@ const hookFailures: Record<string, string> = {}
 export const getHookFailure = (hookName: string): string | undefined => hookFailures[hookName]
 
 /**
+ * The config hooks that can run inside the pre-test window — driver alive, no test started yet.
+ *
+ * `beforeSuite` belongs here and is easy to miss: the Mocha adapter registers it as a root
+ * before-all (`this._runner.suite.beforeAll(this.wrapHook('beforeSuite'))`), so it runs after the
+ * config-level `before` and still ahead of the first test. Hardcoding `'before'` reported a window
+ * as passed when it was `beforeSuite` that threw.
+ *
+ * Mocha's own hooks are excluded deliberately: each already has its own hook run with its own
+ * result, so folding their failures in here would report the same failure twice.
+ */
+export const PRE_TEST_WINDOW_HOOKS = ['before', 'beforeSuite'] as const
+
+/**
+ * First failure recorded by any handler that ran in the pre-test window.
+ *
+ * Any handler in those arrays counts, including another service's — from the window's point of
+ * view the setup did fail, whoever owned the throw. The message identifies which.
+ */
+export const getPreTestWindowFailure = (): string | undefined => {
+    for (const hookName of PRE_TEST_WINDOW_HOOKS) {
+        if (hookFailures[hookName]) {
+            return `${hookName}: ${hookFailures[hookName]}`
+        }
+    }
+    return undefined
+}
+
+/**
  * Wrap one handler so its entry and exit are observable, preserving its shape exactly.
  *
  * Sync handlers stay sync: an `async` wrapper would turn every sync hook into a promise and a
@@ -118,6 +146,12 @@ export function instrumentBrowserContextHooks(config?: Options.Testrunner): void
 
     try {
         const record = config as unknown as Record<string, unknown>
+        // Instrumenting a config starts a fresh record. Without this the map is process-global
+        // for the worker's lifetime, so a failure from one instrumented config could be reported
+        // against a later one.
+        for (const hookName of BROWSER_CONTEXT_HOOKS) {
+            delete hookFailures[hookName]
+        }
         for (const hookName of BROWSER_CONTEXT_HOOKS) {
             const handlers = record[hookName]
             if (!Array.isArray(handlers) || handlers.length === 0) {

@@ -54,7 +54,7 @@ vi.mock('../../../src/cli/index.js', () => ({
 }))
 
 const { mockGetHookFailure } = vi.hoisted(() => ({ mockGetHookFailure: vi.fn() }))
-vi.mock('../../../src/hookInstrumentation.js', () => ({ getHookFailure: mockGetHookFailure }))
+vi.mock('../../../src/hookInstrumentation.js', () => ({ getPreTestWindowFailure: mockGetHookFailure }))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({
     GrpcClient: {
@@ -261,7 +261,7 @@ describe('AccessibilityModule', () => {
             // WDIO swallows a throwing config hook (executeHooksWithArgs resolves with the error),
             // so the run stays exit-0 and every reporter is green. Reporting `passed` here would
             // make the dashboard assert something false rather than merely omit it.
-            mockGetHookFailure.mockReturnValue('BOOM: config-level before hook failed')
+            mockGetHookFailure.mockReturnValue('before: BOOM: config-level before hook failed')
             await accessibilityModule['ensurePreTestHookRun']()
             mockTrackEvent.mockClear()
 

@@ -13,7 +13,7 @@ import accessibilityScripts from '../../scripts/accessibility-scripts.js'
 import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import { BROWSERSTACK_WDIO_CONFIG_FILE_PATH } from '../../constants.js'
-import { getHookFailure } from '../../hookInstrumentation.js'
+import { getPreTestWindowFailure } from '../../hookInstrumentation.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
 import PerformanceTester from '../../instrumentation/performance/performance-tester.js'
@@ -151,7 +151,7 @@ export default class AccessibilityModule extends BaseModule {
             // error (executeHooksWithArgs resolves WITH it rather than rejecting), so the run
             // stays exit-0 and every reporter shows success — reporting `passed` here would make
             // the dashboard actively assert something false rather than merely omit it.
-            const failure = getHookFailure('before')
+            const failure = getPreTestWindowFailure()
             const result = failure ? { passed: false, error: { message: failure } } : { passed: true }
             await framework?.trackEvent(TestFrameworkState.BEFORE_ALL, HookState.POST, { ...this.preTestHookArgs(), result })
         } catch (error) {
