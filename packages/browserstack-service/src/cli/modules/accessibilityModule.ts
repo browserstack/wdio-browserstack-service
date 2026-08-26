@@ -178,8 +178,8 @@ export default class AccessibilityModule extends BaseModule {
             test: {
                 file: process.env[BROWSERSTACK_WDIO_CONFIG_FILE_PATH] || process.cwd(),
                 title: hook
-                    ? `wdio ${hook}() hook (pre-test window)`
-                    : 'wdio config-level hook (pre-test window)'
+                    ? `wdio "${hook}" hook`
+                    : 'wdio config-level hook'
             }
         }
     }

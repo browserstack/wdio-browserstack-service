@@ -260,7 +260,7 @@ describe('AccessibilityModule', () => {
             const opens = mockTrackEvent.mock.calls.filter((c) => c[1] === HookState.PRE)
             expect(opens).toHaveLength(1)
             expect(opens[0][0]).toBe(TestFrameworkState.BEFORE_ALL)
-            expect((opens[0][2] as { test: { title: string } }).test.title).toContain('pre-test window')
+            expect((opens[0][2] as { test: { title: string } }).test.title).toContain('hook')
         })
 
         it('names the hook run after the hook that was executing, not a fixed label', async () => {
@@ -271,7 +271,7 @@ describe('AccessibilityModule', () => {
             await accessibilityModule['ensurePreTestHookRun']()
 
             const open = mockTrackEvent.mock.calls.find((c) => c[1] === HookState.PRE)
-            expect((open![2] as { test: { title: string } }).test.title).toBe('wdio beforeSuite() hook (pre-test window)')
+            expect((open![2] as { test: { title: string } }).test.title).toBe('wdio "beforeSuite" hook')
         })
 
         it('falls back to a neutral name when no hook is identifiable', async () => {
@@ -280,7 +280,7 @@ describe('AccessibilityModule', () => {
             await accessibilityModule['ensurePreTestHookRun']()
 
             const open = mockTrackEvent.mock.calls.find((c) => c[1] === HookState.PRE)
-            expect((open![2] as { test: { title: string } }).test.title).toBe('wdio config-level hook (pre-test window)')
+            expect((open![2] as { test: { title: string } }).test.title).toBe('wdio config-level hook')
         })
 
         it('reports the hook run as FAILED when the config-level before() threw', async () => {
