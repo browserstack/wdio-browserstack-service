@@ -11,13 +11,14 @@ import {
     isFalse,
     getUniqueIdentifier,
     getHookType,
-    isBrowserstackExecutorScript
+    isBrowserstackExecutorScript,
+    isMultiRemoteCaps
 } from './util.js'
 import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from './types.js'
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
 import InsightsHandler from './insights-handler.js'
 import TestReporter from './reporter.js'
-import { DEFAULT_OPTIONS, NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV } from './constants.js'
+import { DEFAULT_OPTIONS, NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV, PRE_TEST_SCAN_FRAMEWORKS } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import AccessibilityHandler from './accessibility-handler.js'
 import CustomTagsHandler from './custom-tags-handler.js'
@@ -122,7 +123,12 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
         // Make the boundaries of the user's own session-scoped config hooks observable. Logging
         // only; patched here because the runner reads these arrays after the service is built.
-        instrumentBrowserContextHooks(this._config)
+        // Scoped to the frameworks the pre-test window work applies to, so a jasmine or multiremote
+        // run has its handlers left exactly as WDIO registered them.
+        if (PRE_TEST_SCAN_FRAMEWORKS.includes(this._config?.framework as typeof PRE_TEST_SCAN_FRAMEWORKS[number]) &&
+            !isMultiRemoteCaps(this._caps as Capabilities.TestrunnerCapabilities)) {
+            instrumentBrowserContextHooks(this._config)
+        }
 
         PerformanceTester.startMonitoring('performance-report-service.csv')
         if (shouldProcessEventForTesthub('')) {

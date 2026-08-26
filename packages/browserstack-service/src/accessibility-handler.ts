@@ -75,7 +75,7 @@ import accessibilityScripts from './scripts/accessibility-scripts.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 
-import { PRE_TEST_HOOK_TITLE_FALLBACK, PRE_TEST_HOOK_TITLE_PREFIX } from './constants.js'
+import { PRE_TEST_HOOK_TITLE_FALLBACK, PRE_TEST_HOOK_TITLE_PREFIX, PRE_TEST_SCAN_FRAMEWORKS } from './constants.js'
 import { BStackLogger } from './bstackLogger.js'
 import { getActiveHookName, getPreTestWindowFailure } from './hookInstrumentation.js'
 
@@ -199,6 +199,12 @@ class _AccessibilityHandler {
         }
     }
 
+    /** mocha and cucumber only — see PRE_TEST_SCAN_FRAMEWORKS. */
+    private supportsPreTestWindow(): boolean {
+        return PRE_TEST_SCAN_FRAMEWORKS.includes(this._framework as typeof PRE_TEST_SCAN_FRAMEWORKS[number]) &&
+            !this._browser?.isMultiremote
+    }
+
     setPreTestHookReporter(reporter: {
         open: (name: string) => Promise<string | undefined>,
         close: (uuid: string, passed: boolean, message?: string) => Promise<void>
@@ -208,7 +214,7 @@ class _AccessibilityHandler {
 
     /** On demand from the scan path, so a suite with no config-level hook reports nothing extra. */
     private async ensurePreTestHookRun() {
-        if (this._preTestHookState !== 'idle' || !this._preTestHookReporter) {
+        if (this._preTestHookState !== 'idle' || !this._preTestHookReporter || !this.supportsPreTestWindow()) {
             return
         }
         this._preTestHookState = 'attempted'
@@ -336,8 +342,12 @@ class _AccessibilityHandler {
         // Gate for the window between driver creation and the first test/scenario. WDIO's
         // config-level hooks run there and are no test-framework hooks, so nothing else registers
         // the session and their commands went unscanned. beforeTest/beforeScenario/beforeHook each
-        // recompute it. Same fix as the CLI flow's onBeforeExecute, for mocha-direct and cucumber.
-        if (this._autoScanning) {
+        // recompute it. Same fix as the CLI flow's onBeforeExecute.
+        //
+        // Scoped to mocha and cucumber. Jasmine is in the per-test path too, so opening this for
+        // it would add scans in a window it never scanned — a behaviour change on a framework
+        // where App-A11y is not supported. Multiremote likewise.
+        if (this._autoScanning && this.supportsPreTestWindow()) {
             AccessibilityHandler._a11yScanSessionMap[sessionId] = true
         }
 

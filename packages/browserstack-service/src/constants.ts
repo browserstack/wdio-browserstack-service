@@ -113,6 +113,12 @@ export const PRE_TEST_WINDOW_HOOKS = ['before', 'beforeSuite', 'beforeFeature'] 
 /* Tag on hook-window diagnostics, so they can be grepped out of an uploaded log */
 export const HOOK_WINDOW_LOG_PREFIX = '[hook-window]'
 
+/* Frameworks the pre-test window work applies to. Jasmine is excluded deliberately: it is in
+   the per-test a11y path (TEST_HOOK_FRAMEWORKS) and keeps that behaviour untouched, but App-A11y
+   is not supported there, so nothing new is switched on for it. Multiremote is excluded the same
+   way, and separately never reaches the CLI flow. */
+export const PRE_TEST_SCAN_FRAMEWORKS = ['mocha', 'cucumber'] as const
+
 /* Key the pre-test hook run is stashed under, so its finish can find its start */
 export const PRE_TEST_HOOK_ID = 'bstack:pre-test-hook'
 

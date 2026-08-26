@@ -689,6 +689,44 @@ describe('afterTest', () => {
     })
 })
 
+describe('frameworks the pre-test window does NOT apply to', () => {
+    beforeEach(() => {
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
+        vi.spyOn(utils, 'validateCapsWithA11y').mockReturnValue(true)
+    })
+
+    it('leaves jasmine exactly as it was — no pre-test gate', async () => {
+        // jasmine IS in TEST_HOOK_FRAMEWORKS, so it already scans per test. Opening the window
+        // for it would add scans where it never had them, on a framework App-A11y does not
+        // support. Its per-test behaviour is untouched either way.
+        const handler = new AccessibilityHandler(browser, caps, options, false, config, 'jasmine', true, false, accessibilityOpts)
+
+        await handler.before('session-jasmine')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-jasmine']).toBeUndefined()
+    })
+
+    it('leaves multiremote alone', async () => {
+        const multiremote = { ...browser, isMultiremote: true } as never
+        const handler = new AccessibilityHandler(multiremote, caps, options, false, config, 'mocha', true, false, accessibilityOpts)
+
+        await handler.before('session-multiremote')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-multiremote']).toBeUndefined()
+    })
+
+    it('does not open a hook run for jasmine even if a reporter is installed', async () => {
+        const handler = new AccessibilityHandler(browser, caps, options, false, config, 'jasmine', true, false, accessibilityOpts)
+        const reporter = { open: vi.fn().mockResolvedValue('uuid'), close: vi.fn() }
+        handler.setPreTestHookReporter(reporter)
+
+        await handler['ensurePreTestHookRun']()
+
+        expect(reporter.open).not.toHaveBeenCalled()
+    })
+})
+
 describe('pre-test hook run (cucumber, Direct flow)', () => {
     let reporter: { open: ReturnType<typeof vi.fn>, close: ReturnType<typeof vi.fn> }
 
