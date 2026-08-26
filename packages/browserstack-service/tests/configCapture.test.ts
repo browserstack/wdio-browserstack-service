@@ -575,6 +575,20 @@ describe('collectConfigFilesForUpload', () => {
         expect(files.map((f) => f.name).sort()).toEqual(['base.conf.ts', 'wdio.conf.ts'])
     })
 
+    it('substitutes the wildcard literally, even when the specifier carries $ patterns', () => {
+        // String.replace interprets `$&` in the REPLACEMENT, which would have resolved this
+        // to `configs/a*b.conf.ts` — a path that does not exist.
+        write('tsconfig.json', JSON.stringify({
+            compilerOptions: { baseUrl: '.', paths: { '@confs/*': ['configs/*'] } }
+        }))
+        write('wdio.conf.ts', "import '@confs/a$&b.conf'\nexport const config = {}")
+        write('configs/a$&b.conf.ts', 'export const base = {}')
+
+        const { files } = collectConfigFilesForUpload({} as never)
+
+        expect(files.map((f) => f.name).sort()).toEqual(['a$&b.conf.ts', 'wdio.conf.ts'])
+    })
+
     it('does not let an alias table widen capture to ordinary source', () => {
         // `@app/*` -> `src/*` is a normal alias, and following it would archive application
         // code. The config-name filter is what keeps this a config capture.

@@ -506,7 +506,15 @@ const resolveAliasImport = (specifier: string, patterns: AliasPattern[]): string
         }
 
         for (const target of targets) {
-            const resolved = probeConfigCandidate(target.replace('*', wildcard))
+            // Substituted by slicing rather than String.replace: `replace` with a string
+            // pattern interprets `$&` / `$'` in the REPLACEMENT, so a specifier carrying
+            // those characters would resolve to a corrupted path. TypeScript allows at most
+            // one `*` per target, so the first one is the substitution point by definition.
+            const star = target.indexOf('*')
+            const expanded = star === -1
+                ? target
+                : target.slice(0, star) + wildcard + target.slice(star + 1)
+            const resolved = probeConfigCandidate(expanded)
             if (resolved) {
                 return resolved
             }
