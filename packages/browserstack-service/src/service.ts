@@ -890,21 +890,27 @@ export default class BrowserstackService implements Services.ServiceInstance {
         await this._insightsHandler?.afterStep(step, scenario, result)
     }
 
-    @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'onReload' })
     /**
      * Whether accessibility is being driven by the binary rather than the classic handler.
      *
-     * The two are mutually exclusive and this exact condition decides which: it is what gates
-     * `AccessibilityHandler.before()` in the `before` hook. Keeping it in one place matters —
-     * `isRunning()` alone is NOT equivalent. With the binary up against a non-BrowserStack
-     * provider, `isBrowserstackSession` is false, so the classic handler DID initialise and holds
-     * the live state; splitting on `isRunning()` there would migrate an empty module gate and
-     * leave the handler stale.
+     * Precisely: it decides whether the CLASSIC handler owns the session's accessibility state.
+     * It is the same condition that gates `AccessibilityHandler.before()` in the `before` hook, so
+     * keeping it in one place is what stops the two drifting.
+     *
+     * The two paths are not strictly exclusive. `AccessibilityModule` is registered on
+     * `startBinResponse.accessibility?.success` alone, independent of provider — `isNonBstackA11y`
+     * exists for exactly the turboscale / non-BrowserStack case — so with the binary up against a
+     * non-BrowserStack provider the module can hold real state AND the handler's `before()` will
+     * have run. Both then need migrating, which is what the caller does.
+     *
+     * `isRunning()` alone is NOT equivalent, and that is the trap: under a non-BrowserStack
+     * provider it is true while the classic handler is the one holding the live state.
      */
     private _isCliAccessibilityFlow (): boolean {
         return Boolean(isBrowserstackSession(this._browser)) && BrowserstackCLI.getInstance().isRunning()
     }
 
+    @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'onReload' })
     async onReload(oldSessionId: string, newSessionId: string) {
         if (!this._browser) {
             return Promise.resolve()
