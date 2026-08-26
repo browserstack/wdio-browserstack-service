@@ -7,6 +7,7 @@ import BrowserstackService from '../src/service.js'
 import * as utils from '../src/util.js'
 import InsightsHandler from '../src/insights-handler.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
+import AccessibilityModule from '../src/cli/modules/accessibilityModule.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import AutomationFramework from '../src/cli/frameworks/automationFramework.js'
 import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
@@ -191,30 +192,64 @@ describe('onReload()', () => {
         expect(service['_failReasons']).toEqual([])
     })
 
-    it('migrates the classic accessibility state, but only when the binary is not running', async () => {
-        // The handler is constructed in both flows, yet `before(sessionId)` — which records
-        // _sessionId and fills the scan map — runs only in the non-CLI flow, so migrating it
-        // under the CLI would be operating on an object holding no state.
-        service['_browser'] = browser
-        // _printSessionURL does a live fetch, which this suite does not stub for every path —
-        // several of the pre-existing failures in this file are exactly that. Not what is under
-        // test here.
-        const printSpy = vi.spyOn(service as any, '_printSessionURL').mockResolvedValue(undefined)
-        const handler = { onSessionReload: vi.fn() }
-        service['_accessibilityHandler'] = handler as any
+    describe('accessibility state migration', () => {
+        // _printSessionURL does a live fetch this suite does not stub on every path — several of
+        // the pre-existing failures in this file are exactly that, and it is not under test here.
+        let printSpy: ReturnType<typeof vi.spyOn>
+        let handler: { onSessionReload: ReturnType<typeof vi.fn> }
 
-        await service.onReload('1', '2')
-        expect(handler.onSessionReload).toHaveBeenCalledWith('1', '2')
+        beforeEach(() => {
+            service['_browser'] = browser
+            printSpy = vi.spyOn(service as any, '_printSessionURL').mockResolvedValue(undefined)
+            handler = { onSessionReload: vi.fn() }
+            service['_accessibilityHandler'] = handler as any
+        })
 
-        handler.onSessionReload.mockClear()
-        const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance')
-            .mockReturnValue({ isRunning: () => true, modules: {} } as any)
+        afterEach(() => {
+            printSpy.mockRestore()
+        })
 
-        await service.onReload('1', '2')
-        expect(handler.onSessionReload).not.toHaveBeenCalled()
+        it('migrates the classic handler when the binary is not driving accessibility', async () => {
+            await service.onReload('1', '2')
 
-        getInstanceSpy.mockRestore()
-        printSpy.mockRestore()
+            expect(handler.onSessionReload).toHaveBeenCalledWith('1', '2')
+        })
+
+        it('migrates the module gate in the CLI flow, and leaves the classic handler alone', async () => {
+            // The registry lookup is the path that actually ships for the binary flow, so it is
+            // asserted rather than left to an optional chain that would swallow a wrong key.
+            const moduleSpy = { onSessionReload: vi.fn() }
+            const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                modules: { [AccessibilityModule.MODULE_NAME]: moduleSpy }
+            } as any)
+            const isBstackSpy = vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+
+            await service.onReload('1', '2')
+
+            expect(moduleSpy.onSessionReload).toHaveBeenCalledWith('1', '2')
+            expect(handler.onSessionReload).not.toHaveBeenCalled()
+
+            getInstanceSpy.mockRestore()
+            isBstackSpy.mockRestore()
+        })
+
+        it('still migrates the classic handler when the binary is up against a non-BrowserStack provider', async () => {
+            // isRunning() alone is not the discriminator: with a non-BrowserStack provider the
+            // handler's before() DID run, so it holds the live state and must be migrated.
+            const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                modules: {}
+            } as any)
+            const isBstackSpy = vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(false)
+
+            await service.onReload('1', '2')
+
+            expect(handler.onSessionReload).toHaveBeenCalledWith('1', '2')
+
+            getInstanceSpy.mockRestore()
+            isBstackSpy.mockRestore()
+        })
     })
 
     it('should return if no browser object', async () => {

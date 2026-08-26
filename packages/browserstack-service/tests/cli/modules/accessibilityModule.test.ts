@@ -36,7 +36,8 @@ vi.mock('../../../src/util.js', () => ({
     getAppA11yResultsSummary: vi.fn().mockResolvedValue({}),
     _getParamsForAppAccessibility: vi.fn().mockReturnValue('{}'),
     formatString: vi.fn().mockReturnValue('formatted-script'),
-    o11yClassErrorHandler: vi.fn().mockImplementation((cls) => cls)
+    o11yClassErrorHandler: vi.fn().mockImplementation((cls) => cls),
+    isBrowserstackSession: vi.fn().mockReturnValue(true)
 }))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({
@@ -51,7 +52,7 @@ vi.mock('../../../src/cli/grpcClient.js', () => ({
 }))
 
 import AccessibilityModule from '../../../src/cli/modules/accessibilityModule.js'
-import { validateCapsWithA11y, validateCapsWithAppA11y, _getParamsForAppAccessibility } from '../../../src/util.js'
+import { validateCapsWithA11y, validateCapsWithAppA11y, _getParamsForAppAccessibility, shouldScanTestForAccessibility } from '../../../src/util.js'
 import accessibilityScripts from '../../../src/scripts/accessibility-scripts.js'
 import TestFramework from '../../../src/cli/frameworks/testFramework.js'
 import AutomationFramework from '../../../src/cli/frameworks/automationFramework.js'
@@ -201,37 +202,68 @@ describe('AccessibilityModule', () => {
 
     describe('onSessionReload', () => {
         it('carries the scan gate over to the new session id', () => {
-            accessibilityModule.accessibilityMap.set('old' as never, true)
+            accessibilityModule.accessibilityMap.set('old', true)
 
             accessibilityModule.onSessionReload('old', 'new')
 
-            expect(accessibilityModule.accessibilityMap.get('new' as never)).toBe(true)
-            expect(accessibilityModule.accessibilityMap.has('old' as never)).toBe(false)
+            expect(accessibilityModule.accessibilityMap.get('new')).toBe(true)
+            expect(accessibilityModule.accessibilityMap.has('old')).toBe(false)
         })
 
         it('preserves a gate the user had closed with stopA11yScanning', () => {
-            accessibilityModule.accessibilityMap.set('old' as never, false)
+            accessibilityModule.accessibilityMap.set('old', false)
 
             accessibilityModule.onSessionReload('old', 'new')
 
-            expect(accessibilityModule.accessibilityMap.get('new' as never)).toBe(false)
+            expect(accessibilityModule.accessibilityMap.get('new')).toBe(false)
         })
 
         it('does nothing when the old session was never registered', () => {
             accessibilityModule.onSessionReload('old', 'new')
 
-            expect(accessibilityModule.accessibilityMap.has('new' as never)).toBe(false)
+            expect(accessibilityModule.accessibilityMap.has('new')).toBe(false)
         })
 
         it('ignores a no-op reload and missing ids', () => {
-            accessibilityModule.accessibilityMap.set('same' as never, true)
+            accessibilityModule.accessibilityMap.set('same', true)
 
             accessibilityModule.onSessionReload('same', 'same')
             accessibilityModule.onSessionReload(undefined, 'new')
             accessibilityModule.onSessionReload('old', undefined)
 
-            expect(accessibilityModule.accessibilityMap.get('same' as never)).toBe(true)
-            expect(accessibilityModule.accessibilityMap.has('new' as never)).toBe(false)
+            expect(accessibilityModule.accessibilityMap.get('same')).toBe(true)
+            expect(accessibilityModule.accessibilityMap.has('new')).toBe(false)
+        })
+    })
+
+    describe('scanning toggles after a reload', () => {
+        it('writes the LIVE session id, not the one captured when the test started', async () => {
+            // The gate is read per command from framework state, so a toggle that wrote the
+            // captured id would set the dead key: stopA11yScanning() after a reload would leave
+            // scanning on, and startA11yScanning() would be a silent no-op.
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            // resetAllMocks in afterEach strips module-level implementations, so the per-test gate
+            // has to be re-stated or shouldScanTest comes out undefined
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            let liveSessionId = 'session-before-reload'
+            vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+                if (key.includes('CAPABILITIES')) {
+                    return { browserName: 'chrome' }
+                }
+                return liveSessionId
+            })
+
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'S', test: { title: 't' } })
+            expect(accessibilityModule.accessibilityMap.get('session-before-reload')).toBe(true)
+
+            // reload: framework state moves on, and onReload migrates the gate
+            liveSessionId = 'session-after-reload'
+            accessibilityModule.onSessionReload('session-before-reload', 'session-after-reload')
+
+            await (mockBrowser as { stopA11yScanning: () => Promise<void> }).stopA11yScanning()
+
+            expect(accessibilityModule.accessibilityMap.get('session-after-reload')).toBe(false)
+            expect(accessibilityModule.accessibilityMap.has('session-before-reload')).toBe(false)
         })
     })
 

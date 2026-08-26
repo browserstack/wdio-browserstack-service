@@ -289,7 +289,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         this._options.accessibilityOptions
                     )
 
-                    if (isBrowserstackSession(this._browser) && BrowserstackCLI.getInstance().isRunning()){
+                    if (this._isCliAccessibilityFlow()){
                         BStackLogger.info(`CLI is running, tracking accessibility event for before: ${sessionId}`)
                         // BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { sessionId })
                     } else {
@@ -886,6 +886,20 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'onReload' })
+    /**
+     * Whether accessibility is being driven by the binary rather than the classic handler.
+     *
+     * The two are mutually exclusive and this exact condition decides which: it is what gates
+     * `AccessibilityHandler.before()` in the `before` hook. Keeping it in one place matters —
+     * `isRunning()` alone is NOT equivalent. With the binary up against a non-BrowserStack
+     * provider, `isBrowserstackSession` is false, so the classic handler DID initialise and holds
+     * the live state; splitting on `isRunning()` there would migrate an empty module gate and
+     * leave the handler stale.
+     */
+    private _isCliAccessibilityFlow (): boolean {
+        return Boolean(isBrowserstackSession(this._browser)) && BrowserstackCLI.getInstance().isRunning()
+    }
+
     async onReload(oldSessionId: string, newSessionId: string) {
         if (!this._browser) {
             return Promise.resolve()
@@ -902,10 +916,12 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // rest of the reloading test would go unscanned.
             const accessibilityModule = BrowserstackCLI.getInstance().modules?.[AccessibilityModule.MODULE_NAME] as AccessibilityModule | undefined
             accessibilityModule?.onSessionReload(oldSessionId, newSessionId)
-        } else {
-            // Classic path only. The handler is constructed in both flows, but `before(sessionId)`
-            // — which is what records `_sessionId` and populates the scan map — runs only when the
-            // binary is not up, so in the CLI flow this object holds no state to migrate.
+        }
+
+        // The classic handler holds state exactly when its `before()` ran, which is the inverse of
+        // _isCliAccessibilityFlow() — not of isRunning(). Gating on the same predicate as that
+        // call site is what keeps the binary-up-but-non-BrowserStack-provider case covered.
+        if (!this._isCliAccessibilityFlow()) {
             this._accessibilityHandler?.onSessionReload(oldSessionId, newSessionId)
         }
 

@@ -259,7 +259,10 @@ class _AccessibilityHandler {
                 BStackLogger.warn('Accessibility scanning cannot be started from outside the test')
                 return
             }
-            AccessibilityHandler._a11yScanSessionMap[sessionId] = true
+            // `this._sessionId` rather than the captured `sessionId`: commandWrapper reads the
+            // former, and a reload moves it, so writing the captured id would leave the user's
+            // start/stop addressing a session that has ended.
+            AccessibilityHandler._a11yScanSessionMap[this._sessionId ?? sessionId] = true
             this._testMetadata[this._testIdentifier as string] = {
                 scanTestForAccessibility : true,
                 accessibilityScanStarted : true
@@ -272,7 +275,7 @@ class _AccessibilityHandler {
                 BStackLogger.warn('Accessibility scanning cannot be stopped from outside the test')
                 return
             }
-            AccessibilityHandler._a11yScanSessionMap[sessionId] = false
+            AccessibilityHandler._a11yScanSessionMap[this._sessionId ?? sessionId] = false
             await this._setAnnotation('Accessibility scanning has stopped')
         }
 

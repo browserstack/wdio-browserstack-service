@@ -31,8 +31,8 @@ export default class AccessibilityModule extends BaseModule {
     isNonBstackA11y: boolean
     accessibilityConfig: Accessibility
     static MODULE_NAME = 'AccessibilityModule'
-    accessibilityMap: Map<number, boolean>
-    LOG_DISABLED_SHOWN: Map<number, boolean>
+    accessibilityMap: Map<string, boolean>
+    LOG_DISABLED_SHOWN: Map<string, boolean>
     testMetadata: Record<string, { [key: string]: unknown; }> = {}
     currentTestName: string | null = null
     // The run uuid of the hook currently executing (set at hook PRE, cleared at hook POST).
@@ -113,25 +113,42 @@ export default class AccessibilityModule extends BaseModule {
      * Migrating the entry rather than re-deriving it preserves whatever the gate currently says,
      * including a stopA11yScanning() the user called before reloading.
      */
-    onSessionReload(oldSessionId: unknown, newSessionId: unknown) {
+    onSessionReload(oldSessionId: string, newSessionId: string) {
         try {
             if (!oldSessionId || !newSessionId || oldSessionId === newSessionId) {
                 return
             }
-            const oldKey = oldSessionId as number
-            const newKey = newSessionId as number
 
-            if (this.accessibilityMap.has(oldKey)) {
-                this.accessibilityMap.set(newKey, this.accessibilityMap.get(oldKey) as boolean)
-                this.accessibilityMap.delete(oldKey)
-                this.logger.debug(`Accessibility scan gate migrated across session reload to ${String(newSessionId)}`)
+            if (this.accessibilityMap.has(oldSessionId)) {
+                this.accessibilityMap.set(newSessionId, this.accessibilityMap.get(oldSessionId) as boolean)
+                this.accessibilityMap.delete(oldSessionId)
+                this.logger.debug(`Accessibility scan gate migrated across session reload to ${newSessionId}`)
             }
-            if (this.LOG_DISABLED_SHOWN.has(oldKey)) {
-                this.LOG_DISABLED_SHOWN.set(newKey, this.LOG_DISABLED_SHOWN.get(oldKey) as boolean)
-                this.LOG_DISABLED_SHOWN.delete(oldKey)
+            if (this.LOG_DISABLED_SHOWN.has(oldSessionId)) {
+                this.LOG_DISABLED_SHOWN.set(newSessionId, this.LOG_DISABLED_SHOWN.get(oldSessionId) as boolean)
+                this.LOG_DISABLED_SHOWN.delete(oldSessionId)
             }
         } catch (error) {
             this.logger.error(`Exception in accessibility onSessionReload: ${error}`)
+        }
+    }
+
+    /**
+     * The session id as of RIGHT NOW, read from framework state rather than captured.
+     *
+     * Anything installed on the driver — the scanning toggles, the results getters — outlives the
+     * session it was created in, because `browser.reloadSession()` swaps the session underneath a
+     * driver object that carries on unchanged. A captured id makes those closures address a
+     * session that has ended, while `commandWrapper` re-reads state and addresses the live one.
+     */
+    private currentSessionId(): string | undefined {
+        try {
+            const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
+            return autoInstance
+                ? AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID) as string
+                : undefined
+        } catch {
+            return undefined
         }
     }
 
@@ -154,7 +171,6 @@ export default class AccessibilityModule extends BaseModule {
             const isBrowserstackSession = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_IS_BROWSERSTACK_HUB)
             const browserCaps = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_CAPABILITIES)
             const inputCaps = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_INPUT_CAPABILITIES)
-            const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
             const platformA11yMeta = {
                 browser_name: browserCaps.browserName,
                 browser_version: browserCaps?.browserVersion || 'latest',
@@ -181,7 +197,7 @@ export default class AccessibilityModule extends BaseModule {
             //patching getA11yResultsSummary
             (browser as WebdriverIO.Browser).getAccessibilityResultsSummary = async () => {
                 if (this.isAppAccessibility) {
-                    return await getAppA11yResultsSummary(true, browser, this.currentTestName, isBrowserstackSession, this.accessibility, sessionId)
+                    return await getAppA11yResultsSummary(true, browser, this.currentTestName, isBrowserstackSession, this.accessibility, this.currentSessionId())
                 }
                 return await this.getA11yResultsSummary(browser)
             }
@@ -189,7 +205,7 @@ export default class AccessibilityModule extends BaseModule {
             //patching getA11yResults
             (browser as WebdriverIO.Browser).getAccessibilityResults = async () => {
                 if (this.isAppAccessibility) {
-                    return await getAppA11yResults(true, browser, this.currentTestName, isBrowserstackSession, this.accessibility, sessionId)
+                    return await getAppA11yResults(true, browser, this.currentTestName, isBrowserstackSession, this.accessibility, this.currentSessionId())
                 }
                 return await this.getA11yResults(browser)
             }
@@ -315,7 +331,9 @@ export default class AccessibilityModule extends BaseModule {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
-                this.accessibilityMap.set(sessionId, true)
+                // Resolved at call time: a reload mid-test moves the gate to a new key, and
+                // writing to the captured one would leave the user's start/stop with no effect.
+                this.accessibilityMap.set(this.currentSessionId() ?? sessionId, true)
                 this.testMetadata[testIdentifier] = {
                     scanTestForAccessibility : true,
                     accessibilityScanStarted : true
@@ -328,7 +346,7 @@ export default class AccessibilityModule extends BaseModule {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
-                this.accessibilityMap.set(sessionId, false)
+                this.accessibilityMap.set(this.currentSessionId() ?? sessionId, false)
                 await this._setAnnotation('Accessibility scanning has stopped')
             }
 
