@@ -113,6 +113,9 @@ export const PRE_TEST_WINDOW_HOOKS = ['before', 'beforeSuite', 'beforeFeature'] 
 /* Tag on hook-window diagnostics, so they can be grepped out of an uploaded log */
 export const HOOK_WINDOW_LOG_PREFIX = '[hook-window]'
 
+/* Key the pre-test hook run is stashed under, so its finish can find its start */
+export const PRE_TEST_HOOK_ID = 'bstack:pre-test-hook'
+
 /* Title reported for the hook run covering the pre-test window */
 export const PRE_TEST_HOOK_TITLE_PREFIX = 'wdio'
 export const PRE_TEST_HOOK_TITLE_FALLBACK = `${PRE_TEST_HOOK_TITLE_PREFIX} config-level hook`

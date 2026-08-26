@@ -323,6 +323,19 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         return
                     }
                     await this._insightsHandler.before()
+
+                    // Cucumber only, per its Direct-flow hook reporting: let the accessibility
+                    // handler report the pre-test window as a hook run, so scans fired there have
+                    // a parent the backend can resolve. Jasmine and mocha-multiremote are left
+                    // out — neither reports hooks on a path this can reuse.
+                    if (this._config.framework === 'cucumber' && this._accessibilityHandler) {
+                        const insightsHandler = this._insightsHandler
+                        this._accessibilityHandler.setPreTestHookReporter({
+                            open: (name: string) => insightsHandler.reportPreTestHookStarted(name),
+                            close: (uuid: string, passed: boolean, message?: string) =>
+                                insightsHandler.reportPreTestHookFinished(uuid, passed, message)
+                        })
+                    }
                 }
 
                 /**

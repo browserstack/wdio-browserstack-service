@@ -75,7 +75,9 @@ import accessibilityScripts from './scripts/accessibility-scripts.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 
+import { PRE_TEST_HOOK_TITLE_FALLBACK, PRE_TEST_HOOK_TITLE_PREFIX } from './constants.js'
 import { BStackLogger } from './bstackLogger.js'
+import { getActiveHookName, getPreTestWindowFailure } from './hookInstrumentation.js'
 
 class _AccessibilityHandler {
     /**
@@ -93,6 +95,15 @@ class _AccessibilityHandler {
     private _config: Options.Testrunner
     private _accessibilityOptions?: AccessibilityOptions
     private _autoScanning: boolean = true
+    // Reports the pre-test window as a hook run. Injected by the service, and only for the
+    // frameworks whose Direct-flow hook reporting supports it, so this handler stays unaware of
+    // which one it is serving.
+    private _preTestHookReporter?: {
+        open: (name: string) => Promise<string | undefined>,
+        close: (uuid: string, passed: boolean, message?: string) => Promise<void>
+    }
+    private _preTestHookState: 'idle' | 'attempted' | 'open' | 'closed' = 'idle'
+    private _preTestHookUuid?: string
     private _testIdentifier: string | null = null
     private _testMetadata: TestMetadata = {}
     /* Set while a supported hook is executing; scans fired in this window are stamped with it. */
@@ -185,6 +196,45 @@ class _AccessibilityHandler {
             }
         } catch (error) {
             BStackLogger.debug(`Exception while migrating accessibility state across session reload: ${error}`)
+        }
+    }
+
+    setPreTestHookReporter(reporter: {
+        open: (name: string) => Promise<string | undefined>,
+        close: (uuid: string, passed: boolean, message?: string) => Promise<void>
+    }) {
+        this._preTestHookReporter = reporter
+    }
+
+    /** On demand from the scan path, so a suite with no config-level hook reports nothing extra. */
+    private async ensurePreTestHookRun() {
+        if (this._preTestHookState !== 'idle' || !this._preTestHookReporter) {
+            return
+        }
+        this._preTestHookState = 'attempted'
+        try {
+            const hook = getActiveHookName()
+            const name = hook ? `${PRE_TEST_HOOK_TITLE_PREFIX} "${hook}" hook` : PRE_TEST_HOOK_TITLE_FALLBACK
+            this._preTestHookUuid = await this._preTestHookReporter.open(name)
+            if (this._preTestHookUuid) {
+                this._preTestHookState = 'open'
+            }
+        } catch (error) {
+            BStackLogger.debug(`Could not open a hook run for the pre-test window: ${error}`)
+        }
+    }
+
+    private async closePreTestHookRun() {
+        if (this._preTestHookState !== 'open' || !this._preTestHookUuid || !this._preTestHookReporter) {
+            this._preTestHookState = 'closed'
+            return
+        }
+        this._preTestHookState = 'closed'
+        try {
+            const failure = getPreTestWindowFailure()
+            await this._preTestHookReporter.close(this._preTestHookUuid, !failure, failure)
+        } catch (error) {
+            BStackLogger.debug(`Could not close the hook run for the pre-test window: ${error}`)
         }
     }
 
@@ -314,6 +364,7 @@ class _AccessibilityHandler {
     }
 
     async beforeTest (suiteTitle: string | undefined, test: Frameworks.Test) {
+        await this.closePreTestHookRun()
         try {
             if (
                 !AccessibilityHandler.TEST_HOOK_FRAMEWORKS.includes(this._framework as string) ||
@@ -394,6 +445,7 @@ class _AccessibilityHandler {
       * Cucumber Only
     */
     async beforeScenario (world: ITestCaseHookParameter) {
+        await this.closePreTestHookRun()
         const pickleData = world.pickle
         const gherkinDocument = world.gherkinDocument
         const featureData = gherkinDocument.feature
@@ -513,6 +565,7 @@ class _AccessibilityHandler {
 
     private async commandWrapper (command: CommandInfo, prevImpl: Function, origFunction: Function, ...args: unknown[]) {
         const skipScanForBidiWindowCommand = AccessibilityHandler.shouldSkipScanForBidiWindowCommand(this._browser, command)
+        await this.ensurePreTestHookRun()
         if (
             this._sessionId && AccessibilityHandler._a11yScanSessionMap[this._sessionId] &&
                 !skipScanForBidiWindowCommand &&

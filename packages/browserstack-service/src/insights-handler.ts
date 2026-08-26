@@ -41,7 +41,7 @@ import type {
 import { BStackLogger } from './bstackLogger.js'
 import type { Capabilities } from '@wdio/types'
 import Listener from './testOps/listener.js'
-import { TESTOPS_SCREENSHOT_ENV } from './constants.js'
+import { TESTOPS_SCREENSHOT_ENV, PRE_TEST_HOOK_ID } from './constants.js'
 import { BrowserstackCLI } from './cli/index.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { HookState } from './cli/states/hookState.js'
@@ -409,13 +409,64 @@ class _InsightsHandler {
         }
     }
 
+    /**
+     * Report a hook run for the pre-test window — the stretch between the driver existing and the
+     * first scenario, where WDIO's config-level hooks run and emit no framework event of their own.
+     *
+     * Cucumber only: it is the framework whose Direct-flow hook reporting this mirrors, and the
+     * one that always takes that flow. Returns the uuid to close with, or undefined if nothing
+     * was reported.
+     */
+    async reportPreTestHookStarted(name: string): Promise<string | undefined> {
+        try {
+            if (this._framework !== 'cucumber') {
+                return undefined
+            }
+            const hookMetaData: TestMeta = {
+                uuid: uuidv4(),
+                startedAt: (new Date()).toISOString(),
+                // absent before the first scenario; the hook uuid is what the scan is joined on
+                testRunId: InsightsHandler.currentTest?.uuid,
+                hookType: 'BEFORE_ALL',
+                kind: 'hook',
+                name,
+                scopes: [this._cucumberData.feature?.name || ''],
+                fileName: this._cucumberData.uri
+            }
+            this._tests[PRE_TEST_HOOK_ID] = hookMetaData
+            this.setCurrentHook({ uuid: hookMetaData.uuid })
+            this.listener.hookStarted(this.getHookRunDataForCucumber(hookMetaData, 'HookRunStarted'))
+            return hookMetaData.uuid
+        } catch (error) {
+            BStackLogger.debug(`Could not report the pre-test hook run: ${error}`)
+            return undefined
+        }
+    }
+
+    async reportPreTestHookFinished(uuid: string, passed: boolean, message?: string): Promise<void> {
+        try {
+            const hookMetaData = this._tests[PRE_TEST_HOOK_ID]
+            if (!hookMetaData || hookMetaData.uuid !== uuid) {
+                return
+            }
+            hookMetaData.finishedAt = (new Date()).toISOString()
+            this.setCurrentHook({ uuid, finished: true })
+            const result = { passed, error: message ? { message } : undefined } as Frameworks.TestResult
+            this.listener.hookFinished(this.getHookRunDataForCucumber(hookMetaData, 'HookRunFinished', result))
+            delete this._tests[PRE_TEST_HOOK_ID]
+        } catch (error) {
+            BStackLogger.debug(`Could not close the pre-test hook run: ${error}`)
+        }
+    }
+
     public getHookRunDataForCucumber(hookData: TestMeta, eventType: string, result?: Frameworks.TestResult) {
         const { uri, feature } = this._cucumberData
 
         const testData: TestData = {
             uuid: hookData.uuid,
             type: 'hook',
-            name: this.getCucumberHookName(hookData.hookType),
+            // stored name wins: callers that synthesise a hook carry their own label
+            name: hookData.name || this.getCucumberHookName(hookData.hookType),
             body: {
                 lang: 'webdriverio',
                 code: null

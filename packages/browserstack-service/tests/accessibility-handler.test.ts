@@ -689,6 +689,49 @@ describe('afterTest', () => {
     })
 })
 
+describe('pre-test hook run (cucumber, Direct flow)', () => {
+    let reporter: { open: ReturnType<typeof vi.fn>, close: ReturnType<typeof vi.fn> }
+
+    beforeEach(() => {
+        accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'cucumber', true, false, accessibilityOpts)
+        reporter = { open: vi.fn().mockResolvedValue('hook-uuid'), close: vi.fn().mockResolvedValue(undefined) }
+        accessibilityHandler.setPreTestHookReporter(reporter)
+    })
+
+    it('opens once on demand and closes when the first scenario starts', async () => {
+        await accessibilityHandler['ensurePreTestHookRun']()
+        await accessibilityHandler['ensurePreTestHookRun']()
+        expect(reporter.open).toHaveBeenCalledTimes(1)
+
+        await accessibilityHandler['closePreTestHookRun']()
+
+        expect(reporter.close).toHaveBeenCalledWith('hook-uuid', true, undefined)
+    })
+
+    it('never closes a run it did not open', async () => {
+        await accessibilityHandler['closePreTestHookRun']()
+
+        expect(reporter.close).not.toHaveBeenCalled()
+    })
+
+    it('reports nothing when no reporter is installed', async () => {
+        const bare = new AccessibilityHandler(browser, caps, options, false, config, 'cucumber', true, false, accessibilityOpts)
+
+        await bare['ensurePreTestHookRun']()
+
+        expect(bare['_preTestHookState']).toBe('idle')
+    })
+
+    it('stays closed-but-unreported when open() yields no uuid', async () => {
+        reporter.open.mockResolvedValue(undefined)
+
+        await accessibilityHandler['ensurePreTestHookRun']()
+        await accessibilityHandler['closePreTestHookRun']()
+
+        expect(reporter.close).not.toHaveBeenCalled()
+    })
+})
+
 describe('pre-test scan gate (non-CLI flow)', () => {
     beforeEach(() => {
         accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'mocha', true, false, accessibilityOpts)
