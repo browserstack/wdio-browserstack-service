@@ -46,6 +46,7 @@ import { AutomationFrameworkConstants } from './cli/frameworks/constants/automat
 import TestFramework from './cli/frameworks/testFramework.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
+import AccessibilityModule from './cli/modules/accessibilityModule.js'
 
 import util from 'node:util'
 
@@ -288,7 +289,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         this._options.accessibilityOptions
                     )
 
-                    if (isBrowserstackSession(this._browser) && BrowserstackCLI.getInstance().isRunning()){
+                    if (this._isCliAccessibilityFlow()){
                         BStackLogger.info(`CLI is running, tracking accessibility event for before: ${sessionId}`)
                         // BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { sessionId })
                     } else {
@@ -884,6 +885,26 @@ export default class BrowserstackService implements Services.ServiceInstance {
         await this._insightsHandler?.afterStep(step, scenario, result)
     }
 
+    /**
+     * Whether accessibility is being driven by the binary rather than the classic handler.
+     *
+     * Precisely: it decides whether the CLASSIC handler owns the session's accessibility state.
+     * It is the same condition that gates `AccessibilityHandler.before()` in the `before` hook, so
+     * keeping it in one place is what stops the two drifting.
+     *
+     * The two paths are not strictly exclusive. `AccessibilityModule` is registered on
+     * `startBinResponse.accessibility?.success` alone, independent of provider — `isNonBstackA11y`
+     * exists for exactly the turboscale / non-BrowserStack case — so with the binary up against a
+     * non-BrowserStack provider the module can hold real state AND the handler's `before()` will
+     * have run. Both then need migrating, which is what the caller does.
+     *
+     * `isRunning()` alone is NOT equivalent, and that is the trap: under a non-BrowserStack
+     * provider it is true while the classic handler is the one holding the live state.
+     */
+    private _isCliAccessibilityFlow (): boolean {
+        return Boolean(isBrowserstackSession(this._browser)) && BrowserstackCLI.getInstance().isRunning()
+    }
+
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'onReload' })
     async onReload(oldSessionId: string, newSessionId: string) {
         if (!this._browser) {
@@ -896,6 +917,18 @@ export default class BrowserstackService implements Services.ServiceInstance {
             if (instance) {
                 AutomationFramework.setState(instance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID, newSessionId)
             }
+            // Carry the accessibility scan gate over to the new session id. Updating the state
+            // above without this is what orphans it: the gate is keyed on the session id, so the
+            // rest of the reloading test would go unscanned.
+            const accessibilityModule = BrowserstackCLI.getInstance().modules?.[AccessibilityModule.MODULE_NAME] as AccessibilityModule | undefined
+            accessibilityModule?.onSessionReload(oldSessionId, newSessionId)
+        }
+
+        // The classic handler holds state exactly when its `before()` ran, which is the inverse of
+        // _isCliAccessibilityFlow() — not of isRunning(). Gating on the same predicate as that
+        // call site is what keeps the binary-up-but-non-BrowserStack-provider case covered.
+        if (!this._isCliAccessibilityFlow()) {
+            this._accessibilityHandler?.onSessionReload(oldSessionId, newSessionId)
         }
 
         const { setSessionName, setSessionStatus } = this._options

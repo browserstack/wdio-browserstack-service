@@ -689,6 +689,49 @@ describe('afterTest', () => {
     })
 })
 
+describe('onSessionReload', () => {
+    beforeEach(() => {
+        accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'framework', true, false, accessibilityOpts)
+    })
+
+    it('moves the scan flag and the tracked session id onto the reloaded session', () => {
+        accessibilityHandler['_sessionId'] = 'old-session'
+        AccessibilityHandler['_a11yScanSessionMap']['old-session'] = true
+
+        accessibilityHandler.onSessionReload('old-session', 'new-session')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['new-session']).toBe(true)
+        expect(AccessibilityHandler['_a11yScanSessionMap']['old-session']).toBeUndefined()
+        expect(accessibilityHandler['_sessionId']).toBe('new-session')
+    })
+
+    it('makes the scanning toggles address the reloaded session', async () => {
+        // commandWrapper reads `this._sessionId`, so a toggle writing the id captured in before()
+        // would set the dead key — stop would not stop, start would not start.
+        // before() is what installs the toggles on the driver, so it has to run first
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        await accessibilityHandler.before('old-session')
+        accessibilityHandler['_testIdentifier'] = 'test-1'
+        AccessibilityHandler['_a11yScanSessionMap']['old-session'] = true
+
+        accessibilityHandler.onSessionReload('old-session', 'new-session')
+        const browserWithA11y = browser as unknown as { stopA11yScanning: () => Promise<void> }
+        await browserWithA11y.stopA11yScanning()
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['new-session']).toBe(false)
+    })
+
+    it('is a no-op for a reload that changes nothing', () => {
+        accessibilityHandler['_sessionId'] = 'same'
+        AccessibilityHandler['_a11yScanSessionMap']['same'] = true
+
+        accessibilityHandler.onSessionReload('same', 'same')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['same']).toBe(true)
+        expect(accessibilityHandler['_sessionId']).toBe('same')
+    })
+})
+
 describe('getIdentifier', () => {
     let getUniqueIdentifierSpy: any
     let getUniqueIdentifierForCucumberSpy: any

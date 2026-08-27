@@ -210,6 +210,114 @@ describe('AutomateModule', () => {
         expect(TestFramework.setState).toHaveBeenCalledTimes(2) // status and reason
     })
 
+    it('names the session created by a mid-test reload (SDK-7270)', async () => {
+        // browser.reloadSession() from the test body runs AFTER mocha's EVENT_TEST_BEGIN, so
+        // onBeforeTest named the old session and the replacement was never registered.
+        vi.mocked(fetch).mockResolvedValue({
+            json: vi.fn().mockResolvedValue({ success: true })
+        } as any)
+
+        const mockArgs = {
+            instance: mockTestInstance,
+            result: { error: null, passed: true },
+            test: { title: 'test title', parent: 'suite title' },
+            suiteTitle: 'suite title'
+        }
+
+        await automateModule.onBeforeTest(mockArgs)
+
+        // service.onReload repoints KEY_FRAMEWORK_SESSION_ID at the replacement session.
+        vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+            if (key === 'framework_session_id') {return 'reloaded-session-id'}
+            if (key.includes('CAPABILITIES')) {return { browserName: 'chrome' }}
+            return {}
+        })
+        vi.mocked(fetch).mockClear()
+
+        await automateModule.onAfterTest(mockArgs)
+
+        expect(fetch).toHaveBeenCalledWith(
+            expect.stringContaining('sessions/reloaded-session-id.json'),
+            expect.objectContaining({ method: 'PUT', body: JSON.stringify({ name: 'suite title - test title' }) })
+        )
+    })
+
+    it('issues no extra name call when the session is unchanged across the test (SDK-7270 de-dupe)', async () => {
+        vi.mocked(fetch).mockResolvedValue({
+            json: vi.fn().mockResolvedValue({ success: true })
+        } as any)
+
+        const mockArgs = {
+            instance: mockTestInstance,
+            result: { error: null, passed: true },
+            test: { title: 'test title', parent: 'suite title' },
+            suiteTitle: 'suite title'
+        }
+
+        await automateModule.onBeforeTest(mockArgs)
+        vi.mocked(fetch).mockClear()
+
+        await automateModule.onAfterTest(mockArgs)
+
+        // appliedName de-dupes — steady state must cost zero additional API calls.
+        expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('still names a mid-test-reload session when skipSessionStatus is true (SDK-7270 guard independence)', async () => {
+        // Naming and status are independent options; a status flag must not gate the name repair.
+        (automateModule.config as any).testContextOptions.skipSessionStatus = true
+        vi.mocked(fetch).mockResolvedValue({
+            json: vi.fn().mockResolvedValue({ success: true })
+        } as any)
+
+        const mockArgs = {
+            instance: mockTestInstance,
+            result: { error: null, passed: true },
+            test: { title: 'test title', parent: 'suite title' },
+            suiteTitle: 'suite title'
+        }
+
+        await automateModule.onBeforeTest(mockArgs)
+
+        vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+            if (key === 'framework_session_id') {return 'reloaded-session-id'}
+            if (key.includes('CAPABILITIES')) {return { browserName: 'chrome' }}
+            return {}
+        })
+        vi.mocked(fetch).mockClear()
+
+        await automateModule.onAfterTest(mockArgs)
+
+        expect(fetch).toHaveBeenCalledWith(
+            expect.stringContaining('sessions/reloaded-session-id.json'),
+            expect.objectContaining({ method: 'PUT', body: JSON.stringify({ name: 'suite title - test title' }) })
+        )
+    })
+
+    it('adds no status traffic for skipSessionName users (SDK-7270 inverse-leak guard)', async () => {
+        // With naming off, onBeforeTest never registers the session. onAfterTest must not adopt it
+        // either, or onAfterExecute would start status-marking sessions it previously ignored.
+        (automateModule.config as any).testContextOptions.skipSessionName = true
+        vi.mocked(fetch).mockResolvedValue({
+            json: vi.fn().mockResolvedValue({ success: true })
+        } as any)
+
+        const mockArgs = {
+            instance: mockTestInstance,
+            result: { error: null, passed: true },
+            test: { title: 'test title', parent: 'suite title' },
+            suiteTitle: 'suite title'
+        }
+
+        await automateModule.onBeforeTest(mockArgs)
+        await automateModule.onAfterTest(mockArgs)
+        vi.mocked(fetch).mockClear()
+
+        await automateModule.onAfterExecute()
+
+        expect(fetch).not.toHaveBeenCalled()
+    })
+
     it('should skip session status update when skipSessionStatus is true', async () => {
         (automateModule.config as any).testContextOptions.skipSessionStatus = true
         const mockArgs = {
