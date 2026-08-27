@@ -40,6 +40,28 @@ vi.mock('../../../src/util.js', () => ({
     isBrowserstackSession: vi.fn().mockReturnValue(true)
 }))
 
+// hoisted: vi.mock factories are lifted above module scope, and `getInstance` is a plain
+// function rather than a spy so the suite-wide clearAllMocks/resetAllMocks cannot strip its
+// return value out from under the module constructor.
+const { mockTrackEvent } = vi.hoisted(() => ({ mockTrackEvent: vi.fn() }))
+vi.mock('../../../src/cli/index.js', () => ({
+    BrowserstackCLI: {
+        getInstance: () => ({
+            options: {},
+            getTestFramework: () => ({ trackEvent: mockTrackEvent })
+        })
+    }
+}))
+
+const { mockGetHookFailure, mockGetActiveHookName } = vi.hoisted(() => ({
+    mockGetHookFailure: vi.fn(),
+    mockGetActiveHookName: vi.fn()
+}))
+vi.mock('../../../src/hookInstrumentation.js', () => ({
+    getPreTestWindowFailure: mockGetHookFailure,
+    getActiveHookName: mockGetActiveHookName
+}))
+
 vi.mock('../../../src/cli/grpcClient.js', () => ({
     GrpcClient: {
         getInstance: vi.fn().mockReturnValue({
@@ -110,6 +132,7 @@ describe('AccessibilityModule', () => {
 
     afterEach(() => {
         vi.resetAllMocks()
+        mockTrackEvent.mockReset()
     })
 
     describe('constructor', () => {
@@ -197,6 +220,108 @@ describe('AccessibilityModule', () => {
             await accessibilityModule.onBeforeExecute()
 
             expect(mockBrowser.getAccessibilityResultsSummary).toBeUndefined()
+        })
+    })
+
+    describe('pre-test scan gate and its hook run', () => {
+        const withA11yOn = () => {
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+                if (key.includes('CAPABILITIES')) {
+                    return { browserName: 'chrome' }
+                }
+                return 'live-session'
+            })
+        }
+
+        it('opens the scan gate at driver creation, so config-level before() commands scan', async () => {
+            // WDIO's config-level before()/beforeSession() are not test-framework hooks, so
+            // neither onHookStart nor onBeforeTest has run when they fire their commands.
+            withA11yOn()
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.get('live-session')).toBe(true)
+        })
+
+        it('leaves the gate closed when autoScanning is off', async () => {
+            withA11yOn()
+            accessibilityModule.autoScanning = false
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.has('live-session')).toBe(false)
+        })
+
+        it('opens a BEFORE_ALL hook run the first time a scan needs a parent, once only', async () => {
+            await accessibilityModule['ensurePreTestHookRun']()
+            await accessibilityModule['ensurePreTestHookRun']()
+
+            const opens = mockTrackEvent.mock.calls.filter((c) => c[1] === HookState.PRE)
+            expect(opens).toHaveLength(1)
+            expect(opens[0][0]).toBe(TestFrameworkState.BEFORE_ALL)
+            expect((opens[0][2] as { test: { title: string } }).test.title).toContain('hook')
+        })
+
+        it('names the hook run after the hook that was executing, not a fixed label', async () => {
+            // beforeSuite runs in the same window as before(), so a fixed 'before' label would
+            // name the wrong hook whenever the first scan lands in beforeSuite.
+            mockGetActiveHookName.mockReturnValue('beforeSuite')
+
+            await accessibilityModule['ensurePreTestHookRun']()
+
+            const open = mockTrackEvent.mock.calls.find((c) => c[1] === HookState.PRE)
+            expect((open![2] as { test: { title: string } }).test.title).toBe('wdio "beforeSuite" hook')
+        })
+
+        it('falls back to a neutral name when no hook is identifiable', async () => {
+            mockGetActiveHookName.mockReturnValue(undefined)
+
+            await accessibilityModule['ensurePreTestHookRun']()
+
+            const open = mockTrackEvent.mock.calls.find((c) => c[1] === HookState.PRE)
+            expect((open![2] as { test: { title: string } }).test.title).toBe('wdio config-level hook')
+        })
+
+        it('reports the hook run as FAILED when the config-level before() threw', async () => {
+            // WDIO swallows a throwing config hook (executeHooksWithArgs resolves with the error),
+            // so the run stays exit-0 and every reporter is green. Reporting `passed` here would
+            // make the dashboard assert something false rather than merely omit it.
+            mockGetHookFailure.mockReturnValue('before: BOOM: config-level before hook failed')
+            await accessibilityModule['ensurePreTestHookRun']()
+            mockTrackEvent.mockClear()
+
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'S', test: { title: 't' } })
+
+            const close = mockTrackEvent.mock.calls.find((c) => c[1] === HookState.POST)
+            expect(close).toBeDefined()
+            const result = (close![2] as { result: { passed: boolean, error?: { message: string } } }).result
+            expect(result.passed).toBe(false)
+            expect(result.error?.message).toContain('BOOM')
+        })
+
+        it('opens nothing while a framework hook is already the scan parent', async () => {
+            accessibilityModule.currentHookRunUuid = 'framework-hook-uuid'
+
+            await accessibilityModule['ensurePreTestHookRun']()
+
+            expect(mockTrackEvent).not.toHaveBeenCalled()
+        })
+
+        it('closes the hook run when the first test starts, and never closes one it did not open', async () => {
+            await accessibilityModule['ensurePreTestHookRun']()
+            mockTrackEvent.mockClear()
+
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'S', test: { title: 't' } })
+
+            const closes = mockTrackEvent.mock.calls.filter((c) => c[1] === HookState.POST)
+            expect(closes).toHaveLength(1)
+            expect((closes[0][2] as { result: { passed: boolean } }).result.passed).toBe(true)
+            expect(accessibilityModule.currentHookRunUuid).toBeNull()
+
+            mockTrackEvent.mockClear()
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'S', test: { title: 't2' } })
+            expect(mockTrackEvent.mock.calls.filter((c) => c[1] === HookState.POST)).toHaveLength(0)
         })
     })
 
@@ -570,7 +695,21 @@ describe('AccessibilityModule', () => {
 
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click', 'hook-uuid-99')
 
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99')
+            // 4th arg is the global-hook flag; a direct call passes none, so it forwards undefined
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99', undefined)
+        })
+
+        it('marks a scan from the pre-test window as a global-hook scan', async () => {
+            // the flag is what strips thTestRunUuid: in that window the env var holds a uuid for a
+            // test that has not started, so sending it would attribute the scan to the wrong test
+            accessibilityModule.accessibility = true
+            accessibilityModule.isAppAccessibility = true
+            mockBrowser.execute.mockResolvedValue({ scanned: true })
+
+            await (accessibilityModule as never as { performScanCli: (b: unknown, c?: string, h?: string | null, g?: boolean) => Promise<void> })
+                .performScanCli(mockBrowser, 'back', 'hook-uuid-1', true)
+
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('back', undefined, 'hook-uuid-1', true)
         })
 
         it('passes no hook uuid for an ordinary (non-hook) app scan', async () => {
@@ -580,7 +719,7 @@ describe('AccessibilityModule', () => {
 
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click')
 
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined)
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined, undefined)
         })
     })
 })

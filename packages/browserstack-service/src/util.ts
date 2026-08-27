@@ -595,9 +595,15 @@ export const formatString = (template: (string | null), ...values: (string | nul
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const _getParamsForAppAccessibility = ( commandName?: string, testName?: string, hookRunUuid?: string | null ): { thTestRunUuid: any, thHookRunUuid: any, thBuildUuid: any, thJwtToken: any, authHeader: any, scanTimestamp: number, method: string | undefined, testName: string | undefined  } => {
+/**
+ * `isGlobalHook` marks a scan fired from a WDIO CONFIG-level hook — before()/beforeSuite()/
+ * beforeFeature() — which belongs to no test. TEST_ANALYTICS_ID there holds the uuid of a test
+ * that has not started (mocha mints it at instance creation), so sending it would attribute the
+ * scan to a test it did not come from. The hook run uuid is the parent in that case.
+ */
+export const _getParamsForAppAccessibility = ( commandName?: string, testName?: string, hookRunUuid?: string | null, isGlobalHook?: boolean ): { thTestRunUuid: any, thHookRunUuid: any, thBuildUuid: any, thJwtToken: any, authHeader: any, scanTimestamp: number, method: string | undefined, testName: string | undefined  } => {
     return {
-        'thTestRunUuid': process.env.TEST_ANALYTICS_ID,
+        'thTestRunUuid': isGlobalHook ? undefined : process.env.TEST_ANALYTICS_ID,
         // Present only when the scan fires inside a hook (dropped by JSON.stringify when undefined,
         // so in-test scans are unchanged). SeleniumHub appAllyHandler relays this as `hook_run_uuid`.
         'thHookRunUuid': hookRunUuid || undefined,
@@ -611,7 +617,7 @@ export const _getParamsForAppAccessibility = ( commandName?: string, testName?: 
 }
 
 /* eslint-disable  @typescript-eslint/no-explicit-any */
-export const performA11yScan = async (isAppAutomate: boolean, browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, isBrowserStackSession?: boolean, isAccessibility?: boolean | string,  commandName?: string, testName?: string, hookRunUuid?: string | null,) : Promise<{ [key: string]: any; } | undefined> => {
+export const performA11yScan = async (isAppAutomate: boolean, browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, isBrowserStackSession?: boolean, isAccessibility?: boolean | string,  commandName?: string, testName?: string, hookRunUuid?: string | null, isGlobalHook?: boolean) : Promise<{ [key: string]: any; } | undefined> => {
 
     if (!isAccessibilityAutomationSession(isAccessibility)) {
         BStackLogger.warn('Not an Accessibility Automation session, cannot perform Accessibility scan.')
@@ -620,7 +626,7 @@ export const performA11yScan = async (isAppAutomate: boolean, browser: Webdriver
 
     try {
         if (isAppAccessibilityAutomationSession(isAccessibility, isAppAutomate)) {
-            const results: unknown = await (browser as WebdriverIO.Browser).execute(formatString(AccessibilityScripts.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName, hookRunUuid))) as string, {})
+            const results: unknown = await (browser as WebdriverIO.Browser).execute(formatString(AccessibilityScripts.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName, hookRunUuid, isGlobalHook))) as string, {})
             BStackLogger.debug(util.format(results as string))
             return ( results as { [key: string]: any; } | undefined )
         }

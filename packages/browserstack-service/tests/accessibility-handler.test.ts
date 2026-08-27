@@ -483,8 +483,10 @@ describe('beforeHook / afterHook (hook scans)', () => {
         await accessibilityHandler['commandWrapper']({ name: 'click', class: 'Element' } as any, undefined as any, orig, 'arg')
         expect(scanSpy).toHaveBeenCalled()
         const lastCall = scanSpy.mock.calls[scanSpy.mock.calls.length - 1]
-        // performA11yScan(isAppAutomate, browser, isBS, isA11y, commandName, testName, hookRunUuid)
-        expect(lastCall[lastCall.length - 1]).toBe('hook-uuid-42')
+        // performA11yScan(isAppAutomate, browser, isBS, isA11y, commandName, testName, hookRunUuid,
+        //                 isGlobalHook) — asserted by POSITION, not "last": the signature grew an
+        //                 argument and a last-element assertion silently followed it.
+        expect(lastCall[6]).toBe('hook-uuid-42')
     })
 
     it('does NOT stamp a hook uuid on a test-body scan (afterHook cleared it)', async () => {
@@ -500,7 +502,26 @@ describe('beforeHook / afterHook (hook scans)', () => {
         await accessibilityHandler['commandWrapper']({ name: 'click', class: 'Element' } as any, undefined as any, orig, 'arg')
         expect(scanSpy).toHaveBeenCalled()
         const lastCall = scanSpy.mock.calls[scanSpy.mock.calls.length - 1]
-        expect(lastCall[lastCall.length - 1]).toBeNull()
+        expect(lastCall[6]).toBeNull()
+    })
+
+    it('omits thTestRunUuid for a global-hook scan, keeps it for a test-body scan', () => {
+        // TEST_ANALYTICS_ID holds a uuid minted at instance creation, i.e. a test that has not
+        // started. Sending it from a config-level hook would attribute the scan to a test it did
+        // not come from; the hook run uuid is the parent there.
+        process.env.TEST_ANALYTICS_ID = 'test-run-uuid-1'
+
+        const fromGlobalHook = utils._getParamsForAppAccessibility('back', undefined, 'hook-uuid-1', true)
+        expect(fromGlobalHook.thTestRunUuid).toBeUndefined()
+        expect(fromGlobalHook.thHookRunUuid).toBe('hook-uuid-1')
+
+        const fromTestBody = utils._getParamsForAppAccessibility('back', 'a test', null, false)
+        expect(fromTestBody.thTestRunUuid).toBe('test-run-uuid-1')
+
+        // default (flag omitted) must stay as it was for every existing caller
+        expect(utils._getParamsForAppAccessibility('back', 'a test').thTestRunUuid).toBe('test-run-uuid-1')
+
+        delete process.env.TEST_ANALYTICS_ID
     })
 
     it('_getParamsForAppAccessibility puts the hook uuid on the scan payload as thHookRunUuid', () => {
@@ -686,6 +707,144 @@ describe('afterTest', () => {
         await accessibilityHandler.afterTest('suite title', { description: 'test', fullName: 'suite title test' } as any)
 
         expect(sendStop).toBeCalledTimes(1)
+    })
+})
+
+describe('frameworks the pre-test window does NOT apply to', () => {
+    beforeEach(() => {
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
+        vi.spyOn(utils, 'validateCapsWithA11y').mockReturnValue(true)
+    })
+
+    it('leaves jasmine exactly as it was — no pre-test gate', async () => {
+        // jasmine IS in TEST_HOOK_FRAMEWORKS, so it already scans per test. Opening the window
+        // for it would add scans where it never had them, on a framework App-A11y does not
+        // support. Its per-test behaviour is untouched either way.
+        const handler = new AccessibilityHandler(browser, caps, options, false, config, 'jasmine', true, false, accessibilityOpts)
+
+        await handler.before('session-jasmine')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-jasmine']).toBeUndefined()
+    })
+
+    it('leaves multiremote alone', async () => {
+        const multiremote = { ...browser, isMultiremote: true } as never
+        const handler = new AccessibilityHandler(multiremote, caps, options, false, config, 'mocha', true, false, accessibilityOpts)
+
+        await handler.before('session-multiremote')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-multiremote']).toBeUndefined()
+    })
+
+    it('does not key the map on "undefined" when multiremote hands over no session id', async () => {
+        // A multiremote browser has no sessionId — MultiRemoteDriver defines none and the element
+        // path deletes it, which is why wdio-runner reads ids per instance. The service passes
+        // `browser.sessionId` straight through, so the handler receives undefined.
+        const multiremote = { ...browser, isMultiremote: true } as never
+        const handler = new AccessibilityHandler(multiremote, caps, options, false, config, 'mocha', true, false, accessibilityOpts)
+
+        await handler.before(undefined as unknown as string)
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['undefined']).toBeUndefined()
+        expect(handler['_sessionId']).toBeUndefined()
+    })
+
+    it('does not open a hook run for jasmine even if a reporter is installed', async () => {
+        const handler = new AccessibilityHandler(browser, caps, options, false, config, 'jasmine', true, false, accessibilityOpts)
+        const reporter = { open: vi.fn().mockResolvedValue('uuid'), close: vi.fn() }
+        handler.setPreTestHookReporter(reporter)
+
+        await handler['ensurePreTestHookRun']()
+
+        expect(reporter.open).not.toHaveBeenCalled()
+    })
+})
+
+describe('pre-test hook run (cucumber, Direct flow)', () => {
+    let reporter: { open: ReturnType<typeof vi.fn>, close: ReturnType<typeof vi.fn> }
+
+    beforeEach(() => {
+        accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'cucumber', true, false, accessibilityOpts)
+        reporter = { open: vi.fn().mockResolvedValue('hook-uuid'), close: vi.fn().mockResolvedValue(undefined) }
+        accessibilityHandler.setPreTestHookReporter(reporter)
+    })
+
+    it('stamps the hook uuid onto scans, and clears it when the window closes', async () => {
+        // commandWrapper passes _currentHookRunUuid to performA11yScan as thHookRunUuid; without
+        // this the hook run exists but the window's scans still arrive with no parent.
+        await accessibilityHandler['ensurePreTestHookRun']()
+        expect(accessibilityHandler['_currentHookRunUuid']).toBe('hook-uuid')
+
+        await accessibilityHandler['closePreTestHookRun']()
+        expect(accessibilityHandler['_currentHookRunUuid']).toBeNull()
+    })
+
+    it('opens once on demand and closes when the first scenario starts', async () => {
+        await accessibilityHandler['ensurePreTestHookRun']()
+        await accessibilityHandler['ensurePreTestHookRun']()
+        expect(reporter.open).toHaveBeenCalledTimes(1)
+
+        await accessibilityHandler['closePreTestHookRun']()
+
+        expect(reporter.close).toHaveBeenCalledWith('hook-uuid', true, undefined)
+    })
+
+    it('never closes a run it did not open', async () => {
+        await accessibilityHandler['closePreTestHookRun']()
+
+        expect(reporter.close).not.toHaveBeenCalled()
+    })
+
+    it('reports nothing when no reporter is installed', async () => {
+        const bare = new AccessibilityHandler(browser, caps, options, false, config, 'cucumber', true, false, accessibilityOpts)
+
+        await bare['ensurePreTestHookRun']()
+
+        expect(bare['_preTestHookState']).toBe('idle')
+    })
+
+    it('stays closed-but-unreported when open() yields no uuid', async () => {
+        reporter.open.mockResolvedValue(undefined)
+
+        await accessibilityHandler['ensurePreTestHookRun']()
+        await accessibilityHandler['closePreTestHookRun']()
+
+        expect(reporter.close).not.toHaveBeenCalled()
+    })
+})
+
+describe('pre-test scan gate (non-CLI flow)', () => {
+    beforeEach(() => {
+        accessibilityHandler = new AccessibilityHandler(browser, caps, options, false, config, 'mocha', true, false, accessibilityOpts)
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        vi.spyOn(utils, 'isAccessibilityAutomationSession').mockReturnValue(true)
+        vi.spyOn(utils, 'validateCapsWithA11y').mockReturnValue(true)
+    })
+
+    it('opens the gate in before(), so config-level hook commands scan', async () => {
+        await accessibilityHandler.before('session-direct')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-direct']).toBe(true)
+    })
+
+    it('leaves it closed when autoScanning is off', async () => {
+        const handler = new AccessibilityHandler(browser, caps, options, false, config, 'mocha', true, false,
+            { ...accessibilityOpts, autoScanning: false } as never)
+
+        await handler.before('session-noauto')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-noauto']).toBeUndefined()
+    })
+
+    it('is recomputed per test, so a filtered test still closes it', async () => {
+        await accessibilityHandler.before('session-direct-2')
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-direct-2']).toBe(true)
+
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(false)
+        await accessibilityHandler.beforeTest('suite', { title: 'excluded', parent: 'suite' } as never)
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-direct-2']).toBe(false)
     })
 })
 

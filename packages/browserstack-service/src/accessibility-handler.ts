@@ -75,7 +75,9 @@ import accessibilityScripts from './scripts/accessibility-scripts.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 
+import { PRE_TEST_HOOK_TITLE_FALLBACK, PRE_TEST_HOOK_TITLE_PREFIX, PRE_TEST_SCAN_FRAMEWORKS } from './constants.js'
 import { BStackLogger } from './bstackLogger.js'
+import { getActiveHookName, getPreTestWindowFailure } from './hookInstrumentation.js'
 
 class _AccessibilityHandler {
     /**
@@ -93,6 +95,17 @@ class _AccessibilityHandler {
     private _config: Options.Testrunner
     private _accessibilityOptions?: AccessibilityOptions
     private _autoScanning: boolean = true
+    // Reports the pre-test window as a hook run. Injected by the service, and only for the
+    // frameworks whose Direct-flow hook reporting supports it, so this handler stays unaware of
+    // which one it is serving.
+    private _preTestHookReporter?: {
+        open: (name: string) => Promise<string | undefined>,
+        close: (uuid: string, passed: boolean, message?: string) => Promise<void>
+    }
+    private _preTestHookState: 'idle' | 'attempted' | 'open' | 'closed' = 'idle'
+    // True from before() until the first test/scenario — see preTestWindowActive on the CLI module.
+    private _preTestWindowActive = false
+    private _preTestHookUuid?: string
     private _testIdentifier: string | null = null
     private _testMetadata: TestMetadata = {}
     /* Set while a supported hook is executing; scans fired in this window are stamped with it. */
@@ -185,6 +198,60 @@ class _AccessibilityHandler {
             }
         } catch (error) {
             BStackLogger.debug(`Exception while migrating accessibility state across session reload: ${error}`)
+        }
+    }
+
+    /** mocha and cucumber only — see PRE_TEST_SCAN_FRAMEWORKS. */
+    private supportsPreTestWindow(): boolean {
+        return PRE_TEST_SCAN_FRAMEWORKS.includes(this._framework as typeof PRE_TEST_SCAN_FRAMEWORKS[number]) &&
+            !this._browser?.isMultiremote
+    }
+
+    setPreTestHookReporter(reporter: {
+        open: (name: string) => Promise<string | undefined>,
+        close: (uuid: string, passed: boolean, message?: string) => Promise<void>
+    }) {
+        this._preTestHookReporter = reporter
+    }
+
+    /** On demand from the scan path, so a suite with no config-level hook reports nothing extra. */
+    private async ensurePreTestHookRun() {
+        if (this._preTestHookState !== 'idle' || !this._preTestHookReporter || !this.supportsPreTestWindow()) {
+            return
+        }
+        this._preTestHookState = 'attempted'
+        try {
+            const hook = getActiveHookName()
+            const name = hook ? `${PRE_TEST_HOOK_TITLE_PREFIX} "${hook}" hook` : PRE_TEST_HOOK_TITLE_FALLBACK
+            this._preTestHookUuid = await this._preTestHookReporter.open(name)
+            if (this._preTestHookUuid) {
+                this._preTestHookState = 'open'
+                // What actually reaches the scan: commandWrapper passes this to performA11yScan as
+                // thHookRunUuid. Without it the hook run exists in TRA and the scans in its window
+                // still arrive with no parent, which is the join this whole thing is for.
+                this._currentHookRunUuid = this._preTestHookUuid
+            }
+        } catch (error) {
+            BStackLogger.debug(`Could not open a hook run for the pre-test window: ${error}`)
+        }
+    }
+
+    private async closePreTestHookRun() {
+        // cleared unconditionally: the window is over whether or not a hook run was ever opened,
+        // and leaving it set would strip the test run uuid from every later test-body scan
+        this._preTestWindowActive = false
+        if (this._preTestHookState !== 'open' || !this._preTestHookUuid || !this._preTestHookReporter) {
+            this._preTestHookState = 'closed'
+            return
+        }
+        this._preTestHookState = 'closed'
+        try {
+            const failure = getPreTestWindowFailure()
+            // cleared before the close so a test-body scan is never stamped as a hook scan
+            this._currentHookRunUuid = null
+            await this._preTestHookReporter.close(this._preTestHookUuid, !failure, failure)
+        } catch (error) {
+            BStackLogger.debug(`Could not close the hook run for the pre-test window: ${error}`)
         }
     }
 
@@ -282,6 +349,20 @@ class _AccessibilityHandler {
         if (!this._accessibility) {
             return
         }
+
+        // Gate for the window between driver creation and the first test/scenario. WDIO's
+        // config-level hooks run there and are no test-framework hooks, so nothing else registers
+        // the session and their commands went unscanned. beforeTest/beforeScenario/beforeHook each
+        // recompute it. Same fix as the CLI flow's onBeforeExecute.
+        //
+        // Scoped to mocha and cucumber. Jasmine is in the per-test path too, so opening this for
+        // it would add scans in a window it never scanned — a behaviour change on a framework
+        // where App-A11y is not supported. Multiremote likewise.
+        if (this._autoScanning && this.supportsPreTestWindow()) {
+            AccessibilityHandler._a11yScanSessionMap[sessionId] = true
+            this._preTestWindowActive = true
+        }
+
         if (!('overwriteCommand' in this._browser && Array.isArray(accessibilityScripts.commandsToWrap))) {
             return
         }
@@ -305,6 +386,7 @@ class _AccessibilityHandler {
     }
 
     async beforeTest (suiteTitle: string | undefined, test: Frameworks.Test) {
+        await this.closePreTestHookRun()
         try {
             if (
                 !AccessibilityHandler.TEST_HOOK_FRAMEWORKS.includes(this._framework as string) ||
@@ -385,6 +467,7 @@ class _AccessibilityHandler {
       * Cucumber Only
     */
     async beforeScenario (world: ITestCaseHookParameter) {
+        await this.closePreTestHookRun()
         const pickleData = world.pickle
         const gherkinDocument = world.gherkinDocument
         const featureData = gherkinDocument.feature
@@ -504,6 +587,7 @@ class _AccessibilityHandler {
 
     private async commandWrapper (command: CommandInfo, prevImpl: Function, origFunction: Function, ...args: unknown[]) {
         const skipScanForBidiWindowCommand = AccessibilityHandler.shouldSkipScanForBidiWindowCommand(this._browser, command)
+        await this.ensurePreTestHookRun()
         if (
             this._sessionId && AccessibilityHandler._a11yScanSessionMap[this._sessionId] &&
                 !skipScanForBidiWindowCommand &&
@@ -513,7 +597,7 @@ class _AccessibilityHandler {
                 )
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
-            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid)
+            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this._preTestWindowActive)
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)
         }

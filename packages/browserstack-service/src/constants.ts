@@ -86,6 +86,46 @@ export const CAPTURE_CONFIG_IMPORT_DEPTH = 1
 /* How far to walk up from the config dir looking for the project's package.json */
 export const MAX_PACKAGE_JSON_WALK_UP = 5
 
+/* WDIO config hooks that run in the worker with a live session, so a driver command inside them
+   is meaningful. Excludes launcher hooks (no driver), beforeSession (no session yet),
+   afterSession (session being deleted) and beforeCommand/afterCommand (per-command). */
+export const BROWSER_CONTEXT_HOOKS = [
+    'before',
+    'beforeSuite',
+    'beforeHook',
+    'beforeTest',
+    'afterTest',
+    'afterHook',
+    'afterSuite',
+    'after',
+    'beforeFeature',
+    'beforeScenario',
+    'beforeStep',
+    'afterStep',
+    'afterScenario',
+    'afterFeature'
+] as const
+
+/* Of those, the ones that can run before the first test/scenario: the Mocha adapter registers
+   beforeSuite as a root before-all, and beforeFeature precedes the first scenario. */
+export const PRE_TEST_WINDOW_HOOKS = ['before', 'beforeSuite', 'beforeFeature'] as const
+
+/* Tag on hook-window diagnostics, so they can be grepped out of an uploaded log */
+export const HOOK_WINDOW_LOG_PREFIX = '[hook-window]'
+
+/* Frameworks the pre-test window work applies to. Jasmine is excluded deliberately: it is in
+   the per-test a11y path (TEST_HOOK_FRAMEWORKS) and keeps that behaviour untouched, but App-A11y
+   is not supported there, so nothing new is switched on for it. Multiremote is excluded the same
+   way, and separately never reaches the CLI flow. */
+export const PRE_TEST_SCAN_FRAMEWORKS = ['mocha', 'cucumber'] as const
+
+/* Key the pre-test hook run is stashed under, so its finish can find its start */
+export const PRE_TEST_HOOK_ID = 'bstack:pre-test-hook'
+
+/* Title reported for the hook run covering the pre-test window */
+export const PRE_TEST_HOOK_TITLE_PREFIX = 'wdio'
+export const PRE_TEST_HOOK_TITLE_FALLBACK = `${PRE_TEST_HOOK_TITLE_PREFIX} config-level hook`
+
 /**
  * Keys whose line is scrubbed before a config file enters the archive.
  * `user` / `key` are WDIO's own top-level credential options, hence the bare entries.

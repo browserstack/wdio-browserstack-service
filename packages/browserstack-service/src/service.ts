@@ -11,19 +11,21 @@ import {
     isFalse,
     getUniqueIdentifier,
     getHookType,
-    isBrowserstackExecutorScript
+    isBrowserstackExecutorScript,
+    isMultiRemoteCaps
 } from './util.js'
 import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from './types.js'
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
 import InsightsHandler from './insights-handler.js'
 import TestReporter from './reporter.js'
-import { DEFAULT_OPTIONS, NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV } from './constants.js'
+import { DEFAULT_OPTIONS, NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV, PRE_TEST_SCAN_FRAMEWORKS } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import AccessibilityHandler from './accessibility-handler.js'
 import CustomTagsHandler from './custom-tags-handler.js'
 import { classifyMochaHookTitle, setCurrentMochaHookWindow } from './customTags.js'
 import type TestHubModule from './cli/modules/testHubModule.js'
 import { BStackLogger } from './bstackLogger.js'
+import { instrumentBrowserContextHooks } from './hookInstrumentation.js'
 import PercyHandler from './Percy/Percy-Handler.js'
 import Listener from './testOps/listener.js'
 import { saveWorkerData } from './data-store.js'
@@ -118,6 +120,15 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // strict 'true' string compare and would miss a numeric `bail: 1`
         const bailOpt: unknown = this._config?.mochaOpts?.bail
         this._mochaBail = this._config?.framework === 'mocha' && Boolean(bailOpt) && !isFalse(bailOpt)
+
+        // Make the boundaries of the user's own session-scoped config hooks observable. Logging
+        // only; patched here because the runner reads these arrays after the service is built.
+        // Scoped to the frameworks the pre-test window work applies to, so a jasmine or multiremote
+        // run has its handlers left exactly as WDIO registered them.
+        if (PRE_TEST_SCAN_FRAMEWORKS.includes(this._config?.framework as typeof PRE_TEST_SCAN_FRAMEWORKS[number]) &&
+            !isMultiRemoteCaps(this._caps as Capabilities.TestrunnerCapabilities)) {
+            instrumentBrowserContextHooks(this._config)
+        }
 
         PerformanceTester.startMonitoring('performance-report-service.csv')
         if (shouldProcessEventForTesthub('')) {
@@ -289,6 +300,22 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         this._options.accessibilityOptions
                     )
 
+                    // Installed before before(), and reading _insightsHandler at CALL time rather
+                    // than capturing it: WDIO runs the user's config-level before() concurrently
+                    // with ours, so its first command can land while this method is still setting
+                    // up. Installing late meant the first scan of the window found no reporter.
+                    // Cucumber only — jasmine and multiremote report hooks on no path this reuses.
+                    if (this._config.framework === 'cucumber') {
+                        this._accessibilityHandler.setPreTestHookReporter({
+                            open: (name: string) => this._insightsHandler
+                                ? this._insightsHandler.reportPreTestHookStarted(name)
+                                : Promise.resolve(undefined),
+                            close: (uuid: string, passed: boolean, message?: string) => this._insightsHandler
+                                ? this._insightsHandler.reportPreTestHookFinished(uuid, passed, message)
+                                : Promise.resolve()
+                        })
+                    }
+
                     if (this._isCliAccessibilityFlow()){
                         BStackLogger.info(`CLI is running, tracking accessibility event for before: ${sessionId}`)
                         // BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { sessionId })
@@ -318,6 +345,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         return
                     }
                     await this._insightsHandler.before()
+
                 }
 
                 /**
