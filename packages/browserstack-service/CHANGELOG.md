@@ -1,5 +1,12 @@
 # @wdio/browserstack-service
 
+## 9.35.1
+
+### Patch Changes
+
+- 2354ae4: - Fixed accessibility scanning stopping for the remainder of a test after `browser.reloadSession()`.
+  - Fixed App Automate and Automate session names staying on the static `sessionName` capability when a test reloads the session part-way through for example a deep-link or app-relaunch step. Such sessions now show the test title, and also carry their own pass/fail result.
+
 ## 9.35.0
 
 ### Minor Changes
