@@ -51,7 +51,7 @@ import AccessibilityModule from './cli/modules/accessibilityModule.js'
 import util from 'node:util'
 
 export default class BrowserstackService implements Services.ServiceInstance {
-    private _sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
+    private _sessionBaseUrl = 'https://apirengg-lts.bsstag.com/automate/sessions'
     private _failReasons: string[] = []
     private _hookFailReasons: string[] = []
     private _pureTestFailReasons: string[] = []
@@ -243,11 +243,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // Ensure capabilities are not null in case of multiremote
 
         if (this._isAppAutomate()) {
-            this._sessionBaseUrl = 'https://api-cloud.browserstack.com/app-automate/sessions'
+            this._sessionBaseUrl = 'https://api-cloud-rengg-lts.bsstag.com/app-automate/sessions'
         }
 
         if (this._turboScale) {
-            this._sessionBaseUrl = 'https://api.browserstack.com/automate-turboscale/v1/sessions'
+            this._sessionBaseUrl = 'https://apirengg-lts.bsstag.com/automate-turboscale/v1/sessions'
         }
 
         this._scenariosThatRan = []

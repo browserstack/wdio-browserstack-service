@@ -28,8 +28,8 @@ export const DEFAULT_OPTIONS: Partial<BrowserstackConfig> = {
 
 export const consoleHolder: typeof console = Object.assign({}, console)
 
-export const DATA_ENDPOINT = 'https://collector-observability.browserstack.com'
-export const APP_ALLY_ENDPOINT = 'https://app-accessibility.browserstack.com/automate'
+export const DATA_ENDPOINT = 'https://collector-testhub-rengg-lts-external.bsstag.com'
+export const APP_ALLY_ENDPOINT = 'https://app-accessibility-rengg-lts.bsstag.com/automate'
 export const APP_ALLY_ISSUES_ENDPOINT = 'api/v1/issues'
 export const APP_ALLY_ISSUES_SUMMARY_ENDPOINT = 'api/v1/issues-summary'
 export const DATA_EVENT_ENDPOINT = 'api/v1/event'
@@ -47,7 +47,7 @@ export const BROWSERSTACK_TEST_PLAN_ID = 'BROWSERSTACK_TEST_PLAN_ID'
 
 export const LOGS_FILE = 'logs/bstack-wdio-service.log'
 export const CLI_DEBUG_LOGS_FILE = 'log/sdk-cli-debug.log'
-export const UPLOAD_LOGS_ADDRESS = 'https://upload-observability.browserstack.com'
+export const UPLOAD_LOGS_ADDRESS = 'https://upload-observability-rengg-lts-ssi.bsstag.com'
 export const UPLOAD_LOGS_ENDPOINT = 'client-logs/upload'
 
 export const PERCY_LOGS_FILE = 'logs/percy.log'
@@ -160,13 +160,13 @@ export const LOG_KIND_USAGE_MAP = {
     'HTTP': 'http'
 }
 
-export const FUNNEL_INSTRUMENTATION_URL = 'https://api.browserstack.com/sdk/v1/event'
+export const FUNNEL_INSTRUMENTATION_URL = 'https://apirengg-lts.bsstag.com/sdk/v1/event'
 
-export const EDS_URL = 'https://eds.browserstack.com'
+export const EDS_URL = 'https://edsstaging.bsstag.com'
 
 export const SUPPORTED_BROWSERS_FOR_AI = ['chrome', 'microsoftedge', 'firefox']
 
-export const TCG_URL = 'https://tcg.browserstack.com'
+export const TCG_URL = 'https://tcg.bsstag.com'
 
 export const TCG_INFO = {
     tcgRegion: 'use',

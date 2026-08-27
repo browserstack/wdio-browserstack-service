@@ -78,7 +78,7 @@ export default class BStackCleanup {
             await finalizeOrphanedRuns()
             const result = await stopBuildUpstream()
             if ((process.env[BROWSERSTACK_OBSERVABILITY]) && process.env[BROWSERSTACK_TESTHUB_UUID]) {
-                BStackLogger.info(`\nVisit https://automation.browserstack.com/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]} to view build report, insights, and many more debugging information all at one place!\n`)
+                BStackLogger.info(`\nVisit https://automation-rengg-lts.bsstag.com/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]} to view build report, insights, and many more debugging information all at one place!\n`)
             }
             const status = (result && result.status) || 'failed'
             const message = (result && result.message)
