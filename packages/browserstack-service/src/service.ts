@@ -300,6 +300,22 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         this._options.accessibilityOptions
                     )
 
+                    // Installed before before(), and reading _insightsHandler at CALL time rather
+                    // than capturing it: WDIO runs the user's config-level before() concurrently
+                    // with ours, so its first command can land while this method is still setting
+                    // up. Installing late meant the first scan of the window found no reporter.
+                    // Cucumber only — jasmine and multiremote report hooks on no path this reuses.
+                    if (this._config.framework === 'cucumber') {
+                        this._accessibilityHandler.setPreTestHookReporter({
+                            open: (name: string) => this._insightsHandler
+                                ? this._insightsHandler.reportPreTestHookStarted(name)
+                                : Promise.resolve(undefined),
+                            close: (uuid: string, passed: boolean, message?: string) => this._insightsHandler
+                                ? this._insightsHandler.reportPreTestHookFinished(uuid, passed, message)
+                                : Promise.resolve()
+                        })
+                    }
+
                     if (this._isCliAccessibilityFlow()){
                         BStackLogger.info(`CLI is running, tracking accessibility event for before: ${sessionId}`)
                         // BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { sessionId })
@@ -330,18 +346,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     }
                     await this._insightsHandler.before()
 
-                    // Cucumber only, per its Direct-flow hook reporting: let the accessibility
-                    // handler report the pre-test window as a hook run, so scans fired there have
-                    // a parent the backend can resolve. Jasmine and mocha-multiremote are left
-                    // out — neither reports hooks on a path this can reuse.
-                    if (this._config.framework === 'cucumber' && this._accessibilityHandler) {
-                        const insightsHandler = this._insightsHandler
-                        this._accessibilityHandler.setPreTestHookReporter({
-                            open: (name: string) => insightsHandler.reportPreTestHookStarted(name),
-                            close: (uuid: string, passed: boolean, message?: string) =>
-                                insightsHandler.reportPreTestHookFinished(uuid, passed, message)
-                        })
-                    }
                 }
 
                 /**
