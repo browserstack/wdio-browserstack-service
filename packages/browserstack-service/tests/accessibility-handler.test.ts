@@ -749,6 +749,16 @@ describe('pre-test hook run (cucumber, Direct flow)', () => {
         accessibilityHandler.setPreTestHookReporter(reporter)
     })
 
+    it('stamps the hook uuid onto scans, and clears it when the window closes', async () => {
+        // commandWrapper passes _currentHookRunUuid to performA11yScan as thHookRunUuid; without
+        // this the hook run exists but the window's scans still arrive with no parent.
+        await accessibilityHandler['ensurePreTestHookRun']()
+        expect(accessibilityHandler['_currentHookRunUuid']).toBe('hook-uuid')
+
+        await accessibilityHandler['closePreTestHookRun']()
+        expect(accessibilityHandler['_currentHookRunUuid']).toBeNull()
+    })
+
     it('opens once on demand and closes when the first scenario starts', async () => {
         await accessibilityHandler['ensurePreTestHookRun']()
         await accessibilityHandler['ensurePreTestHookRun']()

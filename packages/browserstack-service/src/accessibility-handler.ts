@@ -224,6 +224,10 @@ class _AccessibilityHandler {
             this._preTestHookUuid = await this._preTestHookReporter.open(name)
             if (this._preTestHookUuid) {
                 this._preTestHookState = 'open'
+                // What actually reaches the scan: commandWrapper passes this to performA11yScan as
+                // thHookRunUuid. Without it the hook run exists in TRA and the scans in its window
+                // still arrive with no parent, which is the join this whole thing is for.
+                this._currentHookRunUuid = this._preTestHookUuid
             }
         } catch (error) {
             BStackLogger.debug(`Could not open a hook run for the pre-test window: ${error}`)
@@ -238,6 +242,8 @@ class _AccessibilityHandler {
         this._preTestHookState = 'closed'
         try {
             const failure = getPreTestWindowFailure()
+            // cleared before the close so a test-body scan is never stamped as a hook scan
+            this._currentHookRunUuid = null
             await this._preTestHookReporter.close(this._preTestHookUuid, !failure, failure)
         } catch (error) {
             BStackLogger.debug(`Could not close the hook run for the pre-test window: ${error}`)
