@@ -483,8 +483,10 @@ describe('beforeHook / afterHook (hook scans)', () => {
         await accessibilityHandler['commandWrapper']({ name: 'click', class: 'Element' } as any, undefined as any, orig, 'arg')
         expect(scanSpy).toHaveBeenCalled()
         const lastCall = scanSpy.mock.calls[scanSpy.mock.calls.length - 1]
-        // performA11yScan(isAppAutomate, browser, isBS, isA11y, commandName, testName, hookRunUuid)
-        expect(lastCall[lastCall.length - 1]).toBe('hook-uuid-42')
+        // performA11yScan(isAppAutomate, browser, isBS, isA11y, commandName, testName, hookRunUuid,
+        //                 isGlobalHook) — asserted by POSITION, not "last": the signature grew an
+        //                 argument and a last-element assertion silently followed it.
+        expect(lastCall[6]).toBe('hook-uuid-42')
     })
 
     it('does NOT stamp a hook uuid on a test-body scan (afterHook cleared it)', async () => {
@@ -500,7 +502,26 @@ describe('beforeHook / afterHook (hook scans)', () => {
         await accessibilityHandler['commandWrapper']({ name: 'click', class: 'Element' } as any, undefined as any, orig, 'arg')
         expect(scanSpy).toHaveBeenCalled()
         const lastCall = scanSpy.mock.calls[scanSpy.mock.calls.length - 1]
-        expect(lastCall[lastCall.length - 1]).toBeNull()
+        expect(lastCall[6]).toBeNull()
+    })
+
+    it('omits thTestRunUuid for a global-hook scan, keeps it for a test-body scan', () => {
+        // TEST_ANALYTICS_ID holds a uuid minted at instance creation, i.e. a test that has not
+        // started. Sending it from a config-level hook would attribute the scan to a test it did
+        // not come from; the hook run uuid is the parent there.
+        process.env.TEST_ANALYTICS_ID = 'test-run-uuid-1'
+
+        const fromGlobalHook = utils._getParamsForAppAccessibility('back', undefined, 'hook-uuid-1', true)
+        expect(fromGlobalHook.thTestRunUuid).toBeUndefined()
+        expect(fromGlobalHook.thHookRunUuid).toBe('hook-uuid-1')
+
+        const fromTestBody = utils._getParamsForAppAccessibility('back', 'a test', null, false)
+        expect(fromTestBody.thTestRunUuid).toBe('test-run-uuid-1')
+
+        // default (flag omitted) must stay as it was for every existing caller
+        expect(utils._getParamsForAppAccessibility('back', 'a test').thTestRunUuid).toBe('test-run-uuid-1')
+
+        delete process.env.TEST_ANALYTICS_ID
     })
 
     it('_getParamsForAppAccessibility puts the hook uuid on the scan payload as thHookRunUuid', () => {

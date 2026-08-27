@@ -695,7 +695,21 @@ describe('AccessibilityModule', () => {
 
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click', 'hook-uuid-99')
 
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99')
+            // 4th arg is the global-hook flag; a direct call passes none, so it forwards undefined
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99', undefined)
+        })
+
+        it('marks a scan from the pre-test window as a global-hook scan', async () => {
+            // the flag is what strips thTestRunUuid: in that window the env var holds a uuid for a
+            // test that has not started, so sending it would attribute the scan to the wrong test
+            accessibilityModule.accessibility = true
+            accessibilityModule.isAppAccessibility = true
+            mockBrowser.execute.mockResolvedValue({ scanned: true })
+
+            await (accessibilityModule as never as { performScanCli: (b: unknown, c?: string, h?: string | null, g?: boolean) => Promise<void> })
+                .performScanCli(mockBrowser, 'back', 'hook-uuid-1', true)
+
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('back', undefined, 'hook-uuid-1', true)
         })
 
         it('passes no hook uuid for an ordinary (non-hook) app scan', async () => {
@@ -705,7 +719,7 @@ describe('AccessibilityModule', () => {
 
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click')
 
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined)
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined, undefined)
         })
     })
 })

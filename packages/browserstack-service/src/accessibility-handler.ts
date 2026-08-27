@@ -103,6 +103,8 @@ class _AccessibilityHandler {
         close: (uuid: string, passed: boolean, message?: string) => Promise<void>
     }
     private _preTestHookState: 'idle' | 'attempted' | 'open' | 'closed' = 'idle'
+    // True from before() until the first test/scenario — see preTestWindowActive on the CLI module.
+    private _preTestWindowActive = false
     private _preTestHookUuid?: string
     private _testIdentifier: string | null = null
     private _testMetadata: TestMetadata = {}
@@ -235,6 +237,9 @@ class _AccessibilityHandler {
     }
 
     private async closePreTestHookRun() {
+        // cleared unconditionally: the window is over whether or not a hook run was ever opened,
+        // and leaving it set would strip the test run uuid from every later test-body scan
+        this._preTestWindowActive = false
         if (this._preTestHookState !== 'open' || !this._preTestHookUuid || !this._preTestHookReporter) {
             this._preTestHookState = 'closed'
             return
@@ -355,6 +360,7 @@ class _AccessibilityHandler {
         // where App-A11y is not supported. Multiremote likewise.
         if (this._autoScanning && this.supportsPreTestWindow()) {
             AccessibilityHandler._a11yScanSessionMap[sessionId] = true
+            this._preTestWindowActive = true
         }
 
         if (!('overwriteCommand' in this._browser && Array.isArray(accessibilityScripts.commandsToWrap))) {
@@ -591,7 +597,7 @@ class _AccessibilityHandler {
                 )
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
-            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid)
+            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this._preTestWindowActive)
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)
         }
