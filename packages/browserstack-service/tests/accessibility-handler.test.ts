@@ -716,6 +716,19 @@ describe('frameworks the pre-test window does NOT apply to', () => {
         expect(AccessibilityHandler['_a11yScanSessionMap']['session-multiremote']).toBeUndefined()
     })
 
+    it('does not key the map on "undefined" when multiremote hands over no session id', async () => {
+        // A multiremote browser has no sessionId — MultiRemoteDriver defines none and the element
+        // path deletes it, which is why wdio-runner reads ids per instance. The service passes
+        // `browser.sessionId` straight through, so the handler receives undefined.
+        const multiremote = { ...browser, isMultiremote: true } as never
+        const handler = new AccessibilityHandler(multiremote, caps, options, false, config, 'mocha', true, false, accessibilityOpts)
+
+        await handler.before(undefined as unknown as string)
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['undefined']).toBeUndefined()
+        expect(handler['_sessionId']).toBeUndefined()
+    })
+
     it('does not open a hook run for jasmine even if a reporter is installed', async () => {
         const handler = new AccessibilityHandler(browser, caps, options, false, config, 'jasmine', true, false, accessibilityOpts)
         const reporter = { open: vi.fn().mockResolvedValue('uuid'), close: vi.fn() }
