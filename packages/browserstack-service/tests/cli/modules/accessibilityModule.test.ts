@@ -162,6 +162,53 @@ describe('AccessibilityModule', () => {
         })
     })
 
+    describe('pre-test window gate', () => {
+        // afterEach's vi.resetAllMocks() drops the factory's mockReturnValue, so the caps
+        // validators return undefined and onBeforeExecute bails before the gate. Re-arm them.
+        const withA11yCaps = () => {
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            vi.mocked(validateCapsWithAppA11y).mockReturnValue(true)
+            return vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+                if (key.includes('INPUT_CAPABILITIES')) {
+                    return {}
+                }
+                if (key.includes('CAPABILITIES')) {
+                    return { browserName: 'chrome' }
+                }
+                return 'session-w'
+            })
+        }
+
+        it('opens the scan gate at driver creation, before any test exists', async () => {
+            withA11yCaps()
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
+            expect(accessibilityModule.preTestWindowActive).toBe(true)
+        })
+
+        it('respects autoScanning — the one validation the window still owns', async () => {
+            withA11yCaps()
+            accessibilityModule.autoScanning = false
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBeUndefined()
+            expect(accessibilityModule.preTestWindowActive).toBe(false)
+        })
+
+        it('closes the window at the first test, handing the gate back to the tag filter', async () => {
+            withA11yCaps()
+            await accessibilityModule.onBeforeExecute()
+            expect(accessibilityModule.preTestWindowActive).toBe(true)
+
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'suite', test: { title: 'test' } })
+
+            expect(accessibilityModule.preTestWindowActive).toBe(false)
+        })
+    })
+
     describe('onBeforeExecute', () => {
         it('should patch browser methods when automation instance exists', async () => {
             vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
@@ -570,7 +617,7 @@ describe('AccessibilityModule', () => {
 
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click', 'hook-uuid-99')
 
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99')
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99', undefined)
         })
 
         it('passes no hook uuid for an ordinary (non-hook) app scan', async () => {
@@ -580,7 +627,7 @@ describe('AccessibilityModule', () => {
 
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click')
 
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined)
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined, undefined)
         })
     })
 })

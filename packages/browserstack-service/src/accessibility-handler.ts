@@ -84,6 +84,10 @@ class _AccessibilityHandler {
      * cucumber goes through beforeScenario/afterScenario instead.
      */
     private static readonly TEST_HOOK_FRAMEWORKS = ['mocha', 'jasmine']
+    // Frameworks whose config-level hooks are covered by the pre-test window. Jasmine is
+    // excluded deliberately — App Accessibility is not supported there and its behaviour must
+    // not change; multiremote is excluded in the guard below, having no session id to gate on.
+    private static readonly PRE_TEST_SCAN_FRAMEWORKS = ['mocha', 'cucumber']
     private _platformA11yMeta: PlatformA11yMeta
     private _caps: Capabilities.ResolvedTestrunnerCapabilities
     private _suiteFile?: string
@@ -93,6 +97,8 @@ class _AccessibilityHandler {
     private _config: Options.Testrunner
     private _accessibilityOptions?: AccessibilityOptions
     private _autoScanning: boolean = true
+    // True from before() until the first test or scenario — see the CLI module's equivalent.
+    private _preTestWindowActive: boolean = false
     private _testIdentifier: string | null = null
     private _testMetadata: TestMetadata = {}
     /* Set while a supported hook is executing; scans fired in this window are stamped with it. */
@@ -282,6 +288,17 @@ class _AccessibilityHandler {
         if (!this._accessibility) {
             return
         }
+
+        // WDIO's config-level hooks run before any test exists, so the per-test gate below has
+        // not been computed yet and driver commands issued there went unscanned. Every other
+        // validation still applies — an a11y-capable session (returned above), autoScanning, a
+        // supported framework, a real session id. The include/exclude tag filter is the one
+        // exception: it matches on suite and test titles, and neither exists in this window.
+        if (this._autoScanning && this.supportsPreTestWindow() && sessionId) {
+            AccessibilityHandler._a11yScanSessionMap[sessionId] = true
+            this._preTestWindowActive = true
+            BStackLogger.debug('Accessibility scan gate opened for the pre-test window')
+        }
         if (!('overwriteCommand' in this._browser && Array.isArray(accessibilityScripts.commandsToWrap))) {
             return
         }
@@ -304,6 +321,11 @@ class _AccessibilityHandler {
 
     }
 
+    private supportsPreTestWindow(): boolean {
+        return AccessibilityHandler.PRE_TEST_SCAN_FRAMEWORKS.includes(this._framework as string) &&
+            !this._browser?.isMultiremote
+    }
+
     async beforeTest (suiteTitle: string | undefined, test: Frameworks.Test) {
         try {
             if (
@@ -317,6 +339,8 @@ class _AccessibilityHandler {
 
             /* jasmine test objects carry the spec name in `description` (`title` is unset) */
             const testTitle = test.title ?? test.description
+            // Window over: the per-test gate owns the decision from here, tags included.
+            this._preTestWindowActive = false
             // @ts-expect-error fix type
             const shouldScanTest = this._autoScanning && shouldScanTestForAccessibility(suiteTitle, testTitle, this._accessibilityOptions)
             const testIdentifier = this.getIdentifier(test)
@@ -397,6 +421,8 @@ class _AccessibilityHandler {
         }
 
         try {
+            // Window over: the per-test gate owns the decision from here, tags included.
+            this._preTestWindowActive = false
             // @ts-expect-error fix type
             const shouldScanScenario = this._autoScanning && shouldScanTestForAccessibility(featureData?.name, pickleData.name, this._accessibilityOptions, world, true)
             this._testMetadata[uniqueId] = {
@@ -513,7 +539,7 @@ class _AccessibilityHandler {
                 )
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
-            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid)
+            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this._preTestWindowActive)
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)
         }

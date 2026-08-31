@@ -27,6 +27,9 @@ export default class AccessibilityModule extends BaseModule {
     scriptInstance: typeof accessibilityScripts
     accessibility: boolean = false
     autoScanning: boolean = true
+    // True from driver creation until the first test. Scans fired in that window come from
+    // WDIO's config-level hooks, which belong to no test, so they carry no test run uuid.
+    preTestWindowActive: boolean = false
     isAppAccessibility: boolean
     isNonBstackA11y: boolean
     accessibilityConfig: Accessibility
@@ -216,7 +219,7 @@ export default class AccessibilityModule extends BaseModule {
                     return
                 }
                 // If invoked from inside a hook, currentHookRunUuid stamps the scan for the hook.
-                return await this.performScanCli(browser, undefined, this.currentHookRunUuid)
+                return await this.performScanCli(browser, undefined, this.currentHookRunUuid, this.preTestWindowActive)
             }
 
             (browser as WebdriverIO.Browser).startA11yScanning = async () => {
@@ -263,6 +266,20 @@ export default class AccessibilityModule extends BaseModule {
                     })
             }
 
+            // WDIO's config-level hooks (before, beforeSuite) run before any test or framework
+            // hook exists, so onHookStart — which returns early without a test instance — cannot
+            // cover them, and driver commands issued there went unscanned. Every validation
+            // onHookStart applies still applies here: an a11y-capable session (returned above)
+            // and autoScanning. The include/exclude tag filter is the one exception — it matches
+            // on suite and test titles, and in this window neither exists yet. onBeforeTest
+            // re-computes the per-test gate, tags included, so this only affects the window.
+            const preTestSessionId = this.currentSessionId()
+            if (this.autoScanning && preTestSessionId !== undefined && preTestSessionId !== null) {
+                this.accessibilityMap.set(preTestSessionId, true)
+                this.preTestWindowActive = true
+                this.logger.debug('Accessibility scan gate opened for the pre-test window')
+            }
+
         } catch (error) {
             this.logger.error(`Error in onBeforeExecute: ${error}`)
         }
@@ -282,7 +299,7 @@ export default class AccessibilityModule extends BaseModule {
                     !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
                 ) {
                     try {
-                        await this.performScanCli(browser, command.name, this.currentHookRunUuid)
+                        await this.performScanCli(browser, command.name, this.currentHookRunUuid, this.preTestWindowActive)
                         this.logger.debug(`Accessibility scan performed after ${command.name} command`)
                     } catch (scanError) {
                         this.logger.debug(`Error performing accessibility scan after ${command.name}: ${scanError}`)
@@ -316,6 +333,8 @@ export default class AccessibilityModule extends BaseModule {
             const accessibilityOptions = this.config.accessibilityOptions
             const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title || '', accessibilityOptions as Record<string, string> | undefined) && this.accessibility
 
+            // Window over: the per-test gate below owns the decision from here, tags included.
+            this.preTestWindowActive = false
             this.accessibilityMap.set(sessionId, shouldScanTest)
 
             // Create test metadata similar to accessibility-handler
@@ -498,7 +517,8 @@ export default class AccessibilityModule extends BaseModule {
     private async performScanCli(
         browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser,
         commandName?: string,
-        hookRunUuid?: string | null
+        hookRunUuid?: string | null,
+        isGlobalHook?: boolean
     ): Promise<Record<string, unknown> | undefined> {
         return await PerformanceTester.measureWrapper(
             PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.PERFORM_SCAN,
@@ -511,7 +531,7 @@ export default class AccessibilityModule extends BaseModule {
                     if (this.isAppAccessibility) {
                         const testName=this.currentTestName || undefined
                         const results: unknown = await (browser as WebdriverIO.Browser).execute(
-                            formatString(this.scriptInstance.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName, hookRunUuid))) as string,
+                            formatString(this.scriptInstance.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName, hookRunUuid, isGlobalHook))) as string,
                             {}
                         )
                         BStackLogger.debug(util.format(results as string))
