@@ -475,6 +475,33 @@ describe('pre-test window (config-level hooks)', () => {
         expect(handler['_preTestWindowActive']).toBe(false)
     })
 
+    it('closes the window when a framework hook starts', async () => {
+        const handler = handlerFor('mocha')
+        await handler.before('session-fwhook')
+        expect(handler['_preTestWindowActive']).toBe(true)
+
+        await handler.beforeHook({ title: '"before all" hook', parent: 'suite' } as any, {}, 'hook-uuid-fw')
+
+        expect(handler['_preTestWindowActive']).toBe(false)
+    })
+
+    it('leaves a framework-hook scan carrying its test run uuid', async () => {
+        const handler = handlerFor('mocha')
+        handler['_sessionId'] = 'session-fwscan'
+        await handler.before('session-fwscan')
+        await handler.beforeHook({ title: '"before all" hook', parent: 'suite' } as any, {}, 'hook-uuid-fw2')
+
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        const orig = vi.fn().mockResolvedValue('ok')
+        await handler['commandWrapper']({ name: 'click', class: 'Element' } as any, undefined as any, orig, 'arg')
+
+        expect(scanSpy).toHaveBeenCalled()
+        const lastCall = scanSpy.mock.calls[scanSpy.mock.calls.length - 1]
+        // isGlobalHook (index 7) must be false, so the params helper sends the test run uuid
+        expect(lastCall[7]).toBe(false)
+    })
+
     it('closes the window at the first test', async () => {
         const handler = handlerFor('mocha')
         await handler.before('session-close')

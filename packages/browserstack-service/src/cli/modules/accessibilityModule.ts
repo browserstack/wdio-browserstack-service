@@ -80,6 +80,12 @@ export default class AccessibilityModule extends BaseModule {
             const hookRunUuid = testInstance ? (TestFramework.getState(testInstance, TestFrameworkConstants.KEY_HOOK_ID) as string | undefined) : undefined
             this.currentHookRunUuid = hookRunUuid || null
 
+            // A framework hook is running, so the config-level window is over. Framework hooks keep
+            // the treatment they always had, test run uuid included — the window targets WDIO's own
+            // config hooks only. Cleared ahead of the guards below: if the framework signalled a
+            // hook at all, the window has ended, whether or not this hook goes on to scan.
+            this.preTestWindowActive = false
+
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             if (!testInstance || !autoInstance) {
                 return

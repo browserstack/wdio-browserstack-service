@@ -198,6 +198,28 @@ describe('AccessibilityModule', () => {
             expect(accessibilityModule.preTestWindowActive).toBe(false)
         })
 
+        it('closes the window when a framework hook starts, leaving framework hooks untouched', async () => {
+            withA11yCaps()
+            await accessibilityModule.onBeforeExecute()
+            expect(accessibilityModule.preTestWindowActive).toBe(true)
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance })
+
+            expect(accessibilityModule.preTestWindowActive).toBe(false)
+        })
+
+        it('keeps the test run uuid on a framework-hook scan', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            await accessibilityModule.onHookStart({ instance: mockTestInstance })
+
+            await (accessibilityModule as any).performScanCli(mockBrowser, 'click', 'hook-uuid-1', accessibilityModule.preTestWindowActive)
+
+            // 4th arg false => _getParamsForAppAccessibility keeps process.env.TEST_ANALYTICS_ID
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-1', false)
+        })
+
         it('closes the window at the first test, handing the gate back to the tag filter', async () => {
             withA11yCaps()
             await accessibilityModule.onBeforeExecute()

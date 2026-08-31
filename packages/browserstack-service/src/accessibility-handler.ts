@@ -491,6 +491,9 @@ class _AccessibilityHandler {
      */
     async beforeHook (test: Frameworks.Test | undefined, context: unknown, hookRunUuid?: string | null) {
         try {
+            // Framework hook running ⇒ the config-level window is over. Framework hooks are left
+            // exactly as they were; only WDIO's own config hooks are targeted.
+            this._preTestWindowActive = false
             if (!this._accessibility || !this.shouldRunTestHooks(this._browser, this._accessibility)) {
                 return
             }
