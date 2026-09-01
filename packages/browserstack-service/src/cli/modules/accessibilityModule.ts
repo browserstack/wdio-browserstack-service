@@ -292,6 +292,15 @@ export default class AccessibilityModule extends BaseModule {
             if (sessionId && this.accessibilityMap.get(sessionId)) {
                 const browser = AutomationFramework.getDriver(autoInstance) as WebdriverIO.Browser
 
+                // The gate now outlives the last test, so a command issued once the session has
+                // been deleted (afterSession) would reach the scan and fail with "A sessionId is
+                // required for this command" — an error log where there used to be silence. The
+                // driver is the only thing that knows: no sessionId, no session.
+                if (!browser?.sessionId) {
+                    this.logger.debug('Skipping accessibility scan: the session has ended')
+                    return await originFunction(...args)
+                }
+
                 // Perform accessibility scan before command if script is available
                 if (
                     !command.name.includes('execute') ||

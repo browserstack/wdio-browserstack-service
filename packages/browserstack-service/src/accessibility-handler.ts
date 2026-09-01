@@ -554,7 +554,13 @@ class _AccessibilityHandler {
             // Parentless only before the framework has started anything: no hook run to own the
             // scan and no test seen yet in this session. Once either has happened the latch stays
             // set, so every later hook keeps the attribution it has always had.
-            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this.hasNoParent)
+            // See the CLI module: the gate outlives the session now, and a scan attempted after
+            // the session is gone logs an error where main was silent.
+            if (!(this._browser as WebdriverIO.Browser)?.sessionId) {
+                BStackLogger.debug('Skipping accessibility scan: the session has ended')
+            } else {
+                await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this.hasNoParent)
+            }
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)
         }

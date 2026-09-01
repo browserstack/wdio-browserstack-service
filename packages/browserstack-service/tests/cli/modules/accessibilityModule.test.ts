@@ -77,6 +77,8 @@ describe('AccessibilityModule', () => {
         }
 
         mockBrowser = {
+            // a live session: the wrapper skips scanning when the driver has no sessionId
+            sessionId: 'session-w',
             executeAsync: vi.fn().mockResolvedValue([]),
             execute: vi.fn().mockResolvedValue({}),
             overwriteCommand: vi.fn()
@@ -225,6 +227,19 @@ describe('AccessibilityModule', () => {
             const call = vi.mocked(_getParamsForAppAccessibility).mock.calls.at(-1)
             expect(call?.[2]).toBe('hook-uuid-1')
             expect(call?.[3]).toBe(false)
+        })
+
+        it('skips the scan once the session is gone, instead of logging a failure', async () => {
+            withA11yCaps()
+            await accessibilityModule.onBeforeExecute()
+            const orig = vi.fn().mockResolvedValue('ok')
+            mockBrowser.sessionId = undefined
+
+            await (accessibilityModule as any).commandWrapper({ name: 'click', class: 'Element' }, orig, 'arg')
+
+            // the command still runs; only the scan is skipped
+            expect(orig).toHaveBeenCalled()
+            expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
         })
 
         it('leaves the gate open after a test, so afterSuite/after still scan', async () => {
