@@ -162,7 +162,7 @@ describe('AccessibilityModule', () => {
         })
     })
 
-    describe('pre-test window gate', () => {
+    describe('scan gate ahead of the first test', () => {
         // afterEach's vi.resetAllMocks() drops the factory's mockReturnValue, so the caps
         // validators return undefined and onBeforeExecute bails before the gate. Re-arm them.
         const withA11yCaps = () => {
@@ -179,13 +179,17 @@ describe('AccessibilityModule', () => {
             })
         }
 
+        const fireWrappedCommand = async () => {
+            const orig = vi.fn().mockResolvedValue('ok')
+            await (accessibilityModule as any).commandWrapper({ name: 'click', class: 'Element' }, orig, 'arg')
+        }
+
         it('opens the scan gate at driver creation, before any test exists', async () => {
             withA11yCaps()
 
             await accessibilityModule.onBeforeExecute()
 
             expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
-            expect(accessibilityModule.preTestWindowActive).toBe(true)
         })
 
         it('respects autoScanning — the one validation the window still owns', async () => {
@@ -195,39 +199,43 @@ describe('AccessibilityModule', () => {
             await accessibilityModule.onBeforeExecute()
 
             expect(accessibilityModule.accessibilityMap.get('session-w')).toBeUndefined()
-            expect(accessibilityModule.preTestWindowActive).toBe(false)
         })
 
-        it('closes the window when a framework hook starts, leaving framework hooks untouched', async () => {
-            withA11yCaps()
-            await accessibilityModule.onBeforeExecute()
-            expect(accessibilityModule.preTestWindowActive).toBe(true)
-
-            await accessibilityModule.onHookStart({ instance: mockTestInstance })
-
-            expect(accessibilityModule.preTestWindowActive).toBe(false)
-        })
-
-        it('keeps the test run uuid on a framework-hook scan', async () => {
+        // The rule is stateless: a scan is parentless only when no framework hook run and no test
+        // can own it. These drive the REAL call site (commandWrapper), so they pin the wiring.
+        it('sends no test run uuid for a scan with no hook run and no test', async () => {
             withA11yCaps()
             accessibilityModule.isAppAccessibility = true
             await accessibilityModule.onBeforeExecute()
-            await accessibilityModule.onHookStart({ instance: mockTestInstance })
 
-            await (accessibilityModule as any).performScanCli(mockBrowser, 'click', 'hook-uuid-1', accessibilityModule.preTestWindowActive)
+            await fireWrappedCommand()
 
-            // 4th arg false => _getParamsForAppAccessibility keeps process.env.TEST_ANALYTICS_ID
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-1', false)
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, null, true)
         })
 
-        it('closes the window at the first test, handing the gate back to the tag filter', async () => {
+        it('keeps the test run uuid once a framework hook is running', async () => {
             withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
             await accessibilityModule.onBeforeExecute()
-            expect(accessibilityModule.preTestWindowActive).toBe(true)
+            vi.mocked(TestFramework.getState).mockReturnValue('hook-uuid-1')
+            await accessibilityModule.onHookStart({ instance: mockTestInstance })
 
-            await accessibilityModule.onBeforeTest({ suiteTitle: 'suite', test: { title: 'test' } })
+            await fireWrappedCommand()
 
-            expect(accessibilityModule.preTestWindowActive).toBe(false)
+            const call = vi.mocked(_getParamsForAppAccessibility).mock.calls.at(-1)
+            expect(call?.[2]).toBe('hook-uuid-1')
+            expect(call?.[3]).toBe(false)
+        })
+
+        it('keeps the test run uuid once a test is running', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            accessibilityModule.currentTestName = 'a test'
+
+            await fireWrappedCommand()
+
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', 'a test', null, false)
         })
     })
 

@@ -27,9 +27,6 @@ export default class AccessibilityModule extends BaseModule {
     scriptInstance: typeof accessibilityScripts
     accessibility: boolean = false
     autoScanning: boolean = true
-    // True from driver creation until the first test. Scans fired in that window come from
-    // WDIO's config-level hooks, which belong to no test, so they carry no test run uuid.
-    preTestWindowActive: boolean = false
     isAppAccessibility: boolean
     isNonBstackA11y: boolean
     accessibilityConfig: Accessibility
@@ -79,12 +76,6 @@ export default class AccessibilityModule extends BaseModule {
             // capture on autoInstance would silently drop app hook-scan stamping.
             const hookRunUuid = testInstance ? (TestFramework.getState(testInstance, TestFrameworkConstants.KEY_HOOK_ID) as string | undefined) : undefined
             this.currentHookRunUuid = hookRunUuid || null
-
-            // A framework hook is running, so the config-level window is over. Framework hooks keep
-            // the treatment they always had, test run uuid included — the window targets WDIO's own
-            // config hooks only. Cleared ahead of the guards below: if the framework signalled a
-            // hook at all, the window has ended, whether or not this hook goes on to scan.
-            this.preTestWindowActive = false
 
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             if (!testInstance || !autoInstance) {
@@ -225,7 +216,7 @@ export default class AccessibilityModule extends BaseModule {
                     return
                 }
                 // If invoked from inside a hook, currentHookRunUuid stamps the scan for the hook.
-                return await this.performScanCli(browser, undefined, this.currentHookRunUuid, this.preTestWindowActive)
+                return await this.performScanCli(browser, undefined, this.currentHookRunUuid, !this.currentHookRunUuid && !this.currentTestName)
             }
 
             (browser as WebdriverIO.Browser).startA11yScanning = async () => {
@@ -282,8 +273,7 @@ export default class AccessibilityModule extends BaseModule {
             const preTestSessionId = this.currentSessionId()
             if (this.autoScanning && preTestSessionId !== undefined && preTestSessionId !== null) {
                 this.accessibilityMap.set(preTestSessionId, true)
-                this.preTestWindowActive = true
-                this.logger.debug('Accessibility scan gate opened for the pre-test window')
+                this.logger.debug('Accessibility scan gate opened ahead of the first test')
             }
 
         } catch (error) {
@@ -305,7 +295,11 @@ export default class AccessibilityModule extends BaseModule {
                     !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
                 ) {
                     try {
-                        await this.performScanCli(browser, command.name, this.currentHookRunUuid, this.preTestWindowActive)
+                        // Parentless only when nothing can own the scan: no framework hook run
+                        // (reported to TRA, keeps its test uuid) and no test running. The wrapper
+                        // never knows which hook it is in, and does not need to.
+                        const hasNoParent = !this.currentHookRunUuid && !this.currentTestName
+                        await this.performScanCli(browser, command.name, this.currentHookRunUuid, hasNoParent)
                         this.logger.debug(`Accessibility scan performed after ${command.name} command`)
                     } catch (scanError) {
                         this.logger.debug(`Error performing accessibility scan after ${command.name}: ${scanError}`)
@@ -339,8 +333,6 @@ export default class AccessibilityModule extends BaseModule {
             const accessibilityOptions = this.config.accessibilityOptions
             const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title || '', accessibilityOptions as Record<string, string> | undefined) && this.accessibility
 
-            // Window over: the per-test gate below owns the decision from here, tags included.
-            this.preTestWindowActive = false
             this.accessibilityMap.set(sessionId, shouldScanTest)
 
             // Create test metadata similar to accessibility-handler

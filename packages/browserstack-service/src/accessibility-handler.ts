@@ -97,8 +97,6 @@ class _AccessibilityHandler {
     private _config: Options.Testrunner
     private _accessibilityOptions?: AccessibilityOptions
     private _autoScanning: boolean = true
-    // True from before() until the first test or scenario — see the CLI module's equivalent.
-    private _preTestWindowActive: boolean = false
     private _testIdentifier: string | null = null
     private _testMetadata: TestMetadata = {}
     /* Set while a supported hook is executing; scans fired in this window are stamped with it. */
@@ -293,11 +291,13 @@ class _AccessibilityHandler {
         // not been computed yet and driver commands issued there went unscanned. Every other
         // validation still applies — an a11y-capable session (returned above), autoScanning, a
         // supported framework, a real session id. The include/exclude tag filter is the one
-        // exception: it matches on suite and test titles, and neither exists in this window.
+        // exception: it matches on suite and test titles, and neither exists yet.
+        //
+        // The framework allowlist is about SCANNING, not about attribution: App Accessibility is
+        // not supported on jasmine, so it must gain no scans it did not have before.
         if (this._autoScanning && this.supportsPreTestWindow() && sessionId) {
             AccessibilityHandler._a11yScanSessionMap[sessionId] = true
-            this._preTestWindowActive = true
-            BStackLogger.debug('Accessibility scan gate opened for the pre-test window')
+            BStackLogger.debug('Accessibility scan gate opened ahead of the first test')
         }
         if (!('overwriteCommand' in this._browser && Array.isArray(accessibilityScripts.commandsToWrap))) {
             return
@@ -339,8 +339,6 @@ class _AccessibilityHandler {
 
             /* jasmine test objects carry the spec name in `description` (`title` is unset) */
             const testTitle = test.title ?? test.description
-            // Window over: the per-test gate owns the decision from here, tags included.
-            this._preTestWindowActive = false
             // @ts-expect-error fix type
             const shouldScanTest = this._autoScanning && shouldScanTestForAccessibility(suiteTitle, testTitle, this._accessibilityOptions)
             const testIdentifier = this.getIdentifier(test)
@@ -371,6 +369,9 @@ class _AccessibilityHandler {
 
     async afterTest (suiteTitle: string | undefined, test: Frameworks.Test) {
         BStackLogger.debug('Accessibility after test hook. Before sending test stop event')
+        // The test is over, so scans after this point have no test to belong to until the next one
+        // starts. Cleared ahead of the guards below: that is true whatever this method goes on to do.
+        this._testIdentifier = null
         if (
             !AccessibilityHandler.TEST_HOOK_FRAMEWORKS.includes(this._framework as string) ||
             !this.shouldRunTestHooks(this._browser, this._accessibility)
@@ -421,8 +422,6 @@ class _AccessibilityHandler {
         }
 
         try {
-            // Window over: the per-test gate owns the decision from here, tags included.
-            this._preTestWindowActive = false
             // @ts-expect-error fix type
             const shouldScanScenario = this._autoScanning && shouldScanTestForAccessibility(featureData?.name, pickleData.name, this._accessibilityOptions, world, true)
             this._testMetadata[uniqueId] = {
@@ -449,6 +448,8 @@ class _AccessibilityHandler {
 
     async afterScenario (world: ITestCaseHookParameter) {
         BStackLogger.debug('Accessibility after scenario hook. Before sending test stop event')
+        // See afterTest: the scenario is over, so nothing parents a scan until the next one starts.
+        this._testIdentifier = null
         if (!this.shouldRunTestHooks(this._browser, this._accessibility)) {
             return
         }
@@ -491,9 +492,6 @@ class _AccessibilityHandler {
      */
     async beforeHook (test: Frameworks.Test | undefined, context: unknown, hookRunUuid?: string | null) {
         try {
-            // Framework hook running ⇒ the config-level window is over. Framework hooks are left
-            // exactly as they were; only WDIO's own config hooks are targeted.
-            this._preTestWindowActive = false
             if (!this._accessibility || !this.shouldRunTestHooks(this._browser, this._accessibility)) {
                 return
             }
@@ -542,7 +540,11 @@ class _AccessibilityHandler {
                 )
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
-            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this._preTestWindowActive)
+            // A scan belongs to no test only when nothing can parent it: no framework hook run
+            // (those are reported to TRA and keep their test uuid) and no test started. That is a
+            // property of the moment, not of which hook is running — the wrapper never knows that.
+            const hasNoParent = !this._currentHookRunUuid && this._testIdentifier === null
+            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, hasNoParent)
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)
         }
