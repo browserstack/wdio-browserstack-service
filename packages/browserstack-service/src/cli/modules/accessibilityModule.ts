@@ -219,7 +219,7 @@ export default class AccessibilityModule extends BaseModule {
                     return
                 }
                 // If invoked from inside a hook, currentHookRunUuid stamps the scan for the hook.
-                return await this.performScanCli(browser, undefined, this.currentHookRunUuid, !this.currentHookRunUuid && !this.testContextSeen)
+                return await this.performScanCli(browser, undefined, this.currentHookRunUuid, this.hasNoParent)
             }
 
             (browser as WebdriverIO.Browser).startA11yScanning = async () => {
@@ -301,8 +301,7 @@ export default class AccessibilityModule extends BaseModule {
                         // Parentless only before the framework has started anything: no hook run
                         // and no test seen yet. The wrapper never knows which hook it is in, and
                         // does not need to.
-                        const hasNoParent = !this.currentHookRunUuid && !this.testContextSeen
-                        await this.performScanCli(browser, command.name, this.currentHookRunUuid, hasNoParent)
+                        await this.performScanCli(browser, command.name, this.currentHookRunUuid, this.hasNoParent)
                         this.logger.debug(`Accessibility scan performed after ${command.name} command`)
                     } catch (scanError) {
                         this.logger.debug(`Error performing accessibility scan after ${command.name}: ${scanError}`)
@@ -375,7 +374,7 @@ export default class AccessibilityModule extends BaseModule {
                 if (!this.accessibility && !this.isAppAccessibility){
                     return
                 }
-                const results = await this.performScanCli(browser, undefined, this.currentHookRunUuid)
+                const results = await this.performScanCli(browser, undefined, this.currentHookRunUuid, this.hasNoParent)
                 if (results){
                     const testIdentifier = String(testInstance.getContext().getId())
                     this.testMetadata[testIdentifier] = {
@@ -517,6 +516,11 @@ export default class AccessibilityModule extends BaseModule {
             }
         }
         return false
+    }
+
+    // See the classic handler: one definition, used at every scan site.
+    private get hasNoParent(): boolean {
+        return !this.currentHookRunUuid && !this.testContextSeen
     }
 
     private async performScanCli(

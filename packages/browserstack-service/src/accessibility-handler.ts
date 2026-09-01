@@ -252,7 +252,9 @@ class _AccessibilityHandler {
         }
 
         browserWithA11y.performScan = async () => {
-            const results = await performA11yScan(this.isAppAutomate, (this._browser as WebdriverIO.Browser), isBrowserstackSession(this._browser), this._accessibility)
+            // Same parentage rule as the auto path, and the hook uuid the manual path never carried
+            // — a manual scan inside a framework hook used to land as a NULL hook row.
+            const results = await performA11yScan(this.isAppAutomate, (this._browser as WebdriverIO.Browser), isBrowserstackSession(this._browser), this._accessibility, undefined, undefined, this._currentHookRunUuid, this.hasNoParent)
             if (results) {
                 this._testMetadata[this._testIdentifier as string] = {
                     scanTestForAccessibility : true,
@@ -324,6 +326,12 @@ class _AccessibilityHandler {
             })
         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.CONFIG_EVENTS.ACCESSIBILITY)
 
+    }
+
+    // Nothing can own a scan before the framework has started anything. Defined once: the auto
+    // path and the user-facing performScan() must not answer this differently.
+    private get hasNoParent(): boolean {
+        return !this._currentHookRunUuid && !this._testContextSeen
     }
 
     private supportsPreTestWindow(): boolean {
@@ -546,8 +554,7 @@ class _AccessibilityHandler {
             // Parentless only before the framework has started anything: no hook run to own the
             // scan and no test seen yet in this session. Once either has happened the latch stays
             // set, so every later hook keeps the attribution it has always had.
-            const hasNoParent = !this._currentHookRunUuid && !this._testContextSeen
-            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, hasNoParent)
+            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this.hasNoParent)
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)
         }

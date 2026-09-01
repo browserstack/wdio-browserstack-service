@@ -492,6 +492,32 @@ describe('scans ahead of the first test (config-level hooks)', () => {
         expect((await scanArgs(handler))[7]).toBe(true)
     })
 
+    it('sends no test run uuid for a MANUAL performScan() from a config hook', async () => {
+        const handler = handlerFor('mocha')
+        handler['_sessionId'] = 'session-manual'
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        await handler.before('session-manual')
+
+        await (browser as any).performScan()
+
+        const call = scanSpy.mock.calls[scanSpy.mock.calls.length - 1]
+        expect(call[7]).toBe(true)
+    })
+
+    it('gives a MANUAL performScan() inside a framework hook its hook uuid', async () => {
+        const handler = handlerFor('mocha')
+        handler['_sessionId'] = 'session-manual-hook'
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        await handler.before('session-manual-hook')
+        await handler.beforeHook({ title: '"before all" hook', parent: 'suite' } as any, {}, 'hook-uuid-manual')
+
+        await (browser as any).performScan()
+
+        const call = scanSpy.mock.calls[scanSpy.mock.calls.length - 1]
+        expect(call[6]).toBe('hook-uuid-manual')
+        expect(call[7]).toBe(false)
+    })
+
     it('keeps the test run uuid once a framework hook is running', async () => {
         const handler = handlerFor('mocha')
         handler['_sessionId'] = 'session-fwhook'
