@@ -88,6 +88,11 @@ class _AccessibilityHandler {
     // excluded deliberately — App Accessibility is not supported there and its behaviour must
     // not change; multiremote is excluded in the guard below, having no session id to gate on.
     private static readonly PRE_TEST_SCAN_FRAMEWORKS = ['mocha', 'cucumber']
+
+    // Latched at the first framework hook or test of the session and never reset. Before it, a
+    // scan can only have come from a WDIO config hook; after it everything behaves as it always
+    // has, so nothing downstream of the first test changes.
+    private _testContextSeen = false
     private _platformA11yMeta: PlatformA11yMeta
     private _caps: Capabilities.ResolvedTestrunnerCapabilities
     private _suiteFile?: string
@@ -328,6 +333,7 @@ class _AccessibilityHandler {
 
     async beforeTest (suiteTitle: string | undefined, test: Frameworks.Test) {
         try {
+            this._testContextSeen = true
             if (
                 !AccessibilityHandler.TEST_HOOK_FRAMEWORKS.includes(this._framework as string) ||
                 !this.shouldRunTestHooks(this._browser, this._accessibility)
@@ -369,9 +375,6 @@ class _AccessibilityHandler {
 
     async afterTest (suiteTitle: string | undefined, test: Frameworks.Test) {
         BStackLogger.debug('Accessibility after test hook. Before sending test stop event')
-        // The test is over, so scans after this point have no test to belong to until the next one
-        // starts. Cleared ahead of the guards below: that is true whatever this method goes on to do.
-        this._testIdentifier = null
         if (
             !AccessibilityHandler.TEST_HOOK_FRAMEWORKS.includes(this._framework as string) ||
             !this.shouldRunTestHooks(this._browser, this._accessibility)
@@ -410,6 +413,7 @@ class _AccessibilityHandler {
       * Cucumber Only
     */
     async beforeScenario (world: ITestCaseHookParameter) {
+        this._testContextSeen = true
         const pickleData = world.pickle
         const gherkinDocument = world.gherkinDocument
         const featureData = gherkinDocument.feature
@@ -448,8 +452,6 @@ class _AccessibilityHandler {
 
     async afterScenario (world: ITestCaseHookParameter) {
         BStackLogger.debug('Accessibility after scenario hook. Before sending test stop event')
-        // See afterTest: the scenario is over, so nothing parents a scan until the next one starts.
-        this._testIdentifier = null
         if (!this.shouldRunTestHooks(this._browser, this._accessibility)) {
             return
         }
@@ -492,6 +494,7 @@ class _AccessibilityHandler {
      */
     async beforeHook (test: Frameworks.Test | undefined, context: unknown, hookRunUuid?: string | null) {
         try {
+            this._testContextSeen = true
             if (!this._accessibility || !this.shouldRunTestHooks(this._browser, this._accessibility)) {
                 return
             }
@@ -540,10 +543,10 @@ class _AccessibilityHandler {
                 )
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
-            // A scan belongs to no test only when nothing can parent it: no framework hook run
-            // (those are reported to TRA and keep their test uuid) and no test started. That is a
-            // property of the moment, not of which hook is running — the wrapper never knows that.
-            const hasNoParent = !this._currentHookRunUuid && this._testIdentifier === null
+            // Parentless only before the framework has started anything: no hook run to own the
+            // scan and no test seen yet in this session. Once either has happened the latch stays
+            // set, so every later hook keeps the attribution it has always had.
+            const hasNoParent = !this._currentHookRunUuid && !this._testContextSeen
             await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, hasNoParent)
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)

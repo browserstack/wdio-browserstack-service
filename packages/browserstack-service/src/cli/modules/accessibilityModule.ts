@@ -27,6 +27,8 @@ export default class AccessibilityModule extends BaseModule {
     scriptInstance: typeof accessibilityScripts
     accessibility: boolean = false
     autoScanning: boolean = true
+    // Latched at the first framework hook or test and never reset — see the classic handler.
+    testContextSeen: boolean = false
     isAppAccessibility: boolean
     isNonBstackA11y: boolean
     accessibilityConfig: Accessibility
@@ -76,6 +78,7 @@ export default class AccessibilityModule extends BaseModule {
             // capture on autoInstance would silently drop app hook-scan stamping.
             const hookRunUuid = testInstance ? (TestFramework.getState(testInstance, TestFrameworkConstants.KEY_HOOK_ID) as string | undefined) : undefined
             this.currentHookRunUuid = hookRunUuid || null
+            this.testContextSeen = true
 
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             if (!testInstance || !autoInstance) {
@@ -216,7 +219,7 @@ export default class AccessibilityModule extends BaseModule {
                     return
                 }
                 // If invoked from inside a hook, currentHookRunUuid stamps the scan for the hook.
-                return await this.performScanCli(browser, undefined, this.currentHookRunUuid, !this.currentHookRunUuid && !this.currentTestName)
+                return await this.performScanCli(browser, undefined, this.currentHookRunUuid, !this.currentHookRunUuid && !this.testContextSeen)
             }
 
             (browser as WebdriverIO.Browser).startA11yScanning = async () => {
@@ -295,10 +298,10 @@ export default class AccessibilityModule extends BaseModule {
                     !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
                 ) {
                     try {
-                        // Parentless only when nothing can own the scan: no framework hook run
-                        // (reported to TRA, keeps its test uuid) and no test running. The wrapper
-                        // never knows which hook it is in, and does not need to.
-                        const hasNoParent = !this.currentHookRunUuid && !this.currentTestName
+                        // Parentless only before the framework has started anything: no hook run
+                        // and no test seen yet. The wrapper never knows which hook it is in, and
+                        // does not need to.
+                        const hasNoParent = !this.currentHookRunUuid && !this.testContextSeen
                         await this.performScanCli(browser, command.name, this.currentHookRunUuid, hasNoParent)
                         this.logger.debug(`Accessibility scan performed after ${command.name} command`)
                     } catch (scanError) {
@@ -326,6 +329,7 @@ export default class AccessibilityModule extends BaseModule {
             const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string } : {}) || {}
 
             this.currentTestName = test.title || null
+            this.testContextSeen = true
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const testInstance: TestFrameworkInstance = TestFramework.getTrackedInstance()
 

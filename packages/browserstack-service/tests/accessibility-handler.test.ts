@@ -505,20 +505,22 @@ describe('scans ahead of the first test (config-level hooks)', () => {
         const handler = handlerFor('mocha')
         handler['_sessionId'] = 'session-intest'
         await handler.before('session-intest')
-        handler['_testIdentifier'] = 'test-1'
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        await handler.beforeTest('suite', { title: 'test-1' } as any)
 
         expect((await scanArgs(handler))[7]).toBe(false)
     })
 
-    it('goes back to parentless after the test ends, so a later beforeSuite is not misattributed', async () => {
+    it('stays attributed after the first test, so later hooks behave exactly as before', async () => {
         const handler = handlerFor('mocha')
         handler['_sessionId'] = 'session-between'
         await handler.before('session-between')
-        handler['_testIdentifier'] = 'test-1'
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        await handler.beforeTest('suite', { title: 'test-1' } as any)
         await handler.afterTest('suite', { title: 'test-1' } as any)
 
-        expect(handler['_testIdentifier']).toBeNull()
-        expect((await scanArgs(handler))[7]).toBe(true)
+        // the latch never resets: a scan between tests keeps the attribution main gives it
+        expect((await scanArgs(handler))[7]).toBe(false)
     })
 })
 

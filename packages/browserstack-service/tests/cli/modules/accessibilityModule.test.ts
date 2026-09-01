@@ -231,7 +231,8 @@ describe('AccessibilityModule', () => {
             withA11yCaps()
             accessibilityModule.isAppAccessibility = true
             await accessibilityModule.onBeforeExecute()
-            accessibilityModule.currentTestName = 'a test'
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'suite', test: { title: 'a test' } })
 
             await fireWrappedCommand()
 
