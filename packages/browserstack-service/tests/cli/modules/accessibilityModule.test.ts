@@ -227,6 +227,27 @@ describe('AccessibilityModule', () => {
             expect(call?.[3]).toBe(false)
         })
 
+        it('leaves the gate open after a test, so afterSuite/after still scan', async () => {
+            withA11yCaps()
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            await accessibilityModule.onBeforeExecute()
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'suite', test: { title: 'a test' } })
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
+
+            // drive onAfterTest all the way to the end: its guards, and then the stop-event
+            // internals, which throw against these mocks and would swallow the line under test
+            vi.mocked(mockTestInstance.getData).mockReturnValue({
+                accessibilityScanStarted: true,
+                scanTestForAccessibility: true
+            })
+            vi.spyOn(accessibilityModule as any, 'getDriverExecuteParams').mockResolvedValue({})
+            vi.spyOn(accessibilityModule as any, 'sendTestStopEvent').mockResolvedValue(undefined)
+            await accessibilityModule.onAfterTest()
+
+            // deleting it here used to silence every scan between tests and after the last one
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
+        })
+
         it('keeps the test run uuid once a test is running', async () => {
             withA11yCaps()
             accessibilityModule.isAppAccessibility = true

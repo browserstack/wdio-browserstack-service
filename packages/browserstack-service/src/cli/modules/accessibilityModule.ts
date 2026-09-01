@@ -412,7 +412,6 @@ export default class AccessibilityModule extends BaseModule {
 
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const testInstance: TestFrameworkInstance = TestFramework.getTrackedInstance()
-            const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
 
             if (!autoInstance || !testInstance) {
                 this.logger.error('No tracked instances found for accessibility after test')
@@ -456,7 +455,11 @@ export default class AccessibilityModule extends BaseModule {
                 } else {
                     this.logger.warn('No driver found to send accessibility test stop event')
                 }
-                this.accessibilityMap.delete(sessionId)
+                // The gate deliberately stays as the test left it. Deleting it here stopped every
+                // scan between tests — afterSuite, after, and the next suite's beforeSuite all went
+                // unscanned on this flow, while the classic flow (which never deleted) scanned them.
+                // Leaving the entry rather than forcing it true keeps a tag-excluded test and a
+                // user's stopA11yScanning() in effect.
 
                 // Clean up test metadata
                 TestFramework.setState(testInstance, `accessibility_metadata_${testIdentifier}`, null)
