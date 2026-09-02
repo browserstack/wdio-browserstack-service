@@ -431,7 +431,12 @@ export default class WdioCucumberTestFramework extends TestFramework {
         this.cucumberData.scenario = undefined
     }
 
-    private hasStepFailures(): boolean {
+    /**
+     * Whether the scenario in flight failed in a STEP, as opposed to failing only in a hook.
+     * Public because `ignoreHooksStatus` has two surfaces (parity row 41): the o11y result below,
+     * and the Automate session status, which `service.afterScenario()` derives from the same answer.
+     */
+    hasStepFailures(): boolean {
         return this.scenarioSteps.some(step => step.result === 'FAILED')
     }
 

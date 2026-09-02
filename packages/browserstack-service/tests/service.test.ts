@@ -10,6 +10,7 @@ import { BrowserstackCLI } from '../src/cli/index.js'
 import AccessibilityModule from '../src/cli/modules/accessibilityModule.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import AutomationFramework from '../src/cli/frameworks/automationFramework.js'
+import WdioCucumberTestFramework from '../src/cli/frameworks/wdioCucumberTestFramework.js'
 import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
@@ -2771,5 +2772,51 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
 
         const trackEvent = await runAfterTest(svc, failing, { passed: false })
         expect(skippedTitles(trackEvent)).toEqual([])
+    })
+})
+
+describe('afterScenario session-status view honours ignoreHooksStatus (parity row 41)', () => {
+    let getInstanceSpy: ReturnType<typeof vi.spyOn>
+
+    const makeService = (ignoreHooksStatus: boolean) => new BrowserstackService(
+        { testObservability: false, testObservabilityOptions: { ignoreHooksStatus } } as any,
+        [] as any,
+        { user: 'foo', key: 'bar', framework: 'cucumber' } as any
+    )
+
+    const runAfterScenario = async (svc: BrowserstackService, hadStepFailures: boolean) => {
+        const framework = new WdioCucumberTestFramework(['cucumber'], { cucumber: '10.0.0' }, 'bin-session')
+        vi.spyOn(framework, 'hasStepFailures').mockReturnValue(hadStepFailures)
+        const trackEvent = vi.spyOn(framework, 'trackEvent').mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => framework
+        } as any)
+
+        await svc.afterScenario({
+            pickle: { name: 'a scenario' },
+            result: { status: 'FAILED', message: 'hook blew up' }
+        } as any)
+
+        return (trackEvent.mock.calls.at(-1)?.[2] as any)?.result
+    }
+
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+    })
+
+    it('reports a hook-only failure as passed so the session is not marked failed', async () => {
+        const result = await runAfterScenario(makeService(true), false)
+        expect(result.passed).toBe(true)
+    })
+
+    it('still reports a step failure as failed under the same flag', async () => {
+        const result = await runAfterScenario(makeService(true), true)
+        expect(result.passed).toBe(false)
+    })
+
+    it('leaves a hook-only failure failed when the flag is not set', async () => {
+        const result = await runAfterScenario(makeService(false), false)
+        expect(result.passed).toBe(false)
     })
 })

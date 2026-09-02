@@ -883,8 +883,17 @@ export default class BrowserstackService implements Services.ServiceInstance {
      */
     private _cucumberTestResult(world: ITestCaseHookParameter): Frameworks.TestResult {
         const status = world.result?.status?.toLowerCase()
+
+        // `ignoreHooksStatus` has to reach session marking as well as the o11y result (parity row
+        // 41). On the CLI flow automateModule derives the session status from this view alone —
+        // service.after()'s _failReasons accumulation, which applied the flag on the legacy path,
+        // is gated off while the binary is up. A missing framework keeps the raw status.
+        const ignoreHooksStatus = this._options.testObservabilityOptions?.ignoreHooksStatus === true
+        const hasStepFailures = this._cliCucumberFramework()?.hasStepFailures() ?? true
+        const hookOnlyFailure = ignoreHooksStatus && status === 'failed' && !hasStepFailures
+
         return {
-            passed: status === 'passed',
+            passed: status === 'passed' || hookOnlyFailure,
             skipped: status !== undefined && status !== 'passed' && status !== 'failed',
             error: world.result?.message ? new Error(world.result.message) : undefined,
             duration: 0,
