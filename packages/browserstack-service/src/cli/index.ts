@@ -548,7 +548,11 @@ export class BrowserstackCLI {
         const testFrameworkDetail = CLIUtils.getTestFrameworkDetail()
         if (testFrameworkDetail.name.toLowerCase() === 'webdriverio-mocha') {
             this.testFramework = new WdioMochaTestFramework([testFrameworkDetail.name], testFrameworkDetail.version, this.binSessionId as string)
+            return
         }
+        // An unmatched name leaves testFramework null, and every CLI event then no-ops with no
+        // error of any kind. Name it so the silence is diagnosable.
+        this.logger.error(`setupTestFramework: no CLI test framework registered for name=${testFrameworkDetail.name}; test events will not be tracked`)
     }
 
     /**
