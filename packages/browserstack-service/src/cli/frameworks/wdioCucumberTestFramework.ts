@@ -23,6 +23,16 @@ import type { CucumberHook, Feature, ITestCaseHookParameter, Pickle } from '../.
 const KEY_TEST_DURATION = 'test_duration'
 const KEY_BDD_META_INFO = 'bdd_meta_info'
 
+/**
+ * Per-hook wire keys. The binary cannot derive any of the three from the event: a hook's scope is
+ * the FEATURE name (parity row 16) while the event carries the examples-qualified SCENARIO name,
+ * and BEFORE_ALL/AFTER_ALL fire on an instance that has no scenario data at all. Retries and
+ * duration (row 26) come from WDIO's hook result, which only this side sees.
+ */
+const KEY_HOOK_SCOPE = 'hook_scope'
+const KEY_HOOK_RETRIES = 'hook_retries'
+const KEY_HOOK_DURATION = 'hook_duration'
+
 type CucumberHookType = 'BEFORE_ALL' | 'AFTER_ALL' | 'BEFORE_EACH' | 'AFTER_EACH'
 
 const HOOK_STATES: Record<CucumberHookType, State> = {
@@ -490,6 +500,7 @@ export default class WdioCucumberTestFramework extends TestFramework {
                 [TestFrameworkConstants.KEY_EVENT_STARTED_AT]: new Date().toISOString(),
                 [TestFrameworkConstants.KEY_HOOK_LOGS]: [],
                 [TestFrameworkConstants.KEY_HOOK_NAME]: this.hookName(key as CucumberHookType),
+                [KEY_HOOK_SCOPE]: this.cucumberData.feature?.name,
                 ...resolveFeatureFilePaths(featurePath),
             }
             hooksStarted.get(key)?.push(hook)
@@ -509,6 +520,10 @@ export default class WdioCucumberTestFramework extends TestFramework {
             // passed / failed only — no 'skipped' arm, unlike the scenario result path.
             if (hookResult) {
                 hook[TestFrameworkConstants.KEY_HOOK_RESULT] = hookResult.passed ? 'passed' : 'failed'
+                // WDIO reports hook duration in plain ms on the result, not as cucumber's protobuf
+                // Duration — legacy sends it through unchanged and so does this.
+                hook[KEY_HOOK_RETRIES] = hookResult.retries
+                hook[KEY_HOOK_DURATION] = hookResult.duration
             }
             hook[TestFrameworkConstants.KEY_EVENT_ENDED_AT] = new Date().toISOString()
             hooksFinished.get(key)?.push(hook)

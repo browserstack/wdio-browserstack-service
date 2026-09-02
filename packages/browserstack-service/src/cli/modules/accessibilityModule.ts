@@ -314,7 +314,13 @@ export default class AccessibilityModule extends BaseModule {
 
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
             const accessibilityOptions = this.config.accessibilityOptions
-            const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title || '', accessibilityOptions as Record<string, string> | undefined) && this.accessibility
+            // Cucumber filters scans by gherkin tag, which needs the world object and the 6-arg
+            // form of shouldScanTestForAccessibility; the 3-arg form matches include/exclude tags
+            // against the test title instead and so silently scans every scenario. `args.world` is
+            // only ever populated on the cucumber path, so mocha and jasmine keep the exact 3-arg
+            // behaviour — both extra args arrive undefined/false and the tag branch is not taken.
+            const world = args.world as { [key: string]: unknown } | undefined
+            const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title || '', accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)) && this.accessibility
 
             this.accessibilityMap.set(sessionId, shouldScanTest)
 
