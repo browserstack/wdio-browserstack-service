@@ -47,7 +47,9 @@ import {
     APP_ALLY_ISSUES_ENDPOINT,
     TEST_REPORTING_PROJECT_NAME,
     CLI_DEBUG_LOGS_FILE,
-    WDIO_NAMING_PREFIX
+    WDIO_NAMING_PREFIX,
+    BROWSERSTACK_LOCAL,
+    BROWSERSTACK_LOCAL_IDENTIFIER
 } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import { BStackLogger } from './bstackLogger.js'
@@ -1287,6 +1289,44 @@ export function normalizeTestReportingEnvVariables(){
         process.env.TEST_OBSERVABILITY_BUILD_TAG = process.env.TEST_REPORTING_BUILD_TAG
     }
 
+}
+
+/**
+ * Resolve BrowserStack Local settings from the environment onto the service options.
+ *
+ * `BROWSERSTACK_LOCAL` / `BROWSERSTACK_LOCAL_IDENTIFIER` are the SDK-wide env vars for Local
+ * (the `browserstackLocal` / `localIdentifier` entries of the binary's EnvCapsMapping). This
+ * service reads Local purely off the `wdio.conf.js` service options, so without this the env
+ * vars were silently dropped — no tunnel was launched and no `local` / `localIdentifier`
+ * capability reached the session (SDK-7075).
+ *
+ * The env var wins over `wdio.conf.js`, matching the binary's `updateConfigWithEnvVars` and
+ * `getObservabilityUser` / `getObservabilityKey` / `getObservabilityProject` below.
+ */
+export function normalizeLocalEnvVariables(_options: BrowserstackConfig & Options.Testrunner) {
+    if (!isUndefined(process.env[BROWSERSTACK_LOCAL])) {
+        /**
+         * Only a literal `false` disables Local — any other set value enables it. This is the
+         * binary's semantics, not a looser reading of it: `updateConfigWithBooleanValues`
+         * coerces only `'true'`/`'false'` and leaves every other string as-is, and
+         * `getLocalConfig()` then truthiness-checks the result. So `BROWSERSTACK_LOCAL=1`
+         * enables Local on every other SDK, and must here too.
+         *
+         * Using `isTrue()` instead would resolve `1` / `yes` to `false` and — because the env
+         * var wins — would silently switch OFF a tunnel that `browserstackLocal: true` in
+         * `wdio.conf.js` had switched on.
+         */
+        _options.browserstackLocal = !isFalse(process.env[BROWSERSTACK_LOCAL])
+    }
+
+    /**
+     * An identifier on its own must not turn Local on — enablement keys off `browserstackLocal`
+     * alone, the same way `getLocalConfig()` does in the binary. A stale
+     * `BROWSERSTACK_LOCAL_IDENTIFIER` left in a CI environment therefore stays inert.
+     */
+    if (!isUndefined(process.env[BROWSERSTACK_LOCAL_IDENTIFIER])) {
+        _options.opts = { ..._options.opts, localIdentifier: process.env[BROWSERSTACK_LOCAL_IDENTIFIER] }
+    }
 }
 
 export function getObservabilityUser(options: BrowserstackConfig & Options.Testrunner, config: Options.Testrunner) {

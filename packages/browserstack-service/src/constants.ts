@@ -129,6 +129,12 @@ export const BSTACK_A11Y_POLLING_TIMEOUT = 'BSTACK_A11Y_POLLING_TIMEOUT'
 // Whether session is a accessibility session
 export const BROWSERSTACK_ACCESSIBILITY = 'BROWSERSTACK_ACCESSIBILITY'
 
+// Whether to route the session through a BrowserStack Local tunnel
+export const BROWSERSTACK_LOCAL = 'BROWSERSTACK_LOCAL'
+
+// Identifier of the BrowserStack Local tunnel to bind the session to
+export const BROWSERSTACK_LOCAL_IDENTIFIER = 'BROWSERSTACK_LOCAL_IDENTIFIER'
+
 // Whether session is a test reporting session (new name)
 export const BROWSERSTACK_TEST_REPORTING = 'BROWSERSTACK_TEST_REPORTING'
 
