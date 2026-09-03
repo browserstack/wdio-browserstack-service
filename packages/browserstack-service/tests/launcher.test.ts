@@ -720,6 +720,45 @@ describe('onPrepare with BrowserStack Local env variables (SDK-7075)', () => {
         expect(capabilities[0]['bstack:options']).toEqual({ local: true, localIdentifier: 'from-env', 'testhubBuildUuid': buildHashedId, 'buildProductMap': productMap })
     })
 
+    /**
+     * The binary coerces only 'true'/'false' and truthiness-checks the rest, so every
+     * other SDK enables Local on `BROWSERSTACK_LOCAL=1`. Resolving these to `false` here
+     * would both diverge from that and — since env wins — switch OFF a tunnel the config
+     * had switched on.
+     */
+    it.each(['1', 'yes', 'TRUE', 'True'])('should enable Local for the set value %s', async (value) => {
+        process.env.BROWSERSTACK_LOCAL = value
+        const service = new BrowserstackLauncher({ testObservability: false, percy: false } as any, caps, config)
+        const capabilities = [{ 'bstack:options': {} }]
+
+        await service.onPrepare(config, capabilities)
+
+        expect(service.browserstackLocal).toBeDefined()
+        expect(capabilities[0]['bstack:options']).toHaveProperty('local', true)
+    })
+
+    it('should not let a non-"false" value switch off a config-enabled tunnel', async () => {
+        process.env.BROWSERSTACK_LOCAL = '1'
+        const service = new BrowserstackLauncher({ browserstackLocal: true, testObservability: false, percy: false } as any, caps, config)
+        const capabilities = [{ 'bstack:options': {} }]
+
+        await service.onPrepare(config, capabilities)
+
+        expect(service.browserstackLocal).toBeDefined()
+        expect(capabilities[0]['bstack:options']).toHaveProperty('local', true)
+    })
+
+    it.each(['false', 'FALSE', 'False'])('should disable Local for the literal %s', async (value) => {
+        process.env.BROWSERSTACK_LOCAL = value
+        const service = new BrowserstackLauncher({ browserstackLocal: true, testObservability: false, percy: false } as any, caps, config)
+        const capabilities = [{ 'bstack:options': {} }]
+
+        await service.onPrepare(config, capabilities)
+
+        expect(service.browserstackLocal).toBeUndefined()
+        expect(capabilities[0]['bstack:options']).not.toHaveProperty('local')
+    })
+
     it('should not enable Local from BROWSERSTACK_LOCAL_IDENTIFIER alone', async () => {
         process.env.BROWSERSTACK_LOCAL_IDENTIFIER = 'local_identifier_TFnBzD'
         const service = new BrowserstackLauncher({ testObservability: false, percy: false } as any, caps, config)
