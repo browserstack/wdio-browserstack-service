@@ -489,11 +489,22 @@ export default class BrowserstackService implements Services.ServiceInstance {
             const framework = BrowserstackCLI.getInstance().getTestFramework()
             if (framework instanceof WdioCucumberTestFramework) {
                 // See beforeHook: cucumber's taxonomy, not Mocha's titles. The suite-skip cascade
-                // below is Mocha-shaped (it walks `test.ctx.test.parent`) and has no cucumber
-                // counterpart here.
+                // in the mocha arm below is Mocha-shaped (it walks `test.ctx.test.parent`);
+                // cucumber's own cascade is _reportCucumberScenariosSkipped, further down.
                 const hookFrameworkState = framework.classifyHookState(test as CucumberHook|undefined)
                 if (hookFrameworkState) {
-                    await framework.trackEvent(hookFrameworkState, HookState.POST, { test, result })
+                    // ignoreHooksStatus rides the event so automateModule can apply the same flag
+                    // to the session verdict that loadScenarioResult applies to the o11y result
+                    // (parity row 41). The module cannot read it — the binary-supplied config it
+                    // holds carries no testObservabilityOptions.
+                    await framework.trackEvent(hookFrameworkState, HookState.POST, {
+                        test,
+                        result,
+                        ignoreHooksStatus: this._options.testObservabilityOptions?.ignoreHooksStatus === true
+                    })
+                }
+                if (hookFrameworkState === TestFrameworkState.BEFORE_ALL && result && !result.passed) {
+                    await this._reportCucumberScenariosSkipped(framework)
                 }
                 return
             }
@@ -516,6 +527,52 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
         await this._insightsHandler?.afterHook(test, result)
         await this._accessibilityHandler?.afterHook()
+    }
+
+    /**
+     * BEFORE_ALL failure cascade — parity row 15. Cucumber abandons the whole feature when a
+     * `BeforeAll` throws, so every scenario in it (Rule-nested ones included) must be reported
+     * SKIPPED rather than simply vanishing.
+     *
+     * Legacy did this from `insights-handler.afterHook` via `sendScenarioObjectSkipped()`, which
+     * publishes through the legacy HTTP listener (`api/v1/batch`) — inert once the binary is up.
+     * That is escape class 3 / SDK-7047 in its documented form, and the repair is to give the
+     * cascade a CLI/gRPC publisher.
+     *
+     * Sent straight to TestHub rather than through `framework.trackEvent()`: legacy's cascade
+     * called `listener.testFinished()` directly and so bypassed every product handler. Routing
+     * these through the observer set would rename the Automate session, fire an accessibility
+     * stop event and run a Percy teardown once per skipped row — none of which legacy does.
+     *
+     * Cucumber-only: private, one call site, in the `instanceof WdioCucumberTestFramework` arm.
+     */
+    private async _reportCucumberScenariosSkipped(framework: WdioCucumberTestFramework) {
+        try {
+            const testHubModule = BrowserstackCLI.getInstance().modules.TestHubModule as TestHubModule | undefined
+            if (!testHubModule) {
+                BStackLogger.debug('BEFORE_ALL cascade: TestHub module not loaded; skipped scenarios will not be reported')
+                return
+            }
+
+            const instances = framework.buildSkippedScenarioInstances()
+            for (const instance of instances) {
+                // Both halves, because TestHub's v2 batch pipeline creates the test row from the
+                // START event and treats TestRunSkipped as its terminal — a lone TestRunSkipped is
+                // accepted and then counted in no bucket at all. The legacy v1 listener created the
+                // row from the skip event itself, which is why it sent only one.
+                await testHubModule.sendTestFrameworkEvent(
+                    { instance },
+                    { testFrameworkState: 'TEST', testHookState: 'PRE' }
+                )
+                await testHubModule.sendTestFrameworkEvent(
+                    { instance },
+                    { testFrameworkState: 'TEST', testHookState: 'POST' }
+                )
+            }
+            BStackLogger.debug(`BEFORE_ALL cascade: reported ${instances.length} scenario(s) as skipped`)
+        } catch (err) {
+            BStackLogger.debug(`Exception reporting the BEFORE_ALL skip cascade: ${util.format(err)}`)
+        }
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeTest' })

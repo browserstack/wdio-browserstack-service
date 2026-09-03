@@ -13,7 +13,7 @@ import { TEST_ANALYTICS_ID } from '../../constants.js'
 import { getScenarioExamples, removeAnsiColors } from '../../util.js'
 
 import type { Frameworks } from '@wdio/types'
-import type { CucumberHook, Feature, ITestCaseHookParameter, Pickle } from '../../cucumber-types.js'
+import type { CucumberHook, Feature, FeatureChild, ITestCaseHookParameter, Pickle, Scenario, Step } from '../../cucumber-types.js'
 
 /**
  * `test_duration` and `bdd_meta_info` are read by the binary's WebdriverIO-cucumber module but
@@ -32,6 +32,14 @@ const KEY_BDD_META_INFO = 'bdd_meta_info'
 const KEY_HOOK_SCOPE = 'hook_scope'
 const KEY_HOOK_RETRIES = 'hook_retries'
 const KEY_HOOK_DURATION = 'hook_duration'
+
+/**
+ * Marks a TEST/POST event as a BEFORE_ALL cascade row rather than a real scenario finish, so the
+ * binary's cucumber module emits `TestRunSkipped` — legacy's wire event for this case — instead of
+ * `TestRunFinished`. The state->event mapping in the WDIO language index is shared with mocha and
+ * is deliberately not touched.
+ */
+const KEY_TEST_SKIPPED_CASCADE = 'test_skipped_cascade'
 
 type CucumberHookType = 'BEFORE_ALL' | 'AFTER_ALL' | 'BEFORE_EACH' | 'AFTER_EACH'
 
@@ -429,6 +437,92 @@ export default class WdioCucumberTestFramework extends TestFramework {
 
         instance.updateMultipleEntries(updates)
         this.cucumberData.scenario = undefined
+    }
+
+    /**
+     * Synthesise one detached instance per scenario the feature never got to run, for the
+     * BEFORE_ALL failure cascade (parity row 15). Rule-nested scenarios included.
+     *
+     * Detached is load-bearing: these are NOT registered via `setTrackedInstance`, so the real
+     * per-scenario instance and `process.env[TEST_ANALYTICS_ID]` are untouched. The caller sends
+     * each one straight to TestHub rather than through `runHooks`, mirroring legacy — whose
+     * cascade called `listener.testFinished()` directly and so never reached the Automate,
+     * Accessibility or Percy handlers. Dispatching these through the observer set instead would
+     * rename the session, fire an a11y stop event and run a Percy teardown per skipped row, none
+     * of which legacy does.
+     *
+     * Parity row 18: no tags — legacy's cascade payload has no `world`, so `test_tags` is absent.
+     */
+    buildSkippedScenarioInstances(): TestFrameworkInstance[] {
+        const feature = this.cucumberData.feature
+        if (!feature) {
+            logger.debug('buildSkippedScenarioInstances: no feature recorded; nothing to cascade')
+            return []
+        }
+
+        const scenarios: Scenario[] = []
+        for (const child of (feature.children || []) as FeatureChild[]) {
+            if (child.rule) {
+                for (const ruleChild of (child.rule.children || [])) {
+                    if (ruleChild.scenario) {
+                        scenarios.push(ruleChild.scenario)
+                    }
+                }
+            } else if (child.scenario) {
+                scenarios.push(child.scenario)
+            }
+        }
+
+        const featurePath = this.featurePath()
+        return scenarios.map(scenario => this.buildSkippedScenarioInstance(scenario, feature, featurePath))
+    }
+
+    private buildSkippedScenarioInstance(scenario: Scenario, feature: Feature, featurePath: string | undefined): TestFrameworkInstance {
+        const now = new Date().toISOString()
+        const trackedContext = TrackedInstance.createContext(CLIUtils.getCurrentInstanceName())
+        const instance = new TestFrameworkInstance(
+            trackedContext,
+            this.getTestFrameworks(),
+            this.getTestFrameworksVersions(),
+            TestFrameworkState.TEST,
+            HookState.POST
+        )
+
+        const frameworkName = this.getTestFrameworks()[0]
+        instance.updateMultipleEntries({
+            [TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME]: frameworkName,
+            [TestFrameworkConstants.KEY_TEST_FRAMEWORK_VERSION]: this.getTestFrameworksVersions()[frameworkName],
+            [TestFrameworkConstants.KEY_TEST_LOGS]: [],
+            [TestFrameworkConstants.KEY_HOOKS_STARTED]: new Map(),
+            [TestFrameworkConstants.KEY_HOOKS_FINISHED]: new Map(),
+            [TestFrameworkConstants.KEY_TEST_UUID]: uuidv4(),
+            // A cascade row is identified by the RAW scenario name on both fields: the feature
+            // never ran, so no Examples row was ever selected and there is nothing to qualify.
+            [TestFrameworkConstants.KEY_TEST_ID]: scenario.name,
+            [TestFrameworkConstants.KEY_TEST_NAME]: scenario.name,
+            [TestFrameworkConstants.KEY_TEST_SCOPE]: scenario.name,
+            [TestFrameworkConstants.KEY_TEST_SCOPES]: [feature.name || ''],
+            [TestFrameworkConstants.KEY_TEST_CODE]: null,
+            [TestFrameworkConstants.KEY_TEST_RESULT]: 'skipped',
+            [TestFrameworkConstants.KEY_TEST_STARTED_AT]: now,
+            [TestFrameworkConstants.KEY_TEST_ENDED_AT]: now,
+            [TestFrameworkConstants.KEY_TEST_RESULT_AT]: now,
+            ...resolveFeatureFilePaths(featurePath),
+            [KEY_TEST_SKIPPED_CASCADE]: true,
+            [KEY_BDD_META_INFO]: {
+                feature: { name: feature.name, path: featurePath, description: feature.description },
+                scenario: { name: scenario.name },
+                steps: (scenario.steps || []).map((step: Step) => ({
+                    id: step.id,
+                    text: step.text,
+                    keyword: step.keyword,
+                    result: 'skipped',
+                })),
+                examples: [],
+            },
+        })
+
+        return instance
     }
 
     /**

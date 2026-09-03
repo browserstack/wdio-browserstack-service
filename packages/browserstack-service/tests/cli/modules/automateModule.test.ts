@@ -14,7 +14,9 @@ import type { Options } from '@wdio/types'
 vi.mock('../../../src/cli/frameworks/testFramework.js', () => ({
     default: {
         registerObserver: vi.fn(),
-        setState: vi.fn()
+        setState: vi.fn(),
+        getState: vi.fn(),
+        getTrackedInstance: vi.fn()
     }
 }))
 
@@ -113,7 +115,7 @@ describe('AutomateModule', () => {
         // Create new instance to test observer registration (constructor registers the observers)
         new AutomateModule(mockConfig)
 
-        expect(TestFramework.registerObserver).toHaveBeenCalledTimes(3)
+        expect(TestFramework.registerObserver).toHaveBeenCalledTimes(5)
         expect(TestFramework.registerObserver).toHaveBeenCalledWith(
             TestFrameworkState.TEST,
             HookState.PRE,
@@ -126,6 +128,16 @@ describe('AutomateModule', () => {
         )
         expect(TestFramework.registerObserver).toHaveBeenCalledWith(
             AutomationFrameworkState.EXECUTE,
+            HookState.POST,
+            expect.any(Function)
+        )
+        expect(TestFramework.registerObserver).toHaveBeenCalledWith(
+            TestFrameworkState.BEFORE_ALL,
+            HookState.POST,
+            expect.any(Function)
+        )
+        expect(TestFramework.registerObserver).toHaveBeenCalledWith(
+            TestFrameworkState.AFTER_ALL,
             HookState.POST,
             expect.any(Function)
         )
