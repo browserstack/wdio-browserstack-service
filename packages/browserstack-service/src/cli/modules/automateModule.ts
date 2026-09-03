@@ -244,14 +244,6 @@ export default class AutomateModule extends BaseModule {
                 return
             }
 
-            // Parity row 41, third surface: with ignoreHooksStatus declared, a failure that exists
-            // only in a hook must leave the session passed. Legacy expresses this by skipping the
-            // `_failReasons` push in afterHook; skipping the record here is the same decision.
-            if (isTrue(args?.ignoreHooksStatus)) {
-                this.logger.debug(`onBuildLevelHookEnd: ${hookKey} failed but ignoreHooksStatus is set; not failing the session`)
-                return
-            }
-
             const testContextOptions = this.config.testContextOptions as TestContextOptions
             if (testContextOptions?.skipSessionStatus) {
                 return
@@ -265,6 +257,21 @@ export default class AutomateModule extends BaseModule {
             }
 
             const sessionData = this.sessionMap.get(sessionId)
+            // Parity row 41, third surface: with ignoreHooksStatus declared, a failure that exists
+            // only in a hook must leave the session passed. Legacy expresses that in the
+            // `ignoreHooksStatus && this._specsRan` arm of `after()`, and that arm needs BOTH. With
+            // no scenario recorded, legacy instead falls through to the arm that marks `failed`
+            // unconditionally — flag or no flag — so honouring the flag here would leave the session
+            // unmarked where legacy marks it, and an unmarked session is invisible on the dashboard.
+            // Keyed on the absence of scenario results, never on the flag. A cucumber `BeforeAll`
+            // failure aborts the run outright, so nothing can arrive after this point; by `AfterAll`
+            // every scenario that ran has already been recorded.
+            const specsRan = (sessionData?.testResults.size ?? 0) > 0
+            if (specsRan && isTrue(args?.ignoreHooksStatus)) {
+                this.logger.debug(`onBuildLevelHookEnd: ${hookKey} failed but ignoreHooksStatus is set; not failing the session`)
+                return
+            }
+
             if (!sessionData) {
                 // A BeforeAll can fail before any scenario ran, so the session may not be
                 // registered yet. `lastTestName` stays empty on purpose — flushSessionName

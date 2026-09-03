@@ -137,6 +137,20 @@ describe('AutomateModule — Phase 8 remediations', () => {
     describe('8-B — build-level hook failures reach the session verdict', () => {
         const failing = { passed: false, error: new Error('BeforeAll blew up') }
 
+        /** Drives one scenario through TEST/POST so `testResults` carries a real scenario result. */
+        const runScenario = (mod: AutomateModule, passed: boolean) => mod.onAfterTest({
+            instance: cucumberInstance,
+            result: { error: passed ? null : new Error('step failed'), passed },
+            test: { title: 'a scenario', fullName: 'Feature: a scenario' },
+            suiteTitle: 'Feature'
+        })
+
+        const statusBody = () => {
+            const call = vi.mocked(fetch).mock.calls.find(([, o]) =>
+                JSON.parse((o as { body: string }).body).status !== undefined)
+            return call ? JSON.parse((call[1] as { body: string }).body) : undefined
+        }
+
         it('marks the session failed for cucumber when a BeforeAll fails', async () => {
             const mod = newModule()
             await mod.onBuildLevelHookEnd('BEFORE_ALL', { instance: cucumberInstance, result: failing })
@@ -175,7 +189,25 @@ describe('AutomateModule — Phase 8 remediations', () => {
             expect(fetch).not.toHaveBeenCalled()
         })
 
-        it('keeps the session PASSED under ignoreHooksStatus (parity row 41)', async () => {
+        it('keeps the session PASSED under ignoreHooksStatus once a scenario has run (parity row 41)', async () => {
+            const mod = newModule()
+            await runScenario(mod, true)
+            await mod.onBuildLevelHookEnd('AFTER_ALL', {
+                instance: cucumberInstance,
+                result: failing,
+                ignoreHooksStatus: true
+            })
+            await mod.onAfterExecute()
+
+            expect(statusBody()).toEqual({ status: 'passed' })
+        })
+
+        /**
+         * Zero scenarios is legacy's `!_specsRan` arm, which marks failed with no regard for the
+         * flag. Discriminating against the case directly above: identical hook, identical flag,
+         * opposite verdicts — the scenario having run is the only difference.
+         */
+        it('marks the session FAILED under ignoreHooksStatus when no scenario ran', async () => {
             const mod = newModule()
             await mod.onBuildLevelHookEnd('BEFORE_ALL', {
                 instance: cucumberInstance,
@@ -184,7 +216,28 @@ describe('AutomateModule — Phase 8 remediations', () => {
             })
             await mod.onAfterExecute()
 
+            expect(statusBody().status).toBe('failed')
+        })
+
+        it('leaves wdio_mocha unmarked on that same zero-scenario case', async () => {
+            const mod = newModule()
+            await mod.onBuildLevelHookEnd('BEFORE_ALL', {
+                instance: mochaInstance,
+                result: failing,
+                ignoreHooksStatus: true
+            })
+            await mod.onAfterExecute()
+
             expect(fetch).not.toHaveBeenCalled()
+        })
+
+        it('does not fail a session whose scenarios all passed and whose hooks all passed', async () => {
+            const mod = newModule()
+            await runScenario(mod, true)
+            await mod.onBuildLevelHookEnd('AFTER_ALL', { instance: cucumberInstance, result: { passed: true } })
+            await mod.onAfterExecute()
+
+            expect(statusBody()).toEqual({ status: 'passed' })
         })
 
         it('respects skipSessionStatus', async () => {
