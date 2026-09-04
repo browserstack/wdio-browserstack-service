@@ -935,8 +935,13 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
     /**
      * A `Frameworks.TestResult`-shaped view of a scenario result, for automateModule's
-     * session-status marking. Anything cucumber reports that is neither passed nor failed is a
-     * skip — the same collapse the scenario's own reported result applies.
+     * session-status marking.
+     *
+     * Which statuses count as a session failure is `_failureStatuses`, NOT the passed/failed
+     * collapse the o11y result applies: cucumber's UNDEFINED / AMBIGUOUS / UNKNOWN fail the
+     * session on legacy while still being reported to Observability as `skipped`, and PENDING
+     * joins them only under `cucumberOpts.strict`. Reading the o11y collapse here instead marked
+     * a feature with an undefined step `passed` where legacy marks it `failed`.
      */
     private _cucumberTestResult(world: ITestCaseHookParameter): Frameworks.TestResult {
         const status = world.result?.status?.toLowerCase()
@@ -949,9 +954,12 @@ export default class BrowserstackService implements Services.ServiceInstance {
         const hasStepFailures = this._cliCucumberFramework()?.hasStepFailures() ?? true
         const hookOnlyFailure = ignoreHooksStatus && status === 'failed' && !hasStepFailures
 
+        const passed = status === 'passed' || hookOnlyFailure
+        const failed = !passed && status !== undefined && this._failureStatuses.includes(status)
+
         return {
-            passed: status === 'passed' || hookOnlyFailure,
-            skipped: status !== undefined && status !== 'passed' && status !== 'failed',
+            passed,
+            skipped: !passed && !failed,
             error: world.result?.message ? new Error(world.result.message) : undefined,
             duration: 0,
             retries: { attempts: 0, limit: 0 },

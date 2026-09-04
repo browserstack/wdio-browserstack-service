@@ -213,7 +213,13 @@ export default class AutomateModule extends BaseModule {
 
         const sessionData = this.sessionMap.get(sessionId)
         if (sessionData) {
-            sessionData.testResults.set(name, testResult)
+            // `name` is the session NAME, which for cucumber is the Feature title and therefore
+            // shared by every scenario in the file — keying the results map on it collapses N
+            // scenarios into one last-write-wins entry, so a feature whose last scenario passes
+            // reports a passed session however many earlier ones failed. Mocha leaves `fullName`
+            // undefined, so the key is unchanged there.
+            const resultKey = (test && test.fullName) ? String(test.fullName) : name
+            sessionData.testResults.set(resultKey, testResult)
             this.sessionMap.set(sessionId, sessionData)
         }
 

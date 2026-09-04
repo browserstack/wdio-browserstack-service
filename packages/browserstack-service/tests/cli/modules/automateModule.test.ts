@@ -643,3 +643,88 @@ describe('AutomateModule', () => {
         expect(moduleWithoutConfig.getModuleName()).toBe('AutomateModule')
     })
 })
+
+describe('AutomateModule testResults keying (SDK-7414)', () => {
+    let automateModule: AutomateModule
+    let mockTestInstance: any
+
+    const FEATURE = 'A cucumber feature'
+
+    // A cucumber test view carries fullName (the scenario); a mocha one never does.
+    const cucumberTest = (scenario: string) => ({ title: scenario, fullName: scenario, parent: FEATURE })
+    const mochaTest = (title: string) => ({ title, parent: FEATURE })
+
+    const afterTest = (test: any, passed: boolean) => ({
+        instance: mockTestInstance,
+        result: { error: passed ? null : new Error(`${test.title} failed`), passed },
+        test,
+        suiteTitle: FEATURE
+    })
+
+    const sessionData = () => (automateModule as any).sessionMap.get('test-session-id')
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+
+        const mockAutoInstance = { getId: vi.fn().mockReturnValue(1) }
+        mockTestInstance = { getId: vi.fn().mockReturnValue(1) }
+
+        vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue(mockAutoInstance)
+        vi.mocked(AutomationFramework.getDriver).mockReturnValue({ sessionId: 'test-session-id' })
+        vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+            if (key === 'framework_session_id') {return 'test-session-id'}
+            if (key.includes('CAPABILITIES')) {return { browserName: 'chrome' }}
+            return {}
+        })
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(fetch).mockResolvedValue({ json: vi.fn().mockResolvedValue({ success: true }) } as any)
+
+        automateModule = new AutomateModule({ user: 'testuser', key: 'testkey' } as Options.Testrunner)
+        automateModule.config = {
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false },
+            userName: 'testuser',
+            accessKey: 'testkey'
+        } as any
+    })
+
+    // The defect: every scenario in a feature shares the session name, so keying testResults on it
+    // collapsed N scenarios into one last-write-wins entry and a trailing pass hid earlier failures.
+    it('keeps one entry per scenario for cucumber, so a trailing pass cannot mask an earlier failure', async () => {
+        await automateModule.onAfterTest(afterTest(cucumberTest('scenario one fails'), false))
+        await automateModule.onAfterTest(afterTest(cucumberTest('scenario two passes'), true))
+
+        const results = sessionData().testResults
+        expect([...results.keys()]).toEqual(['scenario one fails', 'scenario two passes'])
+        expect(results.size).toBe(2)
+        expect([...results.values()].map((r: any) => r.status)).toEqual(['failed', 'passed'])
+        // Parity row 31: the session NAME stays the feature title even though the keys do not.
+        expect(sessionData().lastTestName).toBe(FEATURE)
+    })
+
+    // The discriminating pair: identical input shape, opposite answers through the resultKey branch.
+    it('keys on the scenario for cucumber and leaves the key unchanged for mocha', async () => {
+        await automateModule.onAfterTest(afterTest(cucumberTest('a scenario'), true))
+        const cucumberKey = [...sessionData().testResults.keys()][0]
+        const cucumberName = sessionData().lastTestName
+
+        vi.clearAllMocks()
+        vi.mocked(AutomationFramework.getDriver).mockReturnValue({ sessionId: 'test-session-id' })
+        vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+            if (key === 'framework_session_id') {return 'test-session-id'}
+            if (key.includes('CAPABILITIES')) {return { browserName: 'chrome' }}
+            return {}
+        })
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(fetch).mockResolvedValue({ json: vi.fn().mockResolvedValue({ success: true }) } as any)
+        ;(automateModule as any).sessionMap = new Map()
+
+        await automateModule.onAfterTest(afterTest(mochaTest('a test'), true))
+        const mochaKey = [...sessionData().testResults.keys()][0]
+        const mochaName = sessionData().lastTestName
+
+        expect(cucumberKey).toBe('a scenario')
+        expect(cucumberKey).not.toBe(cucumberName)
+        expect(mochaKey).toBe(mochaName)
+        expect(mochaKey).toBe(`${FEATURE} - a test`)
+    })
+})
