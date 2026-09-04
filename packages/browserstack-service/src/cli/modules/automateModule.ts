@@ -155,7 +155,7 @@ export default class AutomateModule extends BaseModule {
         const suiteTitle = args.suiteTitle as string
         const testContextOptions = this.config.testContextOptions as TestContextOptions
 
-        if (testContextOptions.skipSessionStatus || !isBrowserstackSession(browser)) {
+        if (!isBrowserstackSession(browser)) {
             this.logger.info('Skipping session status update as per configuration')
             return
         }
@@ -176,14 +176,39 @@ export default class AutomateModule extends BaseModule {
             name = `${pre}${test.parent}${post}`
         }
 
+        // SDK-7270 (residual): the session can be REPLACED mid-test. @wdio/mocha-framework binds
+        // beforeTest to the test function itself (wrapGlobalTestMethod), so onBeforeTest is the one
+        // and only per-test naming opportunity and it has already passed by the time the test body
+        // calls browser.reloadSession(). The replacement session is therefore never registered in
+        // sessionMap and keeps its creation-time `sessionName` capability. (A reload in a beforeEach
+        // hook is fine — that runs before beforeTest.) Re-resolve the live session id here
+        // (service.onReload has already pointed KEY_FRAMEWORK_SESSION_ID at it) and adopt it while
+        // it is still open.
+        //
+        // Deliberately gated on skipSessionName, NOT skipSessionStatus: naming and status are
+        // independent options, so a `setSessionStatus: false` user must still get the name repair,
+        // and a `setSessionName: false` user must not be pulled into sessionMap — that would hand
+        // onAfterExecute a session to status-mark where it previously had none.
+        if (sessionId && !testContextOptions.skipSessionName && !this.sessionMap.has(sessionId)) {
+            this.sessionMap.set(sessionId, { lastTestName: name, testResults: new Map() })
+        }
+        // No-op for the steady state: when no mid-test reload happened, onBeforeTest already
+        // applied this exact name and `appliedName` de-dupes it away — no extra API call.
+        await this.flushSessionName(sessionId)
+
+        if (testContextOptions.skipSessionStatus) {
+            this.logger.info('Skipping session status update as per configuration')
+            return
+        }
+
+        const testResult: TestResult = {
+            testName: name,
+            status: status,
+            reason: reason
+        }
+
         const sessionData = this.sessionMap.get(sessionId)
         if (sessionData) {
-            const testResult: TestResult = {
-                testName: name,
-                status: status,
-                reason: reason
-            }
-
             sessionData.testResults.set(name, testResult)
             this.sessionMap.set(sessionId, sessionData)
         }

@@ -166,6 +166,28 @@ class _AccessibilityHandler {
         }
     }
 
+    /**
+     * A reload replaces the session id under a driver object that otherwise carries on
+     * unchanged. `_sessionId` is captured once in `before()`, so without this every later
+     * scan-gate lookup and every results call keeps addressing the session that already ended.
+     */
+    onSessionReload(oldSessionId: string, newSessionId: string) {
+        try {
+            if (!newSessionId || oldSessionId === newSessionId) {
+                return
+            }
+            if (oldSessionId in AccessibilityHandler._a11yScanSessionMap) {
+                AccessibilityHandler._a11yScanSessionMap[newSessionId] = AccessibilityHandler._a11yScanSessionMap[oldSessionId]
+                delete AccessibilityHandler._a11yScanSessionMap[oldSessionId]
+            }
+            if (this._sessionId === oldSessionId) {
+                this._sessionId = newSessionId
+            }
+        } catch (error) {
+            BStackLogger.debug(`Exception while migrating accessibility state across session reload: ${error}`)
+        }
+    }
+
     async before(sessionId: string) {
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.CONFIG_EVENTS.ACCESSIBILITY)
 
@@ -237,7 +259,10 @@ class _AccessibilityHandler {
                 BStackLogger.warn('Accessibility scanning cannot be started from outside the test')
                 return
             }
-            AccessibilityHandler._a11yScanSessionMap[sessionId] = true
+            // `this._sessionId` rather than the captured `sessionId`: commandWrapper reads the
+            // former, and a reload moves it, so writing the captured id would leave the user's
+            // start/stop addressing a session that has ended.
+            AccessibilityHandler._a11yScanSessionMap[this._sessionId ?? sessionId] = true
             this._testMetadata[this._testIdentifier as string] = {
                 scanTestForAccessibility : true,
                 accessibilityScanStarted : true
@@ -250,7 +275,7 @@ class _AccessibilityHandler {
                 BStackLogger.warn('Accessibility scanning cannot be stopped from outside the test')
                 return
             }
-            AccessibilityHandler._a11yScanSessionMap[sessionId] = false
+            AccessibilityHandler._a11yScanSessionMap[this._sessionId ?? sessionId] = false
             await this._setAnnotation('Accessibility scanning has stopped')
         }
 
