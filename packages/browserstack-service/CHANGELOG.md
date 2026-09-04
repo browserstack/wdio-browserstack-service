@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.35.2
+
+### Patch Changes
+
+- 75da58d: - Add repo-root .npmrc with supply-chain hardening directives (strict-ssl, save-exact,
+
 ## 9.35.1
 
 ### Patch Changes
