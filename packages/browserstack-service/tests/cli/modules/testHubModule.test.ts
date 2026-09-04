@@ -9,6 +9,8 @@ import { GrpcClient } from '../../../src/cli/grpcClient.js'
 import WdioMochaTestFramework from '../../../src/cli/frameworks/wdioMochaTestFramework.js'
 import { TestFrameworkConstants } from '../../../src/cli/frameworks/constants/testFrameworkConstants.js'
 import { AutomationFrameworkConstants } from '../../../src/cli/frameworks/constants/automationFrameworkConstants.js'
+import TestMetadata from '../../../src/metadata.js'
+import { BROWSERSTACK_CENTRAL_USER } from '../../../src/constants.js'
 import type { Frameworks } from '@wdio/types'
 
 // Mock all dependencies
@@ -581,6 +583,132 @@ describe('TestHubModule', () => {
             const call = mockGrpcClient.testSessionEvent.mock.calls[0][0]
             expect(call.automationSessions).toEqual([])
             expect(call.capabilities).toEqual(new Uint8Array())
+        })
+    })
+
+    describe('app_lcnc test metadata wiring', () => {
+        const originalCentralUser = process.env[BROWSERSTACK_CENTRAL_USER]
+
+        beforeEach(() => {
+            process.env[BROWSERSTACK_CENTRAL_USER] = 'app_lcnc'
+            TestMetadata.reset()
+        })
+
+        afterEach(() => {
+            // Restore any sp-ies placed on the real TestMetadata singleton. The suite's
+            // outer afterEach uses vi.resetAllMocks(), which resets a spy to a no-op but
+            // leaves it installed on the object — that would silently neuter
+            // TestMetadata methods for later tests.
+            vi.restoreAllMocks()
+            TestMetadata.reset()
+            if (originalCentralUser === undefined) {
+                delete process.env[BROWSERSTACK_CENTRAL_USER]
+            } else {
+                process.env[BROWSERSTACK_CENTRAL_USER] = originalCentralUser
+            }
+        })
+
+        it('onBeforeTest tracks the current test-run uuid (KEY_TEST_UUID preferred)', async () => {
+            vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({ getRef: vi.fn(() => 'auto-ref') })
+            vi.spyOn(testHubModule, 'sendTestSessionEvent').mockResolvedValue()
+            vi.mocked(TestFramework.getState).mockImplementation((_instance, key) =>
+                key === TestFrameworkConstants.KEY_TEST_UUID ? 'cli-test-uuid' : undefined
+            )
+            const setUuidSpy = vi.spyOn(TestMetadata, 'setCurrentTestRunUuid')
+
+            testHubModule.onBeforeTest({
+                instance: { getRef: vi.fn(() => 'instance-ref') },
+                test: { title: 'Test' } as Frameworks.Test
+            })
+
+            expect(setUuidSpy).toHaveBeenCalledWith('cli-test-uuid')
+        })
+
+        it('onBeforeTest falls back to instance.getRef when KEY_TEST_UUID is absent', async () => {
+            vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({ getRef: vi.fn(() => 'auto-ref') })
+            vi.spyOn(testHubModule, 'sendTestSessionEvent').mockResolvedValue()
+            vi.mocked(TestFramework.getState).mockReturnValue(undefined)
+            const setUuidSpy = vi.spyOn(TestMetadata, 'setCurrentTestRunUuid')
+
+            testHubModule.onBeforeTest({
+                instance: { getRef: vi.fn(() => 'instance-ref') },
+                test: { title: 'Test' } as Frameworks.Test
+            })
+
+            expect(setUuidSpy).toHaveBeenCalledWith('instance-ref')
+        })
+
+        it('onBeforeTest does not throw when the instance cannot resolve a uuid', async () => {
+            vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({ getRef: vi.fn(() => 'auto-ref') })
+            vi.spyOn(testHubModule, 'sendTestSessionEvent').mockResolvedValue()
+            vi.mocked(TestFramework.getState).mockReturnValue(undefined)
+
+            // Instance whose getRef throws must not abort the pre-test hook.
+            const badInstance = { getRef: vi.fn(() => { throw new Error('bad instance') }) }
+
+            expect(() => testHubModule.onBeforeTest({
+                instance: badInstance,
+                test: { title: 'Test' } as Frameworks.Test
+            })).not.toThrow()
+        })
+
+        it('sendTestFrameworkEvent merges app_lcnc metadata into the outgoing event', async () => {
+            TestMetadata.setCurrentTestRunUuid('cli-test-uuid')
+            TestMetadata.set({ identifier: 'run-1' })
+
+            const mockInstance = {
+                getContext: vi.fn(() => ({
+                    getId: vi.fn(() => 'ctx'),
+                    getThreadId: vi.fn(() => 'thread'),
+                    getProcessId: vi.fn(() => 'proc')
+                })),
+                getAllData: vi.fn(() => new Map([
+                    [TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME, 'mocha']
+                ])),
+                getCurrentTestState: vi.fn(() => TestFrameworkState.TEST),
+                getCurrentHookState: vi.fn(() => HookState.PRE),
+                getRef: vi.fn(() => 'instance-ref')
+            }
+            vi.mocked(TestFramework.getState).mockImplementation((_instance, key) =>
+                key === TestFrameworkConstants.KEY_TEST_UUID ? 'cli-test-uuid' : undefined
+            )
+
+            await testHubModule.sendTestFrameworkEvent({
+                test: { title: 'Test' } as Frameworks.Test,
+                instance: mockInstance
+            })
+
+            const payload = mockGrpcClient.testFrameworkEvent.mock.calls[0][0]
+            const eventJson = JSON.parse(Buffer.from(payload.eventJson).toString())
+            expect(eventJson.app_lcnc).toEqual({ identifier: 'run-1' })
+        })
+
+        it('sendTestFrameworkEvent does not attach app_lcnc when no metadata was set for the run', async () => {
+            const mockInstance = {
+                getContext: vi.fn(() => ({
+                    getId: vi.fn(() => 'ctx'),
+                    getThreadId: vi.fn(() => 'thread'),
+                    getProcessId: vi.fn(() => 'proc')
+                })),
+                getAllData: vi.fn(() => new Map([
+                    [TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME, 'mocha']
+                ])),
+                getCurrentTestState: vi.fn(() => TestFrameworkState.TEST),
+                getCurrentHookState: vi.fn(() => HookState.PRE),
+                getRef: vi.fn(() => 'instance-ref')
+            }
+            vi.mocked(TestFramework.getState).mockImplementation((_instance, key) =>
+                key === TestFrameworkConstants.KEY_TEST_UUID ? 'cli-test-uuid' : undefined
+            )
+
+            await testHubModule.sendTestFrameworkEvent({
+                test: { title: 'Test' } as Frameworks.Test,
+                instance: mockInstance
+            })
+
+            const payload = mockGrpcClient.testFrameworkEvent.mock.calls[0][0]
+            const eventJson = JSON.parse(Buffer.from(payload.eventJson).toString())
+            expect(eventJson.app_lcnc).toBeUndefined()
         })
     })
 })

@@ -59,8 +59,12 @@ export default class TestHubModule extends BaseModule {
     onBeforeTest(args: Record<string, unknown>) {
         this.logger.debug('onBeforeTest: Called after test hook from cli configured module!!!')
         const instance = args.instance as TestFrameworkInstance
-        const testUuid = this.getCurrentTestRunUuid(instance)
-        TestMetadata.setCurrentTestRunUuid(testUuid)
+        try {
+            const testUuid = this.getCurrentTestRunUuid(instance)
+            TestMetadata.setCurrentTestRunUuid(testUuid)
+        } catch (error) {
+            this.logger.debug(`onBeforeTest: failed to track current test-run uuid: ${util.format(error)}`)
+        }
 
         const autoInstace = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
         const instances = [autoInstace]

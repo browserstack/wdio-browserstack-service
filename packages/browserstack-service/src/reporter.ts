@@ -321,7 +321,7 @@ class _TestReporter extends WDIOReporter {
         // Force result to 'skipped' so the BTCER event downstream gets the correct status.
         if (eventType === 'TestRunSkipped') {
             testData.result = 'skipped'
-            const appLcncMetaData = TestMetadata.get(testData.uuid)
+            const appLcncMetaData = TestMetadata.get()
             if (Object.keys(appLcncMetaData).length > 0) {
                 testData.app_lcnc = appLcncMetaData
             }

@@ -39,7 +39,7 @@ class TestMetadata {
         }
 
         if (testRunUuid) {
-            return TestMetadata.metadataByTestRunUuid[testRunUuid] || TestMetadata.fallbackMetadata || {}
+            return TestMetadata.metadataByTestRunUuid[testRunUuid] || {}
         }
 
         return TestMetadata.fallbackMetadata || {}
