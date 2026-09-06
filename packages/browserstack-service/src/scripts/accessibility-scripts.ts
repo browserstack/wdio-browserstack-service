@@ -14,6 +14,27 @@ interface Command {
     class: string
 }
 
+/**
+ * The binary types AccessibilityCapability.value as a proto string, so goog:chromeOptions
+ * arrives JSON-encoded over gRPC where the HTTP launch response delivers a plain object.
+ * Accept both. Anything that does not resolve to an object is dropped rather than written
+ * into a W3C capability, which the hub rejects outright.
+ */
+function toChromeOptions(value: unknown): { [key: string]: unknown } | null {
+    let parsed = value
+    if (typeof parsed === 'string') {
+        try {
+            parsed = JSON.parse(parsed)
+        } catch {
+            return null
+        }
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as { [key: string]: unknown }
+    }
+    return null
+}
+
 class AccessibilityScripts {
     private static instance: AccessibilityScripts | null = null
 
@@ -88,8 +109,9 @@ class AccessibilityScripts {
         if (data.commands && data.commands.length) {
             this.commandsToWrap = data.commands
         }
-        if (data.nonBStackInfraA11yChromeOptions){
-            this.ChromeExtension = data.nonBStackInfraA11yChromeOptions
+        const chromeOptions = toChromeOptions(data.nonBStackInfraA11yChromeOptions)
+        if (chromeOptions){
+            this.ChromeExtension = chromeOptions
         }
 
     }
