@@ -138,6 +138,50 @@ export default class AutomateModule extends BaseModule {
         this.sessionMap.set(sessionId, sessionData)
     }
 
+    /**
+     * Apply a session-name override decided at worker teardown rather than per test — the shape
+     * `preferScenarioName` needs, since "exactly one scenario ran" is only known once the worker
+     * is done. Legacy expresses it as `_updateJob({ name: this._fullTitle })` in service.after(),
+     * which is gated `!BrowserstackCLI.isRunning()`; here the name lives in `sessionMap`, so the
+     * override is written there and re-flushed. `flushSessionName`'s `appliedName` de-dupe means
+     * a no-op override costs no API call.
+     *
+     * `setSessionName: false` still wins: legacy omits `name` from its `_updateJob` payload in
+     * that case, and the same flag short-circuits here.
+     */
+    async overrideSessionName(name: string): Promise<void> {
+        try {
+            if (!name) {
+                return
+            }
+
+            const testContextOptions = this.config.testContextOptions as TestContextOptions
+            if (testContextOptions?.skipSessionName) {
+                return
+            }
+
+            const autoInstance = AutomationFramework.getTrackedInstance()
+            const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
+            if (!sessionId) {
+                this.logger.debug('overrideSessionName: no session id resolved; nothing to rename')
+                return
+            }
+
+            const sessionData = this.sessionMap.get(sessionId)
+            if (!sessionData) {
+                this.logger.debug(`overrideSessionName: session ${sessionId} is not registered; nothing to rename`)
+                return
+            }
+
+            sessionData.lastTestName = name
+            this.sessionMap.set(sessionId, sessionData)
+            await this.flushSessionName(sessionId)
+            this.logger.info(`overrideSessionName: renamed session ${sessionId} to "${name}"`)
+        } catch (error) {
+            this.logger.error(`Exception in automate overrideSessionName: ${error}`)
+        }
+    }
+
     async onAfterTest(args: Record<string, unknown>) {
         this.logger.debug('onAfterTest: inside automate module after test hook!')
         const instace = args.instance as TestFrameworkInstance

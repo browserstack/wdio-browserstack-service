@@ -23,6 +23,7 @@ import AccessibilityHandler from './accessibility-handler.js'
 import CustomTagsHandler from './custom-tags-handler.js'
 import { classifyMochaHookTitle, setCurrentMochaHookWindow } from './customTags.js'
 import type TestHubModule from './cli/modules/testHubModule.js'
+import type AutomateModule from './cli/modules/automateModule.js'
 import { BStackLogger } from './bstackLogger.js'
 import PercyHandler from './Percy/Percy-Handler.js'
 import Listener from './testOps/listener.js'
@@ -725,6 +726,21 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // use the scenario name instead of the feature name
             if (preferScenarioName && this._scenariosRanCount === 1 && this._lastScenarioName) {
                 this._fullTitle = this._lastScenarioName
+                // `_fullTitle` only reaches the session through `_updateJob`, and every one of its
+                // call sites is gated `!BrowserstackCLI.isRunning()`, so on the CLI flow the rename
+                // has to be pushed to automateModule, which owns the name there.
+                //
+                // Unreachable for mocha and jasmine: `_scenariosRanCount` and `_lastScenarioName`
+                // are written only by cucumber's `afterScenario`, so the guard above is false for
+                // any other framework however `preferScenarioName` is set.
+                if (BrowserstackCLI.getInstance().isRunning()) {
+                    try {
+                        const automateModule = BrowserstackCLI.getInstance().modules.AutomateModule as AutomateModule | undefined
+                        await automateModule?.overrideSessionName(this._lastScenarioName)
+                    } catch (renameErr) {
+                        BStackLogger.debug(`Exception applying preferScenarioName in after(): ${util.format(renameErr)}`)
+                    }
+                }
             }
 
             if (BrowserstackCLI.getInstance().isRunning()) {
@@ -957,10 +973,23 @@ export default class BrowserstackService implements Services.ServiceInstance {
         const passed = status === 'passed' || hookOnlyFailure
         const failed = !passed && status !== undefined && this._failureStatuses.includes(status)
 
+        // The statuses that only fail the session via `_failureStatuses` carry no `world.result
+        // .message` — PENDING under `cucumberOpts.strict`, and equally UNDEFINED / AMBIGUOUS — so
+        // automateModule falls back to its generic 'Unknown Error'. Legacy synthesises the reason
+        // in the same afterScenario() block that consults `_failureStatuses`; mirror it verbatim.
+        let error: Error | undefined
+        if (failed) {
+            error = new Error(world.result?.message || (status === 'pending'
+                ? `Some steps/hooks are pending for scenario "${world.pickle.name}"`
+                : 'Unknown Error'))
+        } else if (world.result?.message) {
+            error = new Error(world.result.message)
+        }
+
         return {
             passed,
             skipped: !passed && !failed,
-            error: world.result?.message ? new Error(world.result.message) : undefined,
+            error,
             duration: 0,
             retries: { attempts: 0, limit: 0 },
         } as unknown as Frameworks.TestResult
