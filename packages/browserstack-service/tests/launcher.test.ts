@@ -724,9 +724,10 @@ describe('onPrepare with BrowserStack Local env variables (SDK-7075)', () => {
      * The binary coerces only 'true'/'false' and truthiness-checks the rest, so every
      * other SDK enables Local on `BROWSERSTACK_LOCAL=1`. Resolving these to `false` here
      * would both diverge from that and — since env wins — switch OFF a tunnel the config
-     * had switched on.
+     * had switched on. `0` / `no` / `off` are pinned deliberately: they read as "off" to a
+     * human but are not the literal `false`, so they enable, as they do on every other SDK.
      */
-    it.each(['1', 'yes', 'TRUE', 'True'])('should enable Local for the set value %s', async (value) => {
+    it.each(['1', 'yes', 'TRUE', 'True', '0', 'no', 'off'])('should enable Local for the set value %s', async (value) => {
         process.env.BROWSERSTACK_LOCAL = value
         const service = new BrowserstackLauncher({ testObservability: false, percy: false } as any, caps, config)
         const capabilities = [{ 'bstack:options': {} }]
@@ -748,7 +749,12 @@ describe('onPrepare with BrowserStack Local env variables (SDK-7075)', () => {
         expect(capabilities[0]['bstack:options']).toHaveProperty('local', true)
     })
 
-    it.each(['false', 'FALSE', 'False'])('should disable Local for the literal %s', async (value) => {
+    /**
+     * The padded variants are what CI-injected env, `.env` files and `VAR=$(cmd)` capture
+     * actually produce. Without the trim they miss the exact `isFalse()` compare and enable
+     * the tunnel the user was switching off.
+     */
+    it.each(['false', 'FALSE', 'False', ' false ', 'false\n', 'false\r\n', '\tFalse '])('should disable Local for the literal %j', async (value) => {
         process.env.BROWSERSTACK_LOCAL = value
         const service = new BrowserstackLauncher({ browserstackLocal: true, testObservability: false, percy: false } as any, caps, config)
         const capabilities = [{ 'bstack:options': {} }]
@@ -757,6 +763,32 @@ describe('onPrepare with BrowserStack Local env variables (SDK-7075)', () => {
 
         expect(service.browserstackLocal).toBeUndefined()
         expect(capabilities[0]['bstack:options']).not.toHaveProperty('local')
+    })
+
+    /**
+     * A whitespace-only value trims to `''`, which `isUndefined()` reads as unset — so it must
+     * leave the config alone rather than enable Local off a blank string.
+     */
+    it.each(['   ', '\n', '\t'])('should treat a whitespace-only BROWSERSTACK_LOCAL (%j) as unset', async (value) => {
+        process.env.BROWSERSTACK_LOCAL = value
+        const service = new BrowserstackLauncher({ browserstackLocal: false, testObservability: false, percy: false } as any, caps, config)
+        const capabilities = [{ 'bstack:options': {} }]
+
+        await service.onPrepare(config, capabilities)
+
+        expect(service.browserstackLocal).toBeUndefined()
+        expect(capabilities[0]['bstack:options']).not.toHaveProperty('local')
+    })
+
+    it('should keep honouring a config-enabled tunnel when BROWSERSTACK_LOCAL is whitespace-only', async () => {
+        process.env.BROWSERSTACK_LOCAL = '   '
+        const service = new BrowserstackLauncher({ browserstackLocal: true, testObservability: false, percy: false } as any, caps, config)
+        const capabilities = [{ 'bstack:options': {} }]
+
+        await service.onPrepare(config, capabilities)
+
+        expect(service.browserstackLocal).toBeDefined()
+        expect(capabilities[0]['bstack:options']).toHaveProperty('local', true)
     })
 
     it('should not enable Local from BROWSERSTACK_LOCAL_IDENTIFIER alone', async () => {

@@ -1304,19 +1304,28 @@ export function normalizeTestReportingEnvVariables(){
  * `getObservabilityUser` / `getObservabilityKey` / `getObservabilityProject` below.
  */
 export function normalizeLocalEnvVariables(_options: BrowserstackConfig & Options.Testrunner) {
-    if (!isUndefined(process.env[BROWSERSTACK_LOCAL])) {
+    /**
+     * Trimmed before the compare. `isFalse()` is an exact match, so a padded `" false "` or the
+     * `"false\n"` that `VAR=$(cmd)` capture and `.env` files routinely produce would miss it and
+     * `!isFalse(...)` would ENABLE the tunnel the user was switching off. The binary trims for
+     * the same reason (`updateConfigWithBooleanValues`). Trimming also makes a whitespace-only
+     * value read as unset, since `isUndefined()` treats `''` as unset.
+     */
+    const localEnvValue = process.env[BROWSERSTACK_LOCAL]?.trim()
+
+    if (!isUndefined(localEnvValue)) {
         /**
-         * Only a literal `false` disables Local — any other set value enables it. This is the
-         * binary's semantics, not a looser reading of it: `updateConfigWithBooleanValues`
-         * coerces only `'true'`/`'false'` and leaves every other string as-is, and
-         * `getLocalConfig()` then truthiness-checks the result. So `BROWSERSTACK_LOCAL=1`
-         * enables Local on every other SDK, and must here too.
+         * Only a literal `false` disables Local — any other set value enables it, `0` and `off`
+         * included. This is the binary's semantics, not a looser reading of it:
+         * `updateConfigWithBooleanValues` coerces only `'true'`/`'false'` and leaves every other
+         * string as-is, and `getLocalConfig()` then truthiness-checks the result. So
+         * `BROWSERSTACK_LOCAL=1` enables Local on every other SDK, and must here too.
          *
          * Using `isTrue()` instead would resolve `1` / `yes` to `false` and — because the env
          * var wins — would silently switch OFF a tunnel that `browserstackLocal: true` in
          * `wdio.conf.js` had switched on.
          */
-        _options.browserstackLocal = !isFalse(process.env[BROWSERSTACK_LOCAL])
+        _options.browserstackLocal = !isFalse(localEnvValue)
     }
 
     /**
