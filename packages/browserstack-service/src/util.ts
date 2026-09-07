@@ -1327,7 +1327,7 @@ export function shouldAddServiceVersion(config: Options.Testrunner, testObservab
     return true
 }
 
-export async function batchAndPostEvents (eventUrl: string, kind: string, data: UploadType[]) {
+export async function batchAndPostEvents (eventUrl: string, kind: string, data: UploadType[], timeoutMs?: number) {
     if (!process.env[TESTOPS_BUILD_COMPLETED_ENV]) {
         throw new Error('Build not completed yet')
     }
@@ -1337,6 +1337,12 @@ export async function batchAndPostEvents (eventUrl: string, kind: string, data: 
         throw new Error('Missing authentication Token')
     }
 
+    // SDK-7518: an optional per-call timeout. When set (by shutdown-path callers such as
+    // finalizeOrphanedRuns), bound the fetch with an AbortController so a hung connection cannot
+    // stall shutdown before the build-stop call. Left unset by normal in-run callers, whose
+    // behaviour is unchanged.
+    const controller = timeoutMs ? new AbortController() : undefined
+    const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined
     try {
         const url = `${APIUtils.DATA_ENDPOINT}/${eventUrl}`
         const response = await fetch(url, {
@@ -1345,7 +1351,8 @@ export async function batchAndPostEvents (eventUrl: string, kind: string, data: 
                 ...DEFAULT_REQUEST_CONFIG.headers,
                 'Authorization': `Bearer ${jwtToken}`
             },
-            body: JSON.stringify(data)
+            body: JSON.stringify(data),
+            signal: controller?.signal
         })
         // read as text first: error responses (401/5xx) and empty bodies are not JSON, and a blind
         // response.json() surfaced them as a misleading "Unexpected end of JSON input"
@@ -1357,6 +1364,8 @@ export async function batchAndPostEvents (eventUrl: string, kind: string, data: 
     } catch (error) {
         BStackLogger.debug(`[${kind}] EXCEPTION IN ${kind} REQUEST TO TEST REPORTING AND ANALYTICS : ${error}`)
         throw new Error('Exception in request ' + error)
+    } finally {
+        if (timeoutId) { clearTimeout(timeoutId) }
     }
 }
 
