@@ -60,9 +60,7 @@ export interface TestOrchestrationOptions {
     runSmartSelection?: RunSmartSelectionOptions
 }
 
-export interface BrowserstackOptions extends Options.Testrunner {
-    selfHeal?: boolean;
-}
+export type BrowserstackOptions = Options.Testrunner
 
 export interface BrowserstackConfig {
     /**
@@ -240,7 +238,6 @@ export interface BrowserstackConfig {
      * @default false
     */
     ipWhiteListing?: boolean;
-    selfHeal?: boolean;
     /**
      * Set the Test Orchestration related config options under this key.
      * For e.g. runSmartSelection configurations, etc.

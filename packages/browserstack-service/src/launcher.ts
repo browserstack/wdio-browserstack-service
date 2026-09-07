@@ -41,7 +41,6 @@ import {
     getBrowserStackKey,
     uploadLogs,
     ObjectsAreEqual, getBasicAuthHeader,
-    isValidCapsForHealing,
     getBooleanValueFromString,
     validateCapsWithNonBstackA11y,
     mergeChromeOptions,
@@ -59,7 +58,6 @@ import type Percy from './Percy/Percy.js'
 import BrowserStackConfig from './config.js'
 import { setupExitHandlers } from './exitHandler.js'
 import { sendFinish, sendStart } from './instrumentation/funnelInstrumentation.js'
-import AiHandler from './ai-handler.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import { BrowserstackCLI } from './cli/index.js'
@@ -354,30 +352,6 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         }
 
         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.INIT)
-
-        // Setting up healing for those sessions where we don't add the service version capability as it indicates that the session is not being run on BrowserStack
-        if (!shouldAddServiceVersion(this._config, this._options.testObservability, capabilities as Capabilities.BrowserStackCapabilities)) {
-            try {
-                if ((capabilities as Capabilities.BrowserStackCapabilities).browserName) {
-                    capabilities = await AiHandler.setup(this._config, this.browserStackConfig, this._options, capabilities as WebdriverIO.Capabilities, false)
-                } else if ( Array.isArray(capabilities)){
-
-                    for (let i = 0; i < capabilities.length; i++) {
-                        if ((capabilities[i] as Capabilities.BrowserStackCapabilities).browserName) {
-                            capabilities[i] = await AiHandler.setup(this._config, this.browserStackConfig, this._options, capabilities[i] as WebdriverIO.Capabilities, false)
-                        }
-                    }
-
-                } else if (isValidCapsForHealing(capabilities)) {
-                    // setting up healing in case capabilities.xyz.capabilities.browserName where xyz can be anything:
-                    capabilities = await AiHandler.setup(this._config, this.browserStackConfig, this._options, capabilities, true)
-                }
-            } catch (err) {
-                if (this._options.selfHeal === true) {
-                    BStackLogger.warn(`Error while setting up Browserstack healing Extension ${err}. Disabling healing for this session.`)
-                }
-            }
-        }
 
         /**
          * Upload app to BrowserStack if valid file path to app is given.
