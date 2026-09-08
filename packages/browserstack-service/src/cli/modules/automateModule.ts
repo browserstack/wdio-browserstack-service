@@ -27,6 +27,9 @@ interface SessionData {
     lastTestName: string
     appliedName?: string // last name successfully PUT for this session, for de-duping
     testResults: Map<string, TestResult> // testName -> TestResult
+    scenariosRan: number // non-skipped cucumber scenarios, for preferScenarioName
+    lastScenarioName?: string
+    preferScenarioName?: boolean
 }
 
 export default class AutomateModule extends BaseModule {
@@ -92,7 +95,8 @@ export default class AutomateModule extends BaseModule {
         if (!existingSession) {
             this.sessionMap.set(sessionId, {
                 lastTestName: name,
-                testResults: new Map()
+                testResults: new Map(),
+                scenariosRan: 0
             })
         } else {
             existingSession.lastTestName = name
@@ -136,50 +140,6 @@ export default class AutomateModule extends BaseModule {
         })
         sessionData.appliedName = name
         this.sessionMap.set(sessionId, sessionData)
-    }
-
-    /**
-     * Apply a session-name override decided at worker teardown rather than per test — the shape
-     * `preferScenarioName` needs, since "exactly one scenario ran" is only known once the worker
-     * is done. Legacy expresses it as `_updateJob({ name: this._fullTitle })` in service.after(),
-     * which is gated `!BrowserstackCLI.isRunning()`; here the name lives in `sessionMap`, so the
-     * override is written there and re-flushed. `flushSessionName`'s `appliedName` de-dupe means
-     * a no-op override costs no API call.
-     *
-     * `setSessionName: false` still wins: legacy omits `name` from its `_updateJob` payload in
-     * that case, and the same flag short-circuits here.
-     */
-    async overrideSessionName(name: string): Promise<void> {
-        try {
-            if (!name) {
-                return
-            }
-
-            const testContextOptions = this.config.testContextOptions as TestContextOptions
-            if (testContextOptions?.skipSessionName) {
-                return
-            }
-
-            const autoInstance = AutomationFramework.getTrackedInstance()
-            const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
-            if (!sessionId) {
-                this.logger.debug('overrideSessionName: no session id resolved; nothing to rename')
-                return
-            }
-
-            const sessionData = this.sessionMap.get(sessionId)
-            if (!sessionData) {
-                this.logger.debug(`overrideSessionName: session ${sessionId} is not registered; nothing to rename`)
-                return
-            }
-
-            sessionData.lastTestName = name
-            this.sessionMap.set(sessionId, sessionData)
-            await this.flushSessionName(sessionId)
-            this.logger.info(`overrideSessionName: renamed session ${sessionId} to "${name}"`)
-        } catch (error) {
-            this.logger.error(`Exception in automate overrideSessionName: ${error}`)
-        }
     }
 
     async onAfterTest(args: Record<string, unknown>) {
@@ -238,7 +198,7 @@ export default class AutomateModule extends BaseModule {
         // and a `setSessionName: false` user must not be pulled into sessionMap — that would hand
         // onAfterExecute a session to status-mark where it previously had none.
         if (sessionId && !testContextOptions.skipSessionName && !this.sessionMap.has(sessionId)) {
-            this.sessionMap.set(sessionId, { lastTestName: name, testResults: new Map() })
+            this.sessionMap.set(sessionId, { lastTestName: name, testResults: new Map(), scenariosRan: 0 })
         }
         // No-op for the steady state: when no mid-test reload happened, onBeforeTest already
         // applied this exact name and `appliedName` de-dupes it away — no extra API call.
@@ -264,6 +224,11 @@ export default class AutomateModule extends BaseModule {
             // undefined, so the key is unchanged there.
             const resultKey = (test && test.fullName) ? String(test.fullName) : name
             sessionData.testResults.set(resultKey, testResult)
+            if (!skipped && this.isCucumberInstance(instace)) {
+                sessionData.scenariosRan++
+                sessionData.lastScenarioName = testTitle
+                sessionData.preferScenarioName = isTrue(args.preferScenarioName)
+            }
             this.sessionMap.set(sessionId, sessionData)
         }
 
@@ -326,7 +291,7 @@ export default class AutomateModule extends BaseModule {
                 // A BeforeAll can fail before any scenario ran, so the session may not be
                 // registered yet. `lastTestName` stays empty on purpose — flushSessionName
                 // early-returns on it, so registering here cannot rename the session.
-                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map() })
+                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map(), scenariosRan: 0 })
             }
 
             const name = this.resolveHookName(instance, hookKey)
@@ -381,6 +346,15 @@ export default class AutomateModule extends BaseModule {
                         )
                         failureReason = reasonLines.join(',\n')
                     }
+                }
+
+                // preferScenarioName: cucumber names the session after the FEATURE, but when
+                // exactly one non-skipped scenario ran the user can ask for that scenario's name
+                // instead. Only decidable here — "exactly one" is not knowable while tests are
+                // still arriving. `skipSessionName` still wins, inside flushSessionName.
+                if (sessionData.preferScenarioName && sessionData.scenariosRan === 1 && sessionData.lastScenarioName) {
+                    sessionData.lastTestName = sessionData.lastScenarioName
+                    this.sessionMap.set(sessionId, sessionData)
                 }
 
                 // Final sweep — a no-op for sessions already named per-test in onBeforeTest.

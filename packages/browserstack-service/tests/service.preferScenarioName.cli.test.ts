@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import BrowserstackService from '../src/service.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
+import WdioCucumberTestFramework from '../src/cli/frameworks/wdioCucumberTestFramework.js'
 
 vi.mock('../src/cli/index.js', () => ({
     BrowserstackCLI: {
@@ -12,23 +13,33 @@ vi.mock('../src/cli/index.js', () => ({
     }
 }))
 
-describe('preferScenarioName on the CLI flow — parity row 40', () => {
+/**
+ * The seam between the two halves of parity row 40: automateModule decides the rename (it is the
+ * only place that knows the final scenario count), but it cannot read service options, so the flag
+ * rides the scenario event — the same route `ignoreHooksStatus` takes. The decision itself is
+ * covered in tests/cli/modules/automateModule.preferScenarioName.test.ts.
+ */
+describe('preferScenarioName reaches the module — parity row 40', () => {
     let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
-    let overrideSessionName: ReturnType<typeof vi.fn>
+    let trackEvent: ReturnType<typeof vi.fn>
 
-    const makeService = (framework: string, options: Record<string, unknown> = {}) => new BrowserstackService(
-        { testObservability: false, preferScenarioName: true, setSessionName: true, setSessionStatus: true, ...options } as never,
+    const makeService = (options: Record<string, unknown> = {}) => new BrowserstackService(
+        { testObservability: false, setSessionName: true, setSessionStatus: true, ...options } as never,
         [] as never,
-        { user: 'foo', key: 'bar', framework, cucumberOpts: { strict: false } } as never
+        { user: 'foo', key: 'bar', framework: 'cucumber', cucumberOpts: { strict: false } } as never
     )
 
+    const scenarioEventArgs = () => trackEvent.mock.calls.at(-1)?.[2] as Record<string, unknown>
+
     beforeEach(() => {
-        overrideSessionName = vi.fn().mockResolvedValue(undefined)
+        trackEvent = vi.fn().mockResolvedValue(undefined)
+        const cucumberFramework = Object.create(WdioCucumberTestFramework.prototype)
+        cucumberFramework.trackEvent = trackEvent
+        cucumberFramework.hasStepFailures = () => false
         getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
             isRunning: () => true,
-            getTestFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) }),
-            getAutomationFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) }),
-            modules: { AutomateModule: { overrideSessionName } }
+            getTestFramework: () => cucumberFramework,
+            getAutomationFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) })
         } as never)
     })
 
@@ -36,59 +47,28 @@ describe('preferScenarioName on the CLI flow — parity row 40', () => {
         getInstanceSpy?.mockRestore()
     })
 
-    it('renames the session to the scenario name when exactly one scenario ran', async () => {
-        const service = makeService('cucumber')
+    it('carries preferScenarioName: true on the scenario event when set', async () => {
+        const service = makeService({ preferScenarioName: true })
         await service.afterScenario({ pickle: { name: 'Can do something single' }, result: { status: 'passed' } } as never)
 
-        await service.after(0)
-
-        expect(overrideSessionName).toHaveBeenCalledTimes(1)
-        expect(overrideSessionName).toHaveBeenCalledWith('Can do something single')
+        expect(scenarioEventArgs().preferScenarioName).toBe(true)
     })
 
-    // Legacy's `=== 1` is the specification, not a lower bound.
-    it('does NOT rename when two scenarios ran', async () => {
-        const service = makeService('cucumber')
-        await service.afterScenario({ pickle: { name: 'Scenario one' }, result: { status: 'passed' } } as never)
-        await service.afterScenario({ pickle: { name: 'Scenario two' }, result: { status: 'passed' } } as never)
-
-        await service.after(0)
-
-        expect(overrideSessionName).not.toHaveBeenCalled()
-    })
-
-    it('does NOT rename when preferScenarioName is absent', async () => {
-        const service = makeService('cucumber', { preferScenarioName: undefined })
+    // Absent must travel as an explicit false, not undefined: the module treats the field as the
+    // whole opt-in, so a missing value and an opted-out value must be indistinguishable there.
+    it('carries preferScenarioName: false when the option is absent', async () => {
+        const service = makeService()
         await service.afterScenario({ pickle: { name: 'Can do something single' }, result: { status: 'passed' } } as never)
 
-        await service.after(0)
-
-        expect(overrideSessionName).not.toHaveBeenCalled()
+        expect(scenarioEventArgs().preferScenarioName).toBe(false)
     })
 
-    it('does NOT rename when the only scenario was skipped', async () => {
-        const service = makeService('cucumber')
-        await service.afterScenario({ pickle: { name: 'Can do something single' }, result: { status: 'skipped' } } as never)
+    // The count itself stays on the service side too, because `_scenariosRanCount` is what legacy
+    // reads; the module keeps its own tally for the CLI flow. Both must ignore skipped scenarios.
+    it('does not count a skipped scenario toward the service-side tally', async () => {
+        const service = makeService({ preferScenarioName: true })
+        await service.afterScenario({ pickle: { name: 'Skipped one' }, result: { status: 'skipped' } } as never)
 
-        await service.after(0)
-
-        expect(overrideSessionName).not.toHaveBeenCalled()
-    })
-
-    // The discriminating pair: identical options and an identical "exactly one unit ran", opposite
-    // answers. `_scenariosRanCount` / `_lastScenarioName` are written only by cucumber's
-    // afterScenario, so wdio_mocha cannot reach the rename however preferScenarioName is set.
-    it('leaves wdio_mocha untouched on the same input', async () => {
-        const service = makeService('mocha')
-        await service.afterTest(
-            { title: 'a test', parent: 'a suite' } as never,
-            undefined as never,
-            { passed: true, duration: 1, retries: { attempts: 0, limit: 0 }, exception: '', status: 'passed' } as never
-        )
-
-        await service.after(0)
-
-        expect(overrideSessionName).not.toHaveBeenCalled()
         expect(service['_scenariosRanCount']).toBe(0)
     })
 })

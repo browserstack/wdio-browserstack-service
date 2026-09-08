@@ -48,9 +48,14 @@ function newModule(config: Record<string, unknown> = {}) {
     return mod
 }
 
-function register(mod: AutomateModule, sessionId: string, lastTestName: string, appliedName?: string) {
-    const sessionMap = mod['sessionMap'] as Map<string, { lastTestName: string, appliedName?: string, testResults: Map<string, unknown> }>
-    sessionMap.set(sessionId, { lastTestName, appliedName, testResults: new Map() })
+function register(mod: AutomateModule, sessionId: string, lastTestName: string, seed: Record<string, unknown> = {}) {
+    const sessionMap = mod['sessionMap'] as Map<string, Record<string, unknown>>
+    sessionMap.set(sessionId, {
+        lastTestName,
+        testResults: new Map(),
+        scenariosRan: 0,
+        ...seed
+    })
     return sessionMap
 }
 
@@ -64,7 +69,7 @@ function namesPUT() {
     })
 }
 
-describe('AutomateModule.overrideSessionName — parity row 40 (preferScenarioName)', () => {
+describe('AutomateModule preferScenarioName — parity row 40', () => {
     beforeEach(() => {
         vi.clearAllMocks()
         vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as never)
@@ -73,62 +78,80 @@ describe('AutomateModule.overrideSessionName — parity row 40 (preferScenarioNa
         vi.mocked(fetch).mockResolvedValue({ json: async () => ({ ok: true }) } as never)
     })
 
-    it('renames a registered session to the scenario name', async () => {
+    // Exactly one non-skipped scenario ran and the flag is set: the session takes the scenario
+    // name. This is the only branch where legacy departs from the feature name.
+    it('renames to the scenario name when exactly one scenario ran', async () => {
         const mod = newModule()
-        register(mod, 'sess-1', 'Login Feature', 'Login Feature')
+        register(mod, 'sess-1', 'Login Feature', {
+            scenariosRan: 1, lastScenarioName: 'Can log in', preferScenarioName: true
+        })
 
-        await mod.overrideSessionName('Can do something single')
+        await mod.onAfterExecute()
 
-        expect(namesPUT()).toContain('Can do something single')
-        expect(mod['sessionMap'].get('sess-1')!.lastTestName).toBe('Can do something single')
+        expect(namesPUT()).toContain('Can log in')
     })
 
-    // The rename is the same opt-out legacy applies: service.after() omits `name` from its
-    // _updateJob payload when setSessionName is false, so the override must not sneak one in.
+    // The `=== 1` exactness legacy applies: two scenarios keep the feature name. Reproduced, not
+    // widened — a `>= 1` here would rename every multi-scenario feature.
+    it('keeps the feature name when two scenarios ran', async () => {
+        const mod = newModule()
+        register(mod, 'sess-1', 'Login Feature', {
+            scenariosRan: 2, lastScenarioName: 'Second scenario', preferScenarioName: true
+        })
+
+        await mod.onAfterExecute()
+
+        expect(namesPUT()).not.toContain('Second scenario')
+        expect(namesPUT()).toContain('Login Feature')
+    })
+
+    it('keeps the feature name when the flag is absent', async () => {
+        const mod = newModule()
+        register(mod, 'sess-1', 'Login Feature', {
+            scenariosRan: 1, lastScenarioName: 'Can log in'
+        })
+
+        await mod.onAfterExecute()
+
+        expect(namesPUT()).not.toContain('Can log in')
+    })
+
+    // Legacy omits `name` from its _updateJob payload when setSessionName is false, so the
+    // rename must not sneak one in.
     it('honours setSessionName: false and issues no rename', async () => {
         const mod = newModule({ testContextOptions: { skipSessionName: true, skipSessionStatus: false } })
-        register(mod, 'sess-1', 'Login Feature', 'Login Feature')
+        register(mod, 'sess-1', 'Login Feature', {
+            scenariosRan: 1, lastScenarioName: 'Can log in', preferScenarioName: true
+        })
 
-        await mod.overrideSessionName('Can do something single')
+        await mod.onAfterExecute()
 
-        expect(fetch).not.toHaveBeenCalled()
-        expect(mod['sessionMap'].get('sess-1')!.lastTestName).toBe('Login Feature')
+        expect(namesPUT()).not.toContain('Can log in')
     })
 
-    it('no-ops when the session was never registered', async () => {
+    // A skipped scenario is not a scenario that ran — legacy's counter is gated the same way,
+    // so a feature whose only non-skipped scenario is absent must not be renamed.
+    it('does not count a skipped scenario', async () => {
         const mod = newModule()
+        register(mod, 'sess-1', 'Login Feature', { preferScenarioName: true })
+        const sessionData = mod['sessionMap'].get('sess-1')!
 
-        await mod.overrideSessionName('Can do something single')
+        expect(sessionData.scenariosRan).toBe(0)
 
-        expect(fetch).not.toHaveBeenCalled()
+        await mod.onAfterExecute()
+
+        expect(namesPUT()).not.toContain('Can log in')
     })
 
-    it('no-ops when no session id resolves', async () => {
+    // mocha never reaches the counter (it is gated on isCucumberInstance), so its session name
+    // is whatever onBeforeTest applied — the discriminating case against cucumber above.
+    it('leaves a session with no cucumber scenarios untouched', async () => {
         const mod = newModule()
-        register(mod, 'sess-1', 'Login Feature', 'Login Feature')
-        vi.mocked(AutomationFramework.getState).mockReturnValue(undefined as never)
+        register(mod, 'sess-1', 'Testing with BStackDemo - add product to cart', {
+            scenariosRan: 0, preferScenarioName: true
+        })
 
-        await mod.overrideSessionName('Can do something single')
+        await mod.onAfterExecute()
 
-        expect(fetch).not.toHaveBeenCalled()
-    })
-
-    it('no-ops on an empty name', async () => {
-        const mod = newModule()
-        register(mod, 'sess-1', 'Login Feature', 'Login Feature')
-
-        await mod.overrideSessionName('')
-
-        expect(fetch).not.toHaveBeenCalled()
-        expect(mod['sessionMap'].get('sess-1')!.lastTestName).toBe('Login Feature')
-    })
-
-    it('costs no API call when the override matches the name already applied', async () => {
-        const mod = newModule()
-        register(mod, 'sess-1', 'Can do something single', 'Can do something single')
-
-        await mod.overrideSessionName('Can do something single')
-
-        expect(fetch).not.toHaveBeenCalled()
     })
 })

@@ -23,7 +23,6 @@ import AccessibilityHandler from './accessibility-handler.js'
 import CustomTagsHandler from './custom-tags-handler.js'
 import { classifyMochaHookTitle, setCurrentMochaHookWindow } from './customTags.js'
 import type TestHubModule from './cli/modules/testHubModule.js'
-import type AutomateModule from './cli/modules/automateModule.js'
 import { BStackLogger } from './bstackLogger.js'
 import PercyHandler from './Percy/Percy-Handler.js'
 import Listener from './testOps/listener.js'
@@ -711,23 +710,12 @@ export default class BrowserstackService implements Services.ServiceInstance {
             PerformanceTester.start(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.QUIT)
 
             const { preferScenarioName, setSessionName, setSessionStatus } = this._options
-            // For Cucumber: If only 1 Scenario ran and preferScenarioName is enabled,
-            // use the scenario name instead of the feature name
+            // One scenario and preferScenarioName set: name the session after the scenario
+            // rather than the feature. Legacy-flow only — `_fullTitle` reaches the session through
+            // `_updateJob`, whose call sites are all gated `!isRunning()`; on the CLI flow
+            // automateModule keeps its own tally and applies this in onAfterExecute.
             if (preferScenarioName && this._scenariosRanCount === 1 && this._lastScenarioName) {
                 this._fullTitle = this._lastScenarioName
-                // `_fullTitle` reaches the session only through `_updateJob`, whose call sites are
-                // all gated `!isRunning()`, so on the CLI flow the rename is pushed to
-                // automateModule instead. The decision stays here because `_scenariosRanCount`
-                // does — it counts non-skipped scenarios and is written only by cucumber's
-                // `afterScenario`.
-                if (BrowserstackCLI.getInstance().isRunning()) {
-                    try {
-                        const automateModule = BrowserstackCLI.getInstance().modules.AutomateModule as AutomateModule | undefined
-                        await automateModule?.overrideSessionName(this._lastScenarioName)
-                    } catch (renameErr) {
-                        BStackLogger.debug(`Exception applying preferScenarioName in after(): ${util.format(renameErr)}`)
-                    }
-                }
             }
 
             if (BrowserstackCLI.getInstance().isRunning()) {
@@ -1056,6 +1044,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 suiteTitle: this._suiteTitle,
                 result: this._cucumberTestResult(world),
                 ignoreHooksStatus: this._options.testObservabilityOptions?.ignoreHooksStatus === true,
+                preferScenarioName: this._options.preferScenarioName === true,
             })
             return
         }
