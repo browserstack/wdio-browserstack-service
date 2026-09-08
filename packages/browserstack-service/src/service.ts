@@ -489,15 +489,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // degrades quietly instead of throwing inside this awaited hook.
             const framework = BrowserstackCLI.getInstance().getTestFramework()
             if (framework instanceof WdioCucumberTestFramework) {
-                // See beforeHook: cucumber's taxonomy, not Mocha's titles. The suite-skip cascade
-                // in the mocha arm below is Mocha-shaped (it walks `test.ctx.test.parent`);
-                // cucumber's own cascade is _reportCucumberScenariosSkipped, further down.
+                // Cucumber's taxonomy, not Mocha's titles — see beforeHook.
                 const hookFrameworkState = framework.classifyHookState(test as CucumberHook|undefined)
                 if (hookFrameworkState) {
-                    // ignoreHooksStatus rides the event so automateModule can apply the same flag
-                    // to the session verdict that loadScenarioResult applies to the o11y result
-                    // (parity row 41). The module cannot read it — the binary-supplied config it
-                    // holds carries no testObservabilityOptions.
+                    // ignoreHooksStatus rides the event so the cucumber-only policy stays out of
+                    // automateModule, which mocha and jasmine share.
                     await framework.trackEvent(hookFrameworkState, HookState.POST, {
                         test,
                         result,
@@ -531,21 +527,15 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     /**
-     * BEFORE_ALL failure cascade — parity row 15. Cucumber abandons the whole feature when a
-     * `BeforeAll` throws, so every scenario in it (Rule-nested ones included) must be reported
-     * SKIPPED rather than simply vanishing.
+     * Cucumber abandons the whole feature when a `BeforeAll` throws, so every scenario in it
+     * (Rule-nested included) is reported SKIPPED rather than vanishing. Ports
+     * `insights-handler.processCucumberHook`, whose cascade publishes over the legacy HTTP
+     * listener and is inert once the binary is up.
      *
-     * Legacy did this from `insights-handler.afterHook` via `sendScenarioObjectSkipped()`, which
-     * publishes through the legacy HTTP listener (`api/v1/batch`) — inert once the binary is up.
-     * That is escape class 3 / SDK-7047 in its documented form, and the repair is to give the
-     * cascade a CLI/gRPC publisher.
-     *
-     * Sent straight to TestHub rather than through `framework.trackEvent()`: legacy's cascade
-     * called `listener.testFinished()` directly and so bypassed every product handler. Routing
-     * these through the observer set would rename the Automate session, fire an accessibility
-     * stop event and run a Percy teardown once per skipped row — none of which legacy does.
-     *
-     * Cucumber-only: private, one call site, in the `instanceof WdioCucumberTestFramework` arm.
+     * Sent straight to TestHub rather than via `framework.trackEvent()`: legacy called
+     * `listener.testFinished()` directly, so routing these through the observers would rename the
+     * session, stop accessibility and run a Percy teardown per skipped row — none of which legacy
+     * does.
      */
     private async _reportCucumberScenariosSkipped(framework: WdioCucumberTestFramework) {
         try {
@@ -557,10 +547,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
             const instances = framework.buildSkippedScenarioInstances()
             for (const instance of instances) {
-                // Both halves, because TestHub's v2 batch pipeline creates the test row from the
-                // START event and treats TestRunSkipped as its terminal — a lone TestRunSkipped is
-                // accepted and then counted in no bucket at all. The legacy v1 listener created the
-                // row from the skip event itself, which is why it sent only one.
+                // Both halves: TestHub's v2 pipeline creates the row from the START event, so a
+                // lone TestRunSkipped is accepted and counted in no bucket. Legacy's v1 listener
+                // created the row from the skip itself, which is why it sent only one.
                 await testHubModule.sendTestFrameworkEvent(
                     { instance },
                     { testFrameworkState: 'TEST', testHookState: 'PRE' }
@@ -726,13 +715,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // use the scenario name instead of the feature name
             if (preferScenarioName && this._scenariosRanCount === 1 && this._lastScenarioName) {
                 this._fullTitle = this._lastScenarioName
-                // `_fullTitle` only reaches the session through `_updateJob`, and every one of its
-                // call sites is gated `!BrowserstackCLI.isRunning()`, so on the CLI flow the rename
-                // has to be pushed to automateModule, which owns the name there.
-                //
-                // Unreachable for mocha and jasmine: `_scenariosRanCount` and `_lastScenarioName`
-                // are written only by cucumber's `afterScenario`, so the guard above is false for
-                // any other framework however `preferScenarioName` is set.
+                // `_fullTitle` reaches the session only through `_updateJob`, whose call sites are
+                // all gated `!isRunning()`, so on the CLI flow the rename is pushed to
+                // automateModule instead. The decision stays here because `_scenariosRanCount`
+                // does — it counts non-skipped scenarios and is written only by cucumber's
+                // `afterScenario`.
                 if (BrowserstackCLI.getInstance().isRunning()) {
                     try {
                         const automateModule = BrowserstackCLI.getInstance().modules.AutomateModule as AutomateModule | undefined
