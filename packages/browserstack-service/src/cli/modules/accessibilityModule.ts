@@ -86,21 +86,14 @@ export default class AccessibilityModule extends BaseModule {
             if (!this.accessibility) {
                 return
             }
-            // Open the scan gate for the hook window so DOM-changing commands issued inside
-            // before/beforeEach/afterEach/after hooks trigger scans (web per-command path). The
-            // following onBeforeTest re-computes the per-test gate, so this only affects the hook.
-            //
-            // Mocha-only, exactly as legacy gates the identical write (accessibility-handler
-            // beforeHook, `this._framework === 'mocha'`). The "onBeforeTest re-computes it after"
-            // invariant above holds only where beforeEach precedes beforeTest. Cucumber inverts
-            // that — WDIO raises the scenario boundary BEFORE cucumber's own Before hooks — so
-            // there the write lands last and permanently forces the gate open, scanning every
-            // scenario regardless of includeTagsInTestingScope / excludeTagsInTestingScope and
-            // undoing a user's stopA11yScanning(). The currentHookRunUuid capture above is
-            // correct for every framework and stays outside this gate.
+            // Open the scan gate for the hook window, so commands issued inside hooks are scanned.
+            // Mocha-only, as legacy gates the identical write (`this._framework === 'mocha'`): it
+            // relies on the following onBeforeTest re-computing the gate, which holds only where
+            // beforeEach precedes beforeTest. Cucumber inverts that ordering, so there the write
+            // would land last and force the gate permanently open.
             const frameworkName = String(TestFramework.getState(testInstance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
-            const reopensGateForHook = frameworkName.toLowerCase().includes('mocha')
-            if (this.autoScanning && reopensGateForHook && sessionId !== undefined && sessionId !== null) {
+            const isMocha = frameworkName.toLowerCase().includes('mocha')
+            if (this.autoScanning && isMocha && sessionId) {
                 this.accessibilityMap.set(sessionId, true)
             }
         } catch (error) {
