@@ -503,6 +503,26 @@ describe('beforeHook / afterHook (hook scans)', () => {
         expect(lastCall[lastCall.length - 1]).toBeNull()
     })
 
+    it('performs NO scan when the binary flow owns accessibility for the session', async () => {
+        // service.ts can pick the classic branch before the binary has booted; the CLI module then
+        // wraps the same commands, and without this check every command is scanned twice.
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        await accessibilityHandler.beforeHook(
+            { title: '"before each" hook', parent: 'suite' } as any,
+            { currentTest: { parent: 'suite', title: 'test' } },
+            'hook-uuid-cli'
+        )
+        accessibilityHandler.setCliOwnershipCheck(() => true)
+
+        const orig = vi.fn().mockResolvedValue('ok')
+        await accessibilityHandler['commandWrapper']({ name: 'click', class: 'Element' } as any, undefined as any, orig, 'arg')
+
+        // the command still runs — only the duplicate scan is suppressed
+        expect(orig).toHaveBeenCalled()
+        expect(scanSpy).not.toHaveBeenCalled()
+    })
+
     it('_getParamsForAppAccessibility puts the hook uuid on the scan payload as thHookRunUuid', () => {
         expect(utils._getParamsForAppAccessibility('click', 'testName', 'hook-uuid-9').thHookRunUuid).toBe('hook-uuid-9')
         expect(utils._getParamsForAppAccessibility('click', 'testName').thHookRunUuid).toBeUndefined()

@@ -151,7 +151,16 @@ export class BrowserstackCLI {
         // credentials) before any downstream error.
         this.logBuildErrors(startBinResponse)
 
-        APIUtils.updateURLSForGRR(this.config.apis as GRRUrls)
+        // A degenerate config carries no apis block — an auth failure, or a config server that
+        // never answered (measured: a 60s hang against an internal environment, after which the
+        // binary echoes the input config straight back). Dereferencing it throws, and the caller
+        // then tears the binary down, silently dropping the whole run to the Direct flow. Keeping
+        // the default endpoints is strictly better than that.
+        if (this.config.apis) {
+            APIUtils.updateURLSForGRR(this.config.apis as GRRUrls)
+        } else {
+            this.logger.warn('loadModules: config carries no apis block; keeping default endpoints')
+        }
 
         this.setupTestFramework()
         this.setupAutomationFramework()

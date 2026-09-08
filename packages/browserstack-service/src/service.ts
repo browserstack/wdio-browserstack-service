@@ -289,6 +289,19 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         this._options.accessibilityOptions
                     )
 
+                    // Re-asked at scan time, and deliberately NOT via _isCliAccessibilityFlow():
+                    // that predicate requires isBrowserstackSession(), which decides on
+                    // `hostname.includes('browserstack')` and so is FALSE on every internal
+                    // environment (hub-<env>.bsstag.com). There the service takes the classic
+                    // branch while the binary still runs the CLI module, and both wrap the same
+                    // commands — measured on one internal-env run as 22 classic + 19 CLI scans.
+                    // Asking the module registry is hostname-independent: the module exists only
+                    // when the binary owns accessibility for this session.
+                    this._accessibilityHandler.setCliOwnershipCheck(() => {
+                        const cliA11y = BrowserstackCLI.getInstance().modules?.[AccessibilityModule.MODULE_NAME] as AccessibilityModule | undefined
+                        return Boolean(cliA11y && (cliA11y.accessibility || cliA11y.isAppAccessibility))
+                    })
+
                     if (this._isCliAccessibilityFlow()){
                         BStackLogger.info(`CLI is running, tracking accessibility event for before: ${sessionId}`)
                         // BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { sessionId })
