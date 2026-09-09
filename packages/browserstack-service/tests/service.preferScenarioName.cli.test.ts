@@ -14,12 +14,12 @@ vi.mock('../src/cli/index.js', () => ({
 }))
 
 /**
- * The seam between the two halves of parity row 40: automateModule decides the rename (it is the
+ * The seam between the two halves of automateModule decides the rename (it is the
  * only place that knows the final scenario count), but it cannot read service options, so the flag
  * rides the scenario event — the same route `ignoreHooksStatus` takes. The decision itself is
  * covered in tests/cli/modules/automateModule.preferScenarioName.test.ts.
  */
-describe('preferScenarioName reaches the module — parity row 40', () => {
+describe('preferScenarioName reaches the module', () => {
     let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
     let trackEvent: ReturnType<typeof vi.fn>
 
@@ -73,7 +73,7 @@ describe('preferScenarioName reaches the module — parity row 40', () => {
     })
 })
 
-describe('_cucumberTestResult failure reason — parity row 39 adjacent', () => {
+describe('_cucumberTestResult failure reason adjacent', () => {
     const makeService = (strict: boolean) => new BrowserstackService(
         { testObservability: false } as never,
         [] as never,

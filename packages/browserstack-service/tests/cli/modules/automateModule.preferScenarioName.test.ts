@@ -69,7 +69,7 @@ function namesPUT() {
     })
 }
 
-describe('AutomateModule preferScenarioName — parity row 40', () => {
+describe('AutomateModule preferScenarioName', () => {
     beforeEach(() => {
         vi.clearAllMocks()
         vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as never)

@@ -2777,7 +2777,7 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
     })
 })
 
-describe('afterScenario session-status view honours ignoreHooksStatus (parity row 41)', () => {
+describe('afterScenario session-status view honours ignoreHooksStatus', () => {
     let getInstanceSpy: ReturnType<typeof vi.spyOn>
 
     const makeService = (ignoreHooksStatus: boolean) => new BrowserstackService(
@@ -2823,7 +2823,7 @@ describe('afterScenario session-status view honours ignoreHooksStatus (parity ro
     })
 })
 
-describe('BEFORE_ALL skip cascade + hook flag pass-through (parity row 15, escape class 3 / SDK-7047)', () => {
+describe('BEFORE_ALL skip cascade + hook flag pass-through (legacy parity, escape class 3 / SDK-7047)', () => {
     let getInstanceSpy: ReturnType<typeof vi.spyOn>
 
     const feature = {
@@ -2889,7 +2889,7 @@ describe('BEFORE_ALL skip cascade + hook flag pass-through (parity row 15, escap
             const data = args.instance.getAllData()
             expect(data.get('test_result')).toBe('skipped')
             expect(data.get('test_skipped_cascade')).toBe(true)
-            // parity row 18 — the cascade payload has no world, so no tags
+            // the cascade payload has no world, so no tags
             expect(data.get('test_tags')).toBeUndefined()
             expect(data.get('test_scopes')).toEqual(['Login'])
         }

@@ -33,11 +33,11 @@ import { BrowserstackCLI } from '../../../src/cli/index.js'
 import { BStackLogger } from '../../../src/cli/cliLogger.js'
 
 /**
- * 8-D — parity row 19. `setCustomTags` warns and no-ops for every framework except mocha, which
+ * 8-D. `setCustomTags` warns and no-ops for every framework except mocha, which
  * is what the legacy custom-tags-handler does. Discriminating: the SAME call merges tags under
  * mocha and merges nothing under cucumber.
  */
-describe('CustomTagsModule — framework gate (parity row 19)', () => {
+describe('CustomTagsModule — framework gate', () => {
     let module: CustomTagsModule
     let browser: Record<string, unknown>
     let instance: { updateMultipleEntries: ReturnType<typeof vi.fn>, getCurrentTestState: ReturnType<typeof vi.fn> }

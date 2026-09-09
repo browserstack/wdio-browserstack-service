@@ -63,7 +63,7 @@ function newModule(config: Record<string, unknown> = {}) {
     return mod
 }
 
-describe('AutomateModule — Phase 8 remediations', () => {
+describe('AutomateModule — session marking', () => {
     beforeEach(() => {
         vi.clearAllMocks()
         vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as never)
@@ -79,10 +79,10 @@ describe('AutomateModule — Phase 8 remediations', () => {
     })
 
     /**
-     * 8-A. Discriminating: the SAME call produces opposite verbs and different hosts/paths
+     * Discriminating: the SAME call produces opposite verbs and different hosts/paths
      * depending only on the turboscale flag.
      */
-    describe('8-A — turboscale session marking routes to its own API with PATCH', () => {
+    describe('turboscale session marking routes to its own API with PATCH', () => {
         it('PATCHes the turboscale endpoint when turboScale is configured', async () => {
             const mod = newModule({ turboScale: true })
             await mod.markSessionStatus('sess-1', 'passed', undefined, { user: 'u', key: 'k' })
@@ -131,10 +131,10 @@ describe('AutomateModule — Phase 8 remediations', () => {
     })
 
     /**
-     * 8-B (session verdict). Discriminating: the SAME failing build-level hook fails the session
+     * Session verdict. Discriminating: the SAME failing build-level hook fails the session
      * for cucumber and leaves mocha's verdict untouched.
      */
-    describe('8-B — build-level hook failures reach the session verdict', () => {
+    describe('build-level hook failures reach the session verdict', () => {
         const failing = { passed: false, error: new Error('BeforeAll blew up') }
 
         /** Drives one scenario through TEST/POST so `testResults` carries a real scenario result. */
@@ -189,7 +189,7 @@ describe('AutomateModule — Phase 8 remediations', () => {
             expect(fetch).not.toHaveBeenCalled()
         })
 
-        it('keeps the session PASSED under ignoreHooksStatus once a scenario has run (parity row 41)', async () => {
+        it('keeps the session PASSED under ignoreHooksStatus once a scenario has run', async () => {
             const mod = newModule()
             await runScenario(mod, true)
             await mod.onBuildLevelHookEnd('AFTER_ALL', {

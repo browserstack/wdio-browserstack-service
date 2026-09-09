@@ -555,7 +555,7 @@ describe('AccessibilityModule', () => {
         // 8-C. Discriminating: identical call, opposite answers. Mocha's beforeEach precedes
         // beforeTest so the re-open is harmless; cucumber's scenario boundary precedes its Before
         // hooks, so the same write would permanently force the gate open and defeat the
-        // includeTagsInTestingScope / excludeTagsInTestingScope filtering (parity row 35).
+        // includeTagsInTestingScope / excludeTagsInTestingScope filtering.
         it('does NOT re-open the scan gate for cucumber — the per-test gate stands', async () => {
             mockInstanceState('WebdriverIO-cucumber')
             accessibilityModule.accessibilityMap.set(12345, false)
