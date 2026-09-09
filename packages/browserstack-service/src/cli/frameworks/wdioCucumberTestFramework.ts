@@ -25,9 +25,9 @@ const KEY_BDD_META_INFO = 'bdd_meta_info'
 
 /**
  * Per-hook wire keys. The binary cannot derive any of the three from the event: a hook's scope is
- * the FEATURE name (parity row 16) while the event carries the examples-qualified SCENARIO name,
- * and BEFORE_ALL/AFTER_ALL fire on an instance that has no scenario data at all. Retries and
- * duration (row 26) come from WDIO's hook result, which only this side sees.
+ * the FEATURE name while the event carries the examples-qualified SCENARIO name, and
+ * BEFORE_ALL/AFTER_ALL fire on an instance that has no scenario data at all. Retries and duration
+ * come from WDIO's hook result, which only this side sees.
  */
 const KEY_HOOK_SCOPE = 'hook_scope'
 const KEY_HOOK_RETRIES = 'hook_retries'
@@ -321,10 +321,7 @@ export default class WdioCucumberTestFramework extends TestFramework {
         logger.debug(`trackWdioCucumberInstance: contextId=${trackedContext.getId()} target=${target} testUuid=${testUuid}`)
     }
 
-    /**
-     * Scenario identity. Every field below is fixed by a parity row and the asymmetries are
-     * deliberate — see `wdioCucumberTestFramework` notes in the SDK-7414 parity table.
-     */
+    /** Scenario identity. Each field matches what the legacy flow sent; the asymmetries are deliberate. */
     private loadScenarioData(instance: TestFrameworkInstance, world: ITestCaseHookParameter) {
         if (!world?.pickle) {
             logger.error('loadScenarioData: no pickle on the world object; scenario identity will be empty')
@@ -441,7 +438,7 @@ export default class WdioCucumberTestFramework extends TestFramework {
 
     /**
      * Synthesise one detached instance per scenario the feature never got to run, for the
-     * BEFORE_ALL failure cascade (parity row 15). Rule-nested scenarios included.
+     * BEFORE_ALL failure cascade. Rule-nested scenarios included.
      *
      * Detached is load-bearing: these are NOT registered via `setTrackedInstance`, so the real
      * per-scenario instance and `process.env[TEST_ANALYTICS_ID]` are untouched. The caller sends
@@ -451,7 +448,7 @@ export default class WdioCucumberTestFramework extends TestFramework {
      * rename the session, fire an a11y stop event and run a Percy teardown per skipped row, none
      * of which legacy does.
      *
-     * Parity row 18: no tags — legacy's cascade payload has no `world`, so `test_tags` is absent.
+     * No tags: legacy's cascade payload has no `world`, so `test_tags` is absent.
      */
     buildSkippedScenarioInstances(): TestFrameworkInstance[] {
         const feature = this.cucumberData.feature
@@ -527,8 +524,8 @@ export default class WdioCucumberTestFramework extends TestFramework {
 
     /**
      * Whether the scenario in flight failed in a STEP, as opposed to failing only in a hook.
-     * Public because `ignoreHooksStatus` has two surfaces (parity row 41): the o11y result below,
-     * and the Automate session status, which `service.afterScenario()` derives from the same answer.
+     * Public because `ignoreHooksStatus` has two surfaces: the o11y result below, and the Automate
+     * session status, which `service.afterScenario()` derives from the same answer.
      */
     hasStepFailures(): boolean {
         return this.scenarioSteps.some(step => step.result === 'FAILED')
