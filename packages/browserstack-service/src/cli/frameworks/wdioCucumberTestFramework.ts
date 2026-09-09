@@ -437,18 +437,12 @@ export default class WdioCucumberTestFramework extends TestFramework {
     }
 
     /**
-     * Synthesise one detached instance per scenario the feature never got to run, for the
-     * BEFORE_ALL failure cascade. Rule-nested scenarios included.
-     *
-     * Detached is load-bearing: these are NOT registered via `setTrackedInstance`, so the real
-     * per-scenario instance and `process.env[TEST_ANALYTICS_ID]` are untouched. The caller sends
-     * each one straight to TestHub rather than through `runHooks`, mirroring legacy — whose
-     * cascade called `listener.testFinished()` directly and so never reached the Automate,
-     * Accessibility or Percy handlers. Dispatching these through the observer set instead would
-     * rename the session, fire an a11y stop event and run a Percy teardown per skipped row, none
-     * of which legacy does.
-     *
-     * No tags: legacy's cascade payload has no `world`, so `test_tags` is absent.
+     * One detached instance per scenario the feature never ran, for the BEFORE_ALL cascade
+     * (Rule-nested included). Detached is load-bearing: not registered via `setTrackedInstance`,
+     * so the live instance and `process.env[TEST_ANALYTICS_ID]` are untouched, and the caller
+     * sends each straight to TestHub — routing them through the observers would rename the
+     * session, stop accessibility and run a Percy teardown per row. No tags: legacy's cascade
+     * payload has no `world`.
      */
     buildSkippedScenarioInstances(): TestFrameworkInstance[] {
         const feature = this.cucumberData.feature
