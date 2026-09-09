@@ -27,7 +27,8 @@ import {
     removeAnsiColors,
     getObservabilityProduct,
     generateHashCodeFromFields,
-    isTrue
+    isTrue,
+    isFalse
 } from './util.js'
 import type {
     TestData,
@@ -790,7 +791,10 @@ class _InsightsHandler {
         // log screenshot
         const body = 'body' in args ? args.body : undefined
         const result = 'result' in args ? args.result as { value: string } : undefined
-        if (Boolean(process.env[TESTOPS_SCREENSHOT_ENV]) && isScreenshotCommand(args) && result?.value) {
+        // `allow_screenshots` is an optional *string* on the wire, so a denial arrives as the
+        // string 'false' — which Boolean() reads as permission granted. Honour it explicitly.
+        const allowScreenshots = process.env[TESTOPS_SCREENSHOT_ENV]
+        if (Boolean(allowScreenshots) && !isFalse(allowScreenshots) && isScreenshotCommand(args) && result?.value) {
             await this.listener.onScreenshot([{
                 test_run_uuid: testMeta.uuid,
                 timestamp: new Date().toISOString(),

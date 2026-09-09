@@ -314,6 +314,25 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         BStackLogger.info(`CLI is running, tracking insights event for before: ${sessionId}`)
                         await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { browser: this._browser, hubUrl: this._config.hostname })
                         this._insightsHandler.setGitConfigPath()
+                        /**
+                         * `browserCommand` is the only producer of TEST_SCREENSHOT logs — the binary
+                         * has no screenshot producer of its own — so the result event has to be
+                         * registered on this path too, or a screenshot taken mid-test never reaches
+                         * Observability (SDK-4177). The `command` (beforeCommand) event is
+                         * deliberately NOT registered: it only fills the map that browserCommand's
+                         * HTTP-log half reads, and that half emits on the JS listener pipeline the
+                         * binary owns here. Leaving it unregistered keeps the screenshot upload —
+                         * which rides its own JWT-authenticated endpoint — as the single effect.
+                         */
+                        this._browser.on('result', (result) => {
+                            if (shouldProcessEventForTesthub('')) {
+                                this._insightsHandler?.browserCommand(
+                                    'client:afterCommand',
+                                    Object.assign(result, { sessionId }),
+                                    this._currentTest
+                                )
+                            }
+                        })
                         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.PRE_INITIALIZE)
                         return
                     }

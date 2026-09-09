@@ -697,6 +697,15 @@ describe('browserCommand', () => {
         delete process.env[TESTOPS_SCREENSHOT_ENV]
     })
 
+    it('client:afterCommand - screenshot not uploaded when screenshots are denied', () => {
+        // arrives as the string 'false' off the wire, which Boolean() would read as granted
+        process.env[TESTOPS_SCREENSHOT_ENV] = 'false'
+        commandSpy.mockImplementation(() => { return true })
+        insightsHandler.browserCommand('client:afterCommand', { sessionId: 's', method: 'm', endpoint: 'e', result: { value: 'random' } } as any, {} as any)
+        expect(uploadEventDataSpy).toBeCalledTimes(0)
+        delete process.env[TESTOPS_SCREENSHOT_ENV]
+    })
+
     it('return if test not in _tests', () => {
         insightsHandler.browserCommand('client:afterCommand', { sessionId: 's', method: 'm', endpoint: 'e', result: { value: 'random' } } as any, {} as any)
         insightsHandler['_tests'] = { 'test title not there': { 'uuid': 'uuid' } }
