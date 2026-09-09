@@ -358,15 +358,21 @@ export default class WdioCucumberTestFramework extends TestFramework {
             // `.map` allocates a new array — the pickle's own tag collection is never mutated.
             [TestFrameworkConstants.KEY_TEST_TAGS]: pickle.tags.map(({ name }: { name: string }) => name),
             ...resolveFeatureFilePaths(featurePath),
-            [KEY_BDD_META_INFO]: this.buildBddMetaInfo(pickle, feature, featurePath, examples),
+            [KEY_BDD_META_INFO]: this.buildBddMetaInfo(pickle, feature, examples),
         })
     }
 
-    private buildBddMetaInfo(pickle: Pickle, feature: Feature | undefined, featurePath: string | undefined, examples: string[] | undefined) {
+    /**
+     * `feature.path` is the RAW gherkin uri, matching legacy (`insights-handler` builds
+     * `feature = { path: gherkinDocument.uri, … }`). It is NOT the absolute path used for
+     * `test_file_path`: the binary re-bases that one, but never touches this blob, so an absolute
+     * value here reaches the dashboard as-is and carries the developer's home directory with it.
+     */
+    private buildBddMetaInfo(pickle: Pickle, feature: Feature | undefined, examples: string[] | undefined) {
         return {
             feature: {
                 name: feature?.name,
-                path: featurePath,
+                path: this.cucumberData.uri,
                 description: feature?.description,
             },
             scenario: { name: pickle.name },
@@ -392,7 +398,7 @@ export default class WdioCucumberTestFramework extends TestFramework {
         }
 
         if (pickle) {
-            updates[KEY_BDD_META_INFO] = this.buildBddMetaInfo(pickle, feature, this.featurePath(), getScenarioExamples(world as ITestCaseHookParameter))
+            updates[KEY_BDD_META_INFO] = this.buildBddMetaInfo(pickle, feature, getScenarioExamples(world as ITestCaseHookParameter))
         }
 
         const result = world?.result
@@ -501,7 +507,7 @@ export default class WdioCucumberTestFramework extends TestFramework {
             ...resolveFeatureFilePaths(featurePath),
             [KEY_TEST_SKIPPED_CASCADE]: true,
             [KEY_BDD_META_INFO]: {
-                feature: { name: feature.name, path: featurePath, description: feature.description },
+                feature: { name: feature.name, path: this.cucumberData.uri, description: feature.description },
                 scenario: { name: scenario.name },
                 steps: (scenario.steps || []).map((step: Step) => ({
                     id: step.id,
