@@ -206,6 +206,18 @@ export default class WdioCucumberTestFramework extends TestFramework {
         return uri ? path.resolve(process.cwd(), uri) : undefined
     }
 
+    /**
+     * The feature path as the bdd meta blob wants it — cwd-relative, matching legacy.
+     *
+     * `cucumberData.uri` cannot be forwarded raw: WDIO hands `beforeFeature` an ABSOLUTE uri, so
+     * the raw value carries the developer's home directory. Legacy never sees that value — it
+     * reads the cucumber world's `gherkinDocument.uri`, which is cwd-relative.
+     */
+    private featureUriForMeta(): string | undefined {
+        const absolute = this.featurePath()
+        return absolute ? path.relative(process.cwd(), absolute) : undefined
+    }
+
     async trackEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown> = {}) {
         logger.debug(`WdioCucumberTestFramework.trackEvent: testFrameworkState=${testFrameworkState} hookState=${hookState}`)
         await super.trackEvent(testFrameworkState, hookState, args)
@@ -363,16 +375,16 @@ export default class WdioCucumberTestFramework extends TestFramework {
     }
 
     /**
-     * `feature.path` is the RAW gherkin uri, matching legacy (`insights-handler` builds
-     * `feature = { path: gherkinDocument.uri, … }`). It is NOT the absolute path used for
-     * `test_file_path`: the binary re-bases that one, but never touches this blob, so an absolute
-     * value here reaches the dashboard as-is and carries the developer's home directory with it.
+     * `feature.path` is cwd-relative, matching legacy (`insights-handler` builds
+     * `feature = { path: gherkinDocument.uri, … }` off the cucumber world). It is NOT the absolute
+     * path used for `test_file_path`: the binary re-bases that one, but never touches this blob, so
+     * an absolute value here reaches the dashboard as-is, home directory and all.
      */
     private buildBddMetaInfo(pickle: Pickle, feature: Feature | undefined, examples: string[] | undefined) {
         return {
             feature: {
                 name: feature?.name,
-                path: this.cucumberData.uri,
+                path: this.featureUriForMeta(),
                 description: feature?.description,
             },
             scenario: { name: pickle.name },
@@ -507,7 +519,7 @@ export default class WdioCucumberTestFramework extends TestFramework {
             ...resolveFeatureFilePaths(featurePath),
             [KEY_TEST_SKIPPED_CASCADE]: true,
             [KEY_BDD_META_INFO]: {
-                feature: { name: feature.name, path: this.cucumberData.uri, description: feature.description },
+                feature: { name: feature.name, path: this.featureUriForMeta(), description: feature.description },
                 scenario: { name: scenario.name },
                 steps: (scenario.steps || []).map((step: Step) => ({
                     id: step.id,
