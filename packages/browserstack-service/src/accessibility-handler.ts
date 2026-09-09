@@ -78,6 +78,17 @@ import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants
 import { BStackLogger } from './bstackLogger.js'
 
 class _AccessibilityHandler {
+    // Evaluated AT SCAN TIME, not at session start. service.ts decides which flow owns
+    // accessibility once, before the binary has necessarily finished booting; on a slow
+    // environment that decision lands on this handler and the binary then comes up and wraps the
+    // same commands through the CLI module, so every command gets scanned twice. Asking again
+    // when a scan is about to fire is the only check that can be right.
+    private _cliOwnsAccessibility: () => boolean = () => false
+
+    setCliOwnershipCheck(check: () => boolean) {
+        this._cliOwnsAccessibility = check
+    }
+
     /**
      * Frameworks whose per-test lifecycle flows through beforeTest/afterTest.
      * WDIO's jasmine adapter emits the same service hooks as mocha (SDK-7190);
@@ -512,8 +523,12 @@ class _AccessibilityHandler {
                     !AccessibilityHandler.shouldPatchExecuteScript(args.length ? args[0] as string : null)
                 )
         ) {
-            BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
-            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid)
+            if (this._cliOwnsAccessibility()) {
+                BStackLogger.debug('Skipping accessibility scan: the binary flow owns accessibility for this session')
+            } else {
+                BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
+                await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid)
+            }
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)
         }
