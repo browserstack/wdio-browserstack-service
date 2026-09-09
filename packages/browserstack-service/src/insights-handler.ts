@@ -46,6 +46,7 @@ import { TESTOPS_SCREENSHOT_ENV } from './constants.js'
 import { BrowserstackCLI } from './cli/index.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { HookState } from './cli/states/hookState.js'
+import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import CustomTagsHandler from './custom-tags-handler.js'
@@ -795,12 +796,23 @@ class _InsightsHandler {
         // string 'false' — which Boolean() reads as permission granted. Honour it explicitly.
         const allowScreenshots = process.env[TESTOPS_SCREENSHOT_ENV]
         if (Boolean(allowScreenshots) && !isFalse(allowScreenshots) && isScreenshotCommand(args) && result?.value) {
-            await this.listener.onScreenshot([{
-                test_run_uuid: testMeta.uuid,
-                timestamp: new Date().toISOString(),
-                message: result.value,
-                kind: 'TEST_SCREENSHOT'
-            }])
+            // On the binary path the direct screenshot endpoint answers 401 to the binary's JWT,
+            // so ride the same LOG rail appendTestItemLog uses: the CLI stamps the test uuid and
+            // forwards the entry over gRPC, where the binary owns reporting.
+            await (BrowserstackCLI.getInstance().isRunning()
+                ? BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG, HookState.POST, {
+                    logEntry: {
+                        kind: TestFrameworkConstants.KIND_SCREENSHOT,
+                        message: result.value,
+                        timestamp: new Date().toISOString()
+                    }
+                })
+                : this.listener.onScreenshot([{
+                    test_run_uuid: testMeta.uuid,
+                    timestamp: new Date().toISOString(),
+                    message: result.value,
+                    kind: 'TEST_SCREENSHOT'
+                }]))
         }
 
         const requestData = this._commands[dataKey]
