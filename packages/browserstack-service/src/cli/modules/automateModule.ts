@@ -70,8 +70,20 @@ export default class AutomateModule extends BaseModule {
         const suiteTitle = args.suiteTitle as string
         const testContextOptions = this.config.testContextOptions as TestContextOptions
 
-        if (testContextOptions.skipSessionName || !isBrowserstackSession(browser)) {
+        if (!isBrowserstackSession(browser)) {
+            return
+        }
+
+        // `setSessionName: false` suppresses the NAME, not the registration. The session still has
+        // to enter sessionMap or onAfterExecute has nothing to status-mark, and legacy marks it
+        // either way — its `after()` status block gates on setSessionStatus alone. Registering with
+        // an empty lastTestName is safe: flushSessionName early-returns both on the flag and on an
+        // empty name, so no name can be sent from here.
+        if (testContextOptions.skipSessionName) {
             this.logger.info('Skipping session name update as per configuration')
+            if (sessionId && !this.sessionMap.has(sessionId)) {
+                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map(), scenariosRan: 0 })
+            }
             return
         }
 
@@ -193,12 +205,12 @@ export default class AutomateModule extends BaseModule {
         // (service.onReload has already pointed KEY_FRAMEWORK_SESSION_ID at it) and adopt it while
         // it is still open.
         //
-        // Deliberately gated on skipSessionName, NOT skipSessionStatus: naming and status are
-        // independent options, so a `setSessionStatus: false` user must still get the name repair,
-        // and a `setSessionName: false` user must not be pulled into sessionMap — that would hand
-        // onAfterExecute a session to status-mark where it previously had none.
-        if (sessionId && !testContextOptions.skipSessionName && !this.sessionMap.has(sessionId)) {
-            this.sessionMap.set(sessionId, { lastTestName: name, testResults: new Map(), scenariosRan: 0 })
+        // Registration is independent of both opt-outs: `setSessionStatus: false` must still get the
+        // name repair, and `setSessionName: false` must still be status-marked. The name is what the
+        // flag suppresses, so a skipped-name session registers with an empty lastTestName.
+        if (sessionId && !this.sessionMap.has(sessionId)) {
+            const repairName = testContextOptions.skipSessionName ? '' : name
+            this.sessionMap.set(sessionId, { lastTestName: repairName, testResults: new Map(), scenariosRan: 0 })
         }
         // No-op for the steady state: when no mid-test reload happened, onBeforeTest already
         // applied this exact name and `appliedName` de-dupes it away — no extra API call.

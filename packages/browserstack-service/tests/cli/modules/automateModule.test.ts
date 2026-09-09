@@ -306,9 +306,12 @@ describe('AutomateModule', () => {
         )
     })
 
-    it('adds no status traffic for skipSessionName users (SDK-7270 inverse-leak guard)', async () => {
-        // With naming off, onBeforeTest never registers the session. onAfterTest must not adopt it
-        // either, or onAfterExecute would start status-marking sessions it previously ignored.
+    it('still status-marks a skipSessionName session, and sends no name', async () => {
+        // `setSessionName: false` suppresses the NAME only. Legacy gates its `after()` status block
+        // on setSessionStatus alone, and marks `passed` with an empty name — measured on BOTH
+        // frameworks' legacy arms. This test previously asserted the opposite (no traffic at all),
+        // which encoded the CLI's own behaviour rather than parity with legacy, and left every
+        // CLI-flow session unmarked whenever a user opted out of naming.
         (automateModule.config as any).testContextOptions.skipSessionName = true
         vi.mocked(fetch).mockResolvedValue({
             json: vi.fn().mockResolvedValue({ success: true })
@@ -327,7 +330,11 @@ describe('AutomateModule', () => {
 
         await automateModule.onAfterExecute()
 
-        expect(fetch).not.toHaveBeenCalled()
+        const bodies = vi.mocked(fetch).mock.calls.map(([, init]) => (init as { body: string }).body)
+        // exactly one call, and it is the status mark — no name field anywhere
+        expect(bodies).toHaveLength(1)
+        expect(JSON.parse(bodies[0])).not.toHaveProperty('name')
+        expect(JSON.parse(bodies[0]).status).toBe('passed')
     })
 
     it('should skip session status update when skipSessionStatus is true', async () => {
