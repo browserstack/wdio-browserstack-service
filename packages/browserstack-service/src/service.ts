@@ -302,6 +302,17 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     BStackLogger.error(`[Accessibility Test Run] Error in service class before function: ${err}`)
                 }
 
+                // The driver registration is an automation-lifecycle concern, not an observability
+                // one. With EVERY product off, shouldProcessEventForTesthub() closes (it is a
+                // disjunction over the three product flags, and '' bypasses the eventType guards),
+                // so the CREATE/POST event inside the block below never fires: onDriverCreated never
+                // runs, and the session goes unnamed and unmarked while browser.setCustomTags is
+                // never defined. This covers exactly that case — when the gate is open the block
+                // below still raises the event, so nothing fires twice.
+                if (BrowserstackCLI.getInstance().isRunning() && !shouldProcessEventForTesthub('')) {
+                    await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { browser: this._browser, hubUrl: this._config.hostname })
+                }
+
                 if (shouldProcessEventForTesthub('')) {
                     patchConsoleLogs()
 
