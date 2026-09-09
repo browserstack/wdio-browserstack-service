@@ -2848,7 +2848,7 @@ describe('BEFORE_ALL skip cascade + hook flag pass-through (SDK-7047)', () => {
         framework.onFeatureStart('features/login.feature', feature as any)
         if (scenariosStarted) {
             // flips classifyHookType from BEFORE_ALL to AFTER_ALL
-            ;(framework as any).cucumberData.scenariosStarted = true
+            (framework as any).cucumberData.scenariosStarted = true
         }
         const trackEvent = vi.spyOn(framework, 'trackEvent').mockResolvedValue(undefined)
         const sendTestFrameworkEvent = vi.fn().mockResolvedValue(true)
