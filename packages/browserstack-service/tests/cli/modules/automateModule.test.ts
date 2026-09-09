@@ -697,7 +697,7 @@ describe('AutomateModule testResults keying (SDK-7414)', () => {
         expect([...results.keys()]).toEqual(['scenario one fails', 'scenario two passes'])
         expect(results.size).toBe(2)
         expect([...results.values()].map((r: any) => r.status)).toEqual(['failed', 'passed'])
-        // Parity row 31: the session NAME stays the feature title even though the keys do not.
+        // the session NAME stays the feature title even though the keys do not.
         expect(sessionData().lastTestName).toBe(FEATURE)
     })
 

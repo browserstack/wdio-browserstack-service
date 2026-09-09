@@ -272,15 +272,10 @@ export default class AutomateModule extends BaseModule {
             }
 
             const sessionData = this.sessionMap.get(sessionId)
-            // Parity row 41, third surface: with ignoreHooksStatus declared, a failure that exists
-            // only in a hook must leave the session passed. Legacy expresses that in the
-            // `ignoreHooksStatus && this._specsRan` arm of `after()`, and that arm needs BOTH. With
-            // no scenario recorded, legacy instead falls through to the arm that marks `failed`
-            // unconditionally — flag or no flag — so honouring the flag here would leave the session
-            // unmarked where legacy marks it, and an unmarked session is invisible on the dashboard.
-            // Keyed on the absence of scenario results, never on the flag. A cucumber `BeforeAll`
-            // failure aborts the run outright, so nothing can arrive after this point; by `AfterAll`
-            // every scenario that ran has already been recorded.
+            // Keyed on the absence of scenario results, never on the flag: legacy's
+            // `ignoreHooksStatus && this._specsRan` arm needs BOTH, and with no scenario recorded it
+            // falls through to marking `failed` regardless of the flag. The count is final here — a
+            // `BeforeAll` failure aborts the run, and by `AfterAll` every scenario has been recorded.
             const specsRan = (sessionData?.testResults.size ?? 0) > 0
             if (specsRan && isTrue(args?.ignoreHooksStatus)) {
                 this.logger.debug(`onBuildLevelHookEnd: ${hookKey} failed but ignoreHooksStatus is set; not failing the session`)
