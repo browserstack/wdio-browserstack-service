@@ -650,6 +650,18 @@ export default class BrowserstackService implements Services.ServiceInstance {
             }
 
             if (BrowserstackCLI.getInstance().isRunning()) {
+                // SDK-7493: drain BEFORE the flush below, never after. wdio does not await
+                // onTestSkip, so these reports are still in flight here; each one ENDS by
+                // emitting mocha TEST/POST, which TestHubModule stashes in `pendingTestFinish`
+                // rather than sending. Draining second would let the flush run against an empty
+                // slot and strand that stash — with `describe.skip()` there is no next test to
+                // flush it either, so the test stays "in progress" until Test Hub's ~60-min idle
+                // reap stamps the whole build `timeout`.
+                try {
+                    await drainSkipReports()
+                } catch (skipDrainErr) {
+                    BStackLogger.debug(`Exception draining skip reports in after(): ${util.format(skipDrainErr)}`)
+                }
                 // Flush a test-finish event deferred past the after-each hook window — the last
                 // test of the worker has no next-test boundary to trigger the flush. Must run
                 // before worker teardown so the event isn't dropped.
@@ -658,14 +670,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     await testHubModule?.flushPendingTestFinishEvent()
                 } catch (flushErr) {
                     BStackLogger.debug(`Exception flushing deferred test finish in after(): ${util.format(flushErr)}`)
-                }
-                // Drain skip reports queued from the un-awaited onTestSkip reporter hook (static
-                // `it.skip`) so their TestRunFinished lands before the session closes — otherwise
-                // the test is orphaned "in progress" on the dashboard.
-                try {
-                    await drainSkipReports()
-                } catch (skipDrainErr) {
-                    BStackLogger.debug(`Exception draining skip reports in after(): ${util.format(skipDrainErr)}`)
                 }
                 await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.EXECUTE, HookState.POST, {})
             }
