@@ -14,6 +14,7 @@ import WdioCucumberTestFramework from '../src/cli/frameworks/wdioCucumberTestFra
 import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
 import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
+import { AutomationFrameworkState } from '../src/cli/states/automationFrameworkState.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
@@ -2939,5 +2940,64 @@ describe('BEFORE_ALL skip cascade + hook flag pass-through (legacy parity, escap
         const instance = (framework as any).constructor.getTrackedInstance()
         const finished = instance.getAllData().get('test_hooks_finished') as Map<string, any[]>
         expect(finished.get('BEFORE_ALL')![0].hook_result).toBe('failed')
+    })
+})
+
+describe('driver registration is not gated on observability', () => {
+    // CREATE/POST is the driver registration — onDriverCreated and the product modules' init
+    // handlers hang off it. It used to be raised only inside `shouldProcessEventForTesthub('')`,
+    // a disjunction over the three product flags, so with every product off the gate closed and
+    // the session went unnamed and unmarked with setCustomTags undefined. The second and third
+    // cases guard the fix's shape: it must not double-raise where the gate is already open.
+    const PRODUCT_ENV = ['BROWSERSTACK_OBSERVABILITY', 'BROWSERSTACK_ACCESSIBILITY', 'BROWSERSTACK_PERCY']
+    let trackEvent: ReturnType<typeof vi.fn>
+    let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
+    const saved: Record<string, string | undefined> = {}
+
+    const createPostCalls = () => trackEvent.mock.calls.filter(
+        ([state, hook]) => state === AutomationFrameworkState.CREATE && hook === HookState.POST)
+
+    const runBefore = async () => {
+        const svc = new BrowserstackService({} as never, [{}] as never, { capabilities: {} } as never)
+        await svc.beforeSession({} as never)
+        await svc.before(svc['_config'] as never, [], { sessionId: 'sess-1' } as never)
+    }
+
+    beforeEach(() => {
+        PRODUCT_ENV.forEach(k => { saved[k] = process.env[k]; delete process.env[k] })
+        trackEvent = vi.fn().mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => null,
+            getAutomationFramework: () => ({ trackEvent }),
+            modules: {}
+        } as never)
+    })
+
+    afterEach(() => {
+        PRODUCT_ENV.forEach(k => { if (saved[k] === undefined) { delete process.env[k] } else { process.env[k] = saved[k] } })
+        getInstanceSpy?.mockRestore()
+    })
+
+    it('registers the driver with every product turned off', async () => {
+        await runBefore()
+
+        expect(createPostCalls()).toHaveLength(1)
+    })
+
+    it('does not double-register when observability is on', async () => {
+        process.env.BROWSERSTACK_OBSERVABILITY = 'true'
+
+        await runBefore()
+
+        expect(createPostCalls()).toHaveLength(1)
+    })
+
+    it('does not double-register when only accessibility is on', async () => {
+        process.env.BROWSERSTACK_ACCESSIBILITY = 'true'
+
+        await runBefore()
+
+        expect(createPostCalls()).toHaveLength(1)
     })
 })
