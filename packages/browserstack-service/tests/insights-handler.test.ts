@@ -9,6 +9,7 @@ import InsightsHandler from '../src/insights-handler.js'
 import * as utils from '../src/util.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import { TESTOPS_SCREENSHOT_ENV } from '../src/constants.js'
+import { BrowserstackCLI } from '../src/cli/index.js'
 
 const log = logger('test')
 let insightsHandler: InsightsHandler
@@ -694,6 +695,33 @@ describe('browserCommand', () => {
         commandSpy.mockImplementation(() => { return true })
         insightsHandler.browserCommand('client:afterCommand', { sessionId: 's', method: 'm', endpoint: 'e', result: { value: 'random' } } as any, {} as any)
         expect(uploadEventDataSpy).toBeCalled()
+        delete process.env[TESTOPS_SCREENSHOT_ENV]
+    })
+
+    it('client:afterCommand - falls back to the direct upload when the CLI has no test framework', async () => {
+        // isRunning() can be true before setupTestFramework() has assigned one (dev-env
+        // short-circuit, or a framework the CLI doesn't track). Asserting non-null there threw the
+        // screenshot away; resolving it keeps the direct upload as the fallback.
+        process.env[TESTOPS_SCREENSHOT_ENV] = 'true'
+        commandSpy.mockImplementation(() => { return true })
+        const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => undefined
+        } as any)
+
+        await insightsHandler.browserCommand('client:afterCommand', { sessionId: 's', method: 'm', endpoint: 'e', result: { value: 'random' } } as any, {} as any)
+
+        expect(uploadEventDataSpy).toBeCalled()
+        getInstanceSpy.mockRestore()
+        delete process.env[TESTOPS_SCREENSHOT_ENV]
+    })
+
+    it('client:afterCommand - screenshot not uploaded when screenshots are denied', () => {
+        // arrives as the string 'false' off the wire, which Boolean() would read as granted
+        process.env[TESTOPS_SCREENSHOT_ENV] = 'false'
+        commandSpy.mockImplementation(() => { return true })
+        insightsHandler.browserCommand('client:afterCommand', { sessionId: 's', method: 'm', endpoint: 'e', result: { value: 'random' } } as any, {} as any)
+        expect(uploadEventDataSpy).toBeCalledTimes(0)
         delete process.env[TESTOPS_SCREENSHOT_ENV]
     })
 

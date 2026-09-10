@@ -266,12 +266,14 @@ export default class WdioMochaTestFramework extends TestFramework {
      */
     loadLogEntries(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, logEntry: Record<string, unknown>) {
         const logRecord: Record<string, unknown> = {}
-        const { level, message, timestamp } = logEntry
+        const { level, message, timestamp, kind } = logEntry
 
         if (CLIUtils.matchHookRegex(instance.getCurrentTestState().toString().split('.')[1])) {
             logRecord[TestFrameworkConstants.KEY_HOOK_ID] = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOK_ID)
         }
-        logRecord.kind = TestFrameworkConstants.KIND_LOG
+        // Console logs carry no kind and stay KIND_LOG; a producer that sets one (a screenshot,
+        // say) keeps it, or the entry would reach Observability labelled as a console log.
+        logRecord.kind = kind ?? TestFrameworkConstants.KIND_LOG
         logRecord.message = Buffer.from(message as string)
         logRecord.level = level
         logRecord.timestamp = timestamp
