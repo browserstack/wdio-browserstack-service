@@ -149,9 +149,11 @@ describe('TestHubModule — deferred last-test-finish delivery (SDK-7265)', () =
         for (const call of mockGrpcClient.testFrameworkEvent.mock.calls) {
             expect(call[0]).toMatchObject({ uuid: 'exhaust' })
         }
-        // An exhausted event must NOT be re-stashed into the shared slot — re-stashing races the
-        // fire-and-forget flush call sites and can drop a newer test's finish (SDK-7265 review #1).
-        expect((testHubModule as unknown as { pendingTestFinish: unknown }).pendingTestFinish).toBeNull()
+        // An exhausted event must NOT be re-stashed — re-stashing races the fire-and-forget
+        // flush call sites and can drop a newer test's finish (SDK-7265 review #1).
+        // SDK-7493: the single `pendingTestFinish` slot is now a uuid-keyed map, so "not
+        // re-stashed" means the map is empty rather than the slot being null.
+        expect((testHubModule as unknown as { pendingTestFinishes: Map<string, unknown> }).pendingTestFinishes.size).toBe(0)
         expect(testHubModule.logger.error).toHaveBeenCalledWith(
             expect.stringContaining('failed after all retries')
         )

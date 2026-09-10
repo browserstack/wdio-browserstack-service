@@ -32,6 +32,36 @@ const reportedSkips = new Set<string>()
 // tracker's single mutable per-worker instance — serialize every report through one chain
 let reportChain: Promise<void> = Promise.resolve()
 
+/**
+ * SDK-7493: skip reports are QUEUED here and only emitted from drainSkipReports(), never at
+ * the moment onTestSkip fires.
+ *
+ * wdio does not await onTestSkip, so emitting inline let a skip's events interleave with a
+ * live test's. Both share one per-worker tracked-instance slot, so the skip's INIT_TEST
+ * repointed that slot mid-test; the live test's afterTest then restored ITS uuid onto the
+ * skip's instance (service.ts `_cliTestUuids`), and from there the two tests' TEST/POSTs
+ * collapsed onto one uuid — one TestRunFinished was lost (test stuck "In Progress" until the
+ * ~60-min reap) and the survivor carried the wrong result. Deferring to the drain removes the
+ * interleave entirely: no test is in flight there, so each skip gets its own instance and uuid.
+ */
+interface QueuedSkip {
+    framework: TestFramework
+    test: Frameworks.Test
+    result: Frameworks.TestResult
+    suiteTitle?: string
+}
+const queuedSkips: QueuedSkip[] = []
+
+/** Emit one queued skip's full event sequence. Only ever called from drainSkipReports(). */
+async function emitSkipReport({ framework, test, result, suiteTitle }: QueuedSkip): Promise<void> {
+    // LOG_REPORT/POST is what loads the result into the instance (loadTestResult is
+    // gated on it, not on TEST/POST) — same sequence afterTest uses
+    await framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test })
+    await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
+    await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result })
+    await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result, suiteTitle })
+}
+
 export function markTestStarted(identifier: string) {
     startedTests.add(identifier)
 }
@@ -42,6 +72,19 @@ export function markTestStarted(identifier: string) {
 // so the chain completes while the session is still open. (Hook-skip cascades go via
 // reportSuiteSkipped inside afterHook, which is already awaited, so they were unaffected.)
 export function drainSkipReports(): Promise<void> {
+    // Emit everything queued so far, strictly one at a time. Drains until empty rather than
+    // snapshotting: emitting a skip can enqueue nothing today, but draining a growing queue is
+    // the safe shape. Runs from service.after(), where no test is in flight.
+    reportChain = reportChain.then(async () => {
+        while (queuedSkips.length > 0) {
+            const queued = queuedSkips.shift()!
+            try {
+                await emitSkipReport(queued)
+            } catch (err: unknown) {
+                BStackLogger.debug(`Failed reporting skipped test '${queued.test.title}': ${err}`)
+            }
+        }
+    })
     return reportChain
 }
 
@@ -51,16 +94,9 @@ export function reportSkippedTest(framework: TestFramework, identifier: string, 
     }
     reportedSkips.add(identifier)
     const result = { passed: false, skipped: true } as Frameworks.TestResult
-    reportChain = reportChain.then(async () => {
-        // LOG_REPORT/POST is what loads the result into the instance (loadTestResult is
-        // gated on it, not on TEST/POST) — same sequence afterTest uses
-        await framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test })
-        await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
-        await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result })
-        await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result, suiteTitle })
-    }).catch((err: unknown) => {
-        BStackLogger.debug(`Failed reporting skipped test '${identifier}': ${err}`)
-    })
+    // SDK-7493: queue only — see the QueuedSkip docs above. Emitting here would interleave
+    // this skip's events with whatever test is currently running.
+    queuedSkips.push({ framework, test, result, suiteTitle })
     return reportChain
 }
 

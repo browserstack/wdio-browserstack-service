@@ -5,7 +5,7 @@ import type { Frameworks } from '@wdio/types'
 
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
 
-import { markTestStarted, reportSkippedTest, reportSuiteSkipped, resolveSpecFile } from '../../src/cli/skipReporter.js'
+import { drainSkipReports, markTestStarted, reportSkippedTest, reportSuiteSkipped, resolveSpecFile } from '../../src/cli/skipReporter.js'
 import { TestFrameworkState } from '../../src/cli/states/testFrameworkState.js'
 import { HookState } from '../../src/cli/states/hookState.js'
 import type TestFramework from '../../src/cli/frameworks/testFramework.js'
@@ -22,6 +22,8 @@ describe('skipReporter', () => {
     it('reports a skipped test through the INIT_TEST/TEST/LOG_REPORT sequence', async () => {
         const framework = makeFramework()
         await reportSkippedTest(framework, 'suite - reports once', makeTest('reports once'), 'suite')
+        // SDK-7493: reportSkippedTest only QUEUES; drainSkipReports emits.
+        await drainSkipReports()
 
         const calls = vi.mocked(framework.trackEvent).mock.calls
         expect(calls.map(([state, hook]) => [state, hook])).toEqual([
@@ -37,6 +39,7 @@ describe('skipReporter', () => {
         const framework = makeFramework()
         await reportSkippedTest(framework, 'suite - dedup', makeTest('dedup'), 'suite')
         await reportSkippedTest(framework, 'suite - dedup', makeTest('dedup'), 'suite')
+        await drainSkipReports()
         expect(framework.trackEvent).toHaveBeenCalledTimes(4)
     })
 
@@ -44,6 +47,7 @@ describe('skipReporter', () => {
         const framework = makeFramework()
         markTestStarted('suite - runtime skip')
         await reportSkippedTest(framework, 'suite - runtime skip', makeTest('runtime skip'), 'suite')
+        await drainSkipReports()
         expect(framework.trackEvent).not.toHaveBeenCalled()
     })
 
@@ -60,6 +64,7 @@ describe('skipReporter', () => {
             reportSkippedTest(framework, 'suite - first', makeTest('first'), 'suite'),
             reportSkippedTest(framework, 'suite - second', makeTest('second'), 'suite'),
         ])
+        await drainSkipReports()
         expect(order).toEqual(['first', 'first', 'first', 'first', 'second', 'second', 'second', 'second'])
     })
 
@@ -77,6 +82,7 @@ describe('skipReporter', () => {
             }],
         }
         await reportSuiteSkipped(framework, suite)
+        await drainSkipReports()
         // 2 undetermined tests x 4 tracker events
         expect(framework.trackEvent).toHaveBeenCalledTimes(8)
         const reported = vi.mocked(framework.trackEvent).mock.calls
