@@ -798,9 +798,16 @@ class _InsightsHandler {
         if (Boolean(allowScreenshots) && !isFalse(allowScreenshots) && isScreenshotCommand(args) && result?.value) {
             // On the binary path the direct screenshot endpoint answers 401 to the binary's JWT,
             // so ride the same LOG rail appendTestItemLog uses: the CLI stamps the test uuid and
-            // forwards the entry over gRPC, where the binary owns reporting.
-            await (BrowserstackCLI.getInstance().isRunning()
-                ? BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG, HookState.POST, {
+            // forwards the entry over gRPC, where the binary owns reporting. The framework can be
+            // unset while isRunning() is true — the dev-env short-circuit returns true before
+            // setupTestFramework() has run, and it only assigns for webdriverio-mocha — so resolve
+            // it rather than assert, and let an untracked framework fall through to the direct
+            // upload instead of throwing the screenshot away.
+            const cliTestFramework = BrowserstackCLI.getInstance().isRunning()
+                ? BrowserstackCLI.getInstance().getTestFramework()
+                : undefined
+            await (cliTestFramework
+                ? cliTestFramework.trackEvent(TestFrameworkState.LOG, HookState.POST, {
                     logEntry: {
                         kind: TestFrameworkConstants.KIND_SCREENSHOT,
                         message: result.value,
