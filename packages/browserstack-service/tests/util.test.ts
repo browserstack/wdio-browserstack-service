@@ -2156,6 +2156,19 @@ describe('_getParamsForAppAccessibility', () => {
         })
     })
 
+    it('omits the test run uuid for a global-hook scan, keeping the hook uuid', () => {
+        const result = _getParamsForAppAccessibility('click', undefined, 'hook-uuid-1', true)
+
+        expect(result.thTestRunUuid).toBeUndefined()
+        expect(result.thHookRunUuid).toBe('hook-uuid-1')
+        expect(result.thBuildUuid).toBe('build-456')
+    })
+
+    it('sends the test run uuid when the scan is not from a global hook', () => {
+        expect(_getParamsForAppAccessibility('click', undefined, null, false).thTestRunUuid).toBe('test-123')
+        expect(_getParamsForAppAccessibility('click').thTestRunUuid).toBe('test-123')
+    })
+
     it('should handle missing environment variables', () => {
         process.env = {}
 
