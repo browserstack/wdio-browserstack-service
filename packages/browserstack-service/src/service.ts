@@ -428,7 +428,14 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 // Cucumber's taxonomy, not Mocha's titles — see beforeHook.
                 const hookFrameworkState = framework.classifyHookState(test as CucumberHook|undefined)
                 if (hookFrameworkState) {
-                    await framework.trackEvent(hookFrameworkState, HookState.POST, { test, result })
+                    // ignoreHooksStatus travels with the event because automateModule's build-level
+                    // hook observer is the only surviving authority on a hook-only session verdict
+                    // — after()'s own three-way logic is gated off while the binary is up.
+                    await framework.trackEvent(hookFrameworkState, HookState.POST, {
+                        test,
+                        result,
+                        ignoreHooksStatus: this._options.testObservabilityOptions?.ignoreHooksStatus === true,
+                    })
                 }
                 // The cascade fires on BEFORE_ALL only — never BEFORE_EACH or AFTER_EACH — and
                 // not at all when the finish had no recorded start: legacy throws at that point

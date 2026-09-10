@@ -559,6 +559,10 @@ export default class WdioCucumberTestFramework extends TestFramework {
 
         if (this.openHook) {
             logRecord[TestFrameworkConstants.KEY_HOOK_ID] = this.openHook.hookId
+            // The uuid alone is not enough: the binary reads the log's own testFrameworkState to
+            // decide hook_run_uuid vs test_run_uuid, and at flush time that is 'LOG'. Carrying
+            // the hook's state on the record is what makes the pairing survive (row 24).
+            logRecord[TestFrameworkConstants.KEY_HOOK_STATE] = this.openHook.key
         }
 
         const entries = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_LOGS) as unknown[]

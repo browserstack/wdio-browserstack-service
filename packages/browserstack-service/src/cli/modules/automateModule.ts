@@ -43,6 +43,10 @@ export default class AutomateModule extends BaseModule {
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.POST, this.onAfterTest.bind(this))
         TestFramework.registerObserver(AutomationFrameworkState.EXECUTE, HookState.POST, this.onAfterExecute.bind(this))
+        // Build-level hooks carry no scenario result, so they reach the session verdict only
+        // through their own state. See onBuildLevelHookEnd — cucumber-gated inside the handler.
+        TestFramework.registerObserver(TestFrameworkState.BEFORE_ALL, HookState.POST, this.onBuildLevelHookEnd.bind(this, 'BEFORE_ALL'))
+        TestFramework.registerObserver(TestFrameworkState.AFTER_ALL, HookState.POST, this.onBuildLevelHookEnd.bind(this, 'AFTER_ALL'))
     }
 
     getModuleName(): string {
@@ -98,14 +102,20 @@ export default class AutomateModule extends BaseModule {
     async onAfterTest(args: Record<string, unknown>) {
         this.logger.debug('onAfterTest: inside automate module after test hook!')
         const instace = args.instance as TestFrameworkInstance
-        const { error, passed } = args.result as { error: Error | null, passed: boolean }
+        const { error, passed, skipped } = args.result as { error: Error | null, passed: boolean, skipped?: boolean }
         const _failReasons: string[] = []
 
-        if (!passed) {
+        // A skipped cucumber scenario must not fail the session: legacy accumulates _failReasons
+        // only for _failureStatuses (failed/ambiguous/undefined/unknown), which excludes skipped.
+        // Cucumber-scoped on purpose — mocha's collapse is its own long-standing behaviour on this
+        // flow and changing it here would alter a framework already shipping on the CLI.
+        const treatAsPassed = passed || Boolean(skipped && this.isCucumberInstance(instace))
+
+        if (!treatAsPassed) {
             _failReasons.push((error && error.message) || 'Unknown Error')
         }
 
-        const status = passed ? 'passed' : 'failed'
+        const status = treatAsPassed ? 'passed' : 'failed'
         const reason = _failReasons.length > 0 ? _failReasons.join('\n') : undefined
 
         const autoInstance = AutomationFramework.getTrackedInstance()
@@ -145,12 +155,101 @@ export default class AutomateModule extends BaseModule {
                 reason: reason
             }
 
-            sessionData.testResults.set(name, testResult)
+            // `name` is the session NAME, which for cucumber is the Feature title and therefore
+            // shared by every scenario in the file — keying on it collapses N scenarios into one
+            // last-write-wins entry, so a feature whose last scenario passes reports a passed
+            // session however many earlier ones failed. Mocha leaves `fullName` undefined, so its
+            // key is unchanged.
+            const resultKey = (test && test.fullName) ? String(test.fullName) : name
+            sessionData.testResults.set(resultKey, testResult)
             this.sessionMap.set(sessionId, sessionData)
         }
 
         TestFramework.setState(instace, TestFrameworkConstants.KEY_AUTOMATE_SESSION_STATUS, status)
         TestFramework.setState(instace, TestFrameworkConstants.KEY_AUTOMATE_SESSION_REASON, reason)
+    }
+
+    /**
+     * A `BeforeAll` / `AfterAll` failure produces no scenario result, so it can never enter the
+     * per-test `testResults` map that onAfterExecute aggregates — a run whose BeforeAll blew up
+     * reports its session as PASSED. Legacy pushed the hook error into `_failReasons` and
+     * `after()` marked the session failed; that whole accumulation is gated
+     * `setSessionStatus && !BrowserstackCLI.isRunning()`, so it is dead while the binary is up.
+     *
+     * Cucumber-gated deliberately. `wdio_mocha` has the identical latent shape on this flow, but
+     * legacy mocha behaved the same way, so repairing it here would be an unrequested behaviour
+     * change to the one framework already working on the CLI flow.
+     */
+    async onBuildLevelHookEnd(hookKey: string, args: Record<string, unknown>) {
+        try {
+            const instance = (args?.instance as TestFrameworkInstance) || TestFramework.getTrackedInstance()
+            if (!instance || !this.isCucumberInstance(instance)) {
+                return
+            }
+
+            const result = args?.result as { passed?: boolean, error?: Error } | undefined
+            if (!result || result.passed) {
+                return
+            }
+
+            const testContextOptions = this.config.testContextOptions as TestContextOptions
+            if (testContextOptions?.skipSessionStatus) {
+                return
+            }
+
+            const autoInstance = AutomationFramework.getTrackedInstance()
+            const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
+            if (!sessionId) {
+                this.logger.debug(`onBuildLevelHookEnd: no session id resolved for ${hookKey}; nothing to mark`)
+                return
+            }
+
+            const sessionData = this.sessionMap.get(sessionId)
+            // Keyed on the absence of scenario results, never on the flag alone: legacy's
+            // `ignoreHooksStatus && this._specsRan` arm needs BOTH, and with no scenario recorded
+            // it falls through to marking `failed` regardless of the flag. The count is final
+            // here — a BeforeAll failure aborts the run, and by AfterAll every scenario is in.
+            const specsRan = (sessionData?.testResults.size ?? 0) > 0
+            if (specsRan && isTrue(args?.ignoreHooksStatus)) {
+                this.logger.debug(`onBuildLevelHookEnd: ${hookKey} failed but ignoreHooksStatus is set; not failing the session`)
+                return
+            }
+
+            if (!sessionData) {
+                // A BeforeAll can fail before any scenario ran, so the session may not be
+                // registered yet. `lastTestName` stays empty on purpose: onAfterExecute's naming
+                // call is what consumes it, and an empty name is what beforeFeature's own
+                // (un-gated) _setSessionName has already applied.
+                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map() })
+            }
+
+            const name = this.resolveHookName(instance, hookKey)
+            this.sessionMap.get(sessionId)!.testResults.set(name, {
+                testName: name,
+                status: 'failed',
+                reason: (result.error && result.error.message) || 'Hook failed'
+            })
+            this.logger.info(`onBuildLevelHookEnd: recorded ${hookKey} failure against session ${sessionId}`)
+        } catch (error) {
+            this.logger.error(`Exception in automate onBuildLevelHookEnd: ${error}`)
+        }
+    }
+
+    private isCucumberInstance(instance: TestFrameworkInstance): boolean {
+        const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
+        return frameworkName.toLowerCase().includes('cucumber')
+    }
+
+    /** The hook's reported name (`BEFORE_ALL for <feature>`), so the session reason names the hook. */
+    private resolveHookName(instance: TestFrameworkInstance, hookKey: string): string {
+        try {
+            const finished = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOKS_FINISHED) as Map<string, Record<string, unknown>[]> | undefined
+            const hooks = finished?.get(hookKey)
+            const hookName = hooks?.length ? hooks[hooks.length - 1][TestFrameworkConstants.KEY_HOOK_NAME] : undefined
+            return (hookName as string) || hookKey
+        } catch {
+            return hookKey
+        }
     }
 
     async onAfterExecute() {
@@ -178,7 +277,10 @@ export default class AutomateModule extends BaseModule {
                     }
                 }
 
-                if (!testContextOptions.skipSessionName) {
+                // An empty name means nothing ever named this session — a BeforeAll that failed
+                // before any feature loaded, so beforeFeature never ran. Legacy makes no naming
+                // call at all in that state; PUTting '' would be an API call it never made.
+                if (!testContextOptions.skipSessionName && sessionData.lastTestName) {
                     await this.markSessionName(sessionId, sessionData.lastTestName, { user: userName, key: accessKey })
                 }
 

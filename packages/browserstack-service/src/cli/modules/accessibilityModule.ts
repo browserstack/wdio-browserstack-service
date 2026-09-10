@@ -203,7 +203,11 @@ export default class AccessibilityModule extends BaseModule {
 
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
             const accessibilityOptions = this.config.accessibilityOptions
-            const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title, accessibilityOptions as { [key: string]: any } | undefined) && this.accessibility
+            // `world` is set only by service.beforeScenario, so this stays the 3-arg substring
+            // form for mocha. Without it a cucumber scenario has no test.title and the tag-aware
+            // branch is never entered, so include/excludeTagsInTestingScope are ignored (row 48).
+            const world = args.world
+            const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title, accessibilityOptions as { [key: string]: any } | undefined, world, Boolean(world)) && this.accessibility
 
             this.accessibilityMap.set(sessionId, shouldScanTest)
             // Create test metadata similar to accessibility-handler
