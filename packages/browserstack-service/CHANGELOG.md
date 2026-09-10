@@ -1,5 +1,12 @@
 # @wdio/browserstack-service
 
+## 9.36.0
+
+### Minor Changes
+
+- 2ab9eb0: - Accessibility scans now run for driver commands issued from your WDIO config's hooks — `before()` and `beforeSuite` before the run starts, and `afterSuite`/`after` during teardown — so screens visited outside your tests are covered.
+  - `browser.performScan()` called from a config hook is no longer attributed to a test that has not started.
+
 ## 9.35.3
 
 ### Patch Changes
