@@ -6,6 +6,8 @@ import type { StdLog } from '../src/index.js'
 import TestReporter from '../src/reporter.js'
 import * as utils from '../src/util.js'
 import * as bstackLogger from '../src/bstackLogger.js'
+import TestMetadata from '../src/metadata.js'
+import { BROWSERSTACK_CENTRAL_USER } from '../src/constants.js'
 
 const log = logger('test')
 
@@ -172,6 +174,66 @@ describe('test-reporter', () => {
         afterEach(() => {
             uploadEventDataSpy.mockClear()
             getCloudProviderSpy.mockClear()
+        })
+    })
+
+    describe('getRunData app_lcnc metadata', () => {
+        const reporter = new TestReporter({})
+        const originalCentralUser = process.env[BROWSERSTACK_CENTRAL_USER]
+        let getCloudProviderSpy: any
+        let getPlatformVersionSpy: any
+
+        beforeAll(() => {
+            getCloudProviderSpy = vi.spyOn(utils, 'getCloudProvider').mockReturnValue('browserstack')
+            getPlatformVersionSpy = vi.spyOn(utils, 'getPlatformVersion').mockImplementation(() => 'some version')
+        })
+
+        afterAll(() => {
+            getCloudProviderSpy.mockRestore()
+            getPlatformVersionSpy.mockRestore()
+        })
+
+        beforeEach(() => {
+            process.env[BROWSERSTACK_CENTRAL_USER] = 'app_lcnc'
+            TestMetadata.reset()
+            reporter.onRunnerStart(runnerConfig as any)
+        })
+
+        afterEach(() => {
+            TestMetadata.reset()
+            if (originalCentralUser === undefined) {
+                delete process.env[BROWSERSTACK_CENTRAL_USER]
+            } else {
+                process.env[BROWSERSTACK_CENTRAL_USER] = originalCentralUser
+            }
+        })
+
+        it('attaches app_lcnc to a finished (passed/failed) test event, not only skipped', async () => {
+            TestMetadata.set({ identifier: 'run-1' })
+            const finishedStats = { ...testStats, state: 'passed' }
+            const testData = await reporter.getRunData(finishedStats as any, 'TestRunFinished')
+            expect(testData.app_lcnc).toEqual({ identifier: 'run-1' })
+        })
+
+        it('attaches app_lcnc to a skipped test event', async () => {
+            TestMetadata.set({ identifier: 'run-1' })
+            const testData = await reporter.getRunData(testStats as any, 'TestRunSkipped')
+            expect(testData.result).toBe('skipped')
+            expect(testData.app_lcnc).toEqual({ identifier: 'run-1' })
+        })
+
+        it('does not attach app_lcnc when no metadata was set', async () => {
+            const finishedStats = { ...testStats, state: 'passed' }
+            const testData = await reporter.getRunData(finishedStats as any, 'TestRunFinished')
+            expect(testData.app_lcnc).toBeUndefined()
+        })
+
+        it('does not attach app_lcnc to hook events', async () => {
+            TestMetadata.set({ identifier: 'run-1' })
+            reporter.onSuiteStart({ title: 'suite title', file: 'filename' } as any)
+            const hookStats = { ...testStats, type: 'hook', title: 'before each' }
+            const testData = await reporter.getRunData(hookStats as any, 'HookRunFinished')
+            expect(testData.app_lcnc).toBeUndefined()
         })
     })
 
