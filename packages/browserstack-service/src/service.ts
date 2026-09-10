@@ -245,6 +245,19 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     BStackLogger.error(`[Accessibility Test Run] Error in service class before function: ${err}`)
                 }
 
+                /**
+                 * The driver, its session id and its capabilities reach the AutomationFramework
+                 * instance ONLY through this state, and every cli/module resolves them from there.
+                 * It used to be raised inside the `shouldProcessEventForTesthub` block, so an
+                 * Automate-only run (every TestHub product off) registered no driver at all:
+                 * automateModule's sessionMap stayed empty and the session was left unmarked,
+                 * where legacy marked it. Session tracking does not depend on TestHub, so the
+                 * raise is gated on the CLI being up and nothing else.
+                 */
+                if (BrowserstackCLI.getInstance().isRunning()) {
+                    await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { browser: this._browser, hubUrl: this._config.hostname })
+                }
+
                 if (shouldProcessEventForTesthub('')) {
                     patchConsoleLogs()
 
@@ -255,7 +268,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         this._options
                     )
                     if (BrowserstackCLI.getInstance().isRunning()) {
-                        await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { browser: this._browser, hubUrl: this._config.hostname })
                         this._insightsHandler.setGitConfigPath()
                         /**
                          * SDK-6277: register the command/result listeners in the CLI/binary flow too,

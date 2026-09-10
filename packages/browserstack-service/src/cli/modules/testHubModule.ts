@@ -51,12 +51,18 @@ export default class TestHubModule extends BaseModule {
         return TestHubModule.MODULE_NAME
     }
 
-    onBeforeTest(args: Record<string, unknown>) {
+    /**
+     * Awaited, not fire-and-forget: sendTestSessionEvent re-throws after logging, and an
+     * un-awaited rejection escapes as an unhandled rejection that no caller can contain — on
+     * cucumber it surfaces inside the user's own Before hook via WDIO's hook domain and fails the
+     * scenario. Awaiting hands the rejection to eventDispatcher's per-observer boundary.
+     */
+    async onBeforeTest(args: Record<string, unknown>) {
         this.logger.debug('onBeforeTest: Called after test hook from cli configured module!!!')
         const autoInstace = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
         const instances = [autoInstace]
         args.autoInstance = instances
-        this.sendTestSessionEvent(args)
+        await this.sendTestSessionEvent(args)
     }
 
     onAllTestEvents(args: Record<string, unknown>) {
