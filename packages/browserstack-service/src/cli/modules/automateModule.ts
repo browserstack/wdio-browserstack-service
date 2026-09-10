@@ -64,8 +64,20 @@ export default class AutomateModule extends BaseModule {
         const suiteTitle = args.suiteTitle as string
         const testContextOptions = this.config.testContextOptions as TestContextOptions
 
-        if (testContextOptions.skipSessionName || !isBrowserstackSession(browser)) {
+        if (!isBrowserstackSession(browser)) {
+            return
+        }
+
+        // `setSessionName: false` suppresses the NAME, not the registration. The session still has
+        // to enter sessionMap or onAfterExecute has nothing to status-mark, and legacy marks it
+        // either way — its after() status block gates on setSessionStatus alone. Registering with
+        // an empty lastTestName is safe because onAfterExecute's naming call is guarded on both
+        // the flag and a non-empty name, so no name can be sent from here.
+        if (testContextOptions.skipSessionName) {
             this.logger.info('Skipping session name update as per configuration')
+            if (sessionId && !this.sessionMap.has(sessionId)) {
+                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map() })
+            }
             return
         }
 
