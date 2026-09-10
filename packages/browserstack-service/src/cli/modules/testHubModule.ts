@@ -46,6 +46,13 @@ export default class TestHubModule extends BaseModule {
      * OBJECT differed, and an interleave can present the same object), so one test's
      * TestRunFinished was never sent and TRA left it rendering "In Progress" until the ~60-min
      * idle reap. A map cannot evict: every deferred finish is delivered, each under its own uuid.
+     *
+     * NOTE ON REDUNDANCY: SDK-7493's queue-and-drain (skipReporter) already stops a skip report
+     * running while a test is in flight, so on the normal path that collision can no longer be
+     * triggered and this map is not the primary fix. It is retained deliberately as
+     * defence-in-depth for a reporting path with a real incident history (SDK-7265, SDK-7493,
+     * ~60-min reaps): if any future caller reintroduces an interleave, the worst case degrades
+     * to a late send rather than a silently lost TestRunFinished.
      */
     private pendingTestFinishes: Map<string, { args: Record<string, unknown>, uuid: string }> = new Map()
 

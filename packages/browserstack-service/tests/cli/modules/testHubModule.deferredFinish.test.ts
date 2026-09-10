@@ -194,4 +194,55 @@ describe('TestHubModule — deferred last-test-finish delivery (SDK-7265)', () =
 
         expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
     })
+
+    // SDK-7493 — the two hardenings that replaced the single `pendingTestFinish` slot.
+    // The queue-and-drain in skipReporter is the primary fix; these guard the deferral itself
+    // so a future interleave degrades into a late send rather than a silently lost finish.
+
+    it('two finishes stashed against the SAME instance under different uuids both survive', async () => {
+        // The exact shape the single slot lost: an interleave presents one tracked instance
+        // whose uuid has moved on, so the old `instance !== instance` guard never fired and the
+        // second stash silently evicted the first.
+        const shared = makeMochaTestInstance('first')
+        testHubModule.onAllTestEvents({ instance: shared, test: { title: 'first' } as Frameworks.Test })
+
+        // Same object, uuid rewritten — as an interleaved skip report would leave it.
+        shared.__uuid = 'second'
+        testHubModule.onAllTestEvents({ instance: shared, test: { title: 'second' } as Frameworks.Test })
+
+        expect((testHubModule as unknown as { pendingTestFinishes: Map<string, unknown> }).pendingTestFinishes.size).toBe(2)
+
+        await testHubModule.flushPendingTestFinishEvent()
+
+        const sent = mockGrpcClient.testFrameworkEvent.mock.calls.map((c: unknown[]) => (c[0] as { uuid: string }).uuid)
+        expect(sent).toHaveLength(2)
+        expect(new Set(sent)).toEqual(new Set(['first', 'second']))
+    })
+
+    it('flushes the uuid captured at DEFER time, not the instance uuid at send time', async () => {
+        const inst = makeMochaTestInstance('at-defer')
+        testHubModule.onAllTestEvents({ instance: inst, test: { title: 't' } as Frameworks.Test })
+
+        // The instance's live uuid is rewritten before the flush runs. Reading it here would
+        // close the wrong test_run and leave this one open until Test Hub's idle reap — the
+        // binary keys closure on the request's top-level `uuid` field.
+        inst.__uuid = 'rewritten-after-defer'
+        await testHubModule.flushPendingTestFinishEvent()
+
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
+        expect(mockGrpcClient.testFrameworkEvent.mock.calls[0][0]).toMatchObject({ uuid: 'at-defer' })
+    })
+
+    it('re-stashing the SAME uuid replaces rather than duplicating (LOG_REPORT re-entry)', async () => {
+        // onAllTestEvents re-enters for one test via the LOG_REPORT/POST recovery path; that
+        // must not send the same finish twice.
+        const inst = makeMochaTestInstance('same')
+        testHubModule.onAllTestEvents({ instance: inst, test: { title: 'same' } as Frameworks.Test })
+        testHubModule.onAllTestEvents({ instance: inst, test: { title: 'same' } as Frameworks.Test })
+
+        expect((testHubModule as unknown as { pendingTestFinishes: Map<string, unknown> }).pendingTestFinishes.size).toBe(1)
+
+        await testHubModule.flushPendingTestFinishEvent()
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
+    })
 })

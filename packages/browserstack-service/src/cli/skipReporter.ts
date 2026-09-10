@@ -96,6 +96,12 @@ export function reportSkippedTest(framework: TestFramework, identifier: string, 
     const result = { passed: false, skipped: true } as Frameworks.TestResult
     // SDK-7493: queue only — see the QueuedSkip docs above. Emitting here would interleave
     // this skip's events with whatever test is currently running.
+    //
+    // Tradeoff: delivery now depends on service.after() running. If the worker dies before it
+    // (SIGKILL, OOM, a teardown error that skips after()), queued skips are dropped with no
+    // send attempted, where the old inline path would at least have tried. Accepted because
+    // the inline path is the bug being fixed, and an aborted worker already leaves its
+    // in-progress test runs to Test Hub's idle reap regardless.
     queuedSkips.push({ framework, test, result, suiteTitle })
     return reportChain
 }
