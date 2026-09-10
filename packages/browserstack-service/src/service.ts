@@ -624,7 +624,13 @@ export default class BrowserstackService implements Services.ServiceInstance {
         this._suiteTitle = feature.name
         await this._setSessionName(feature.name)
         await this._setAnnotation(`Feature: ${feature.name}`)
-        await this._insightsHandler?.beforeFeature(uri, feature)
+        // The legacy InsightsHandler -> Listener -> api/v1/batch transport is gated only on
+        // TESTOPS_BUILD_COMPLETED and BROWSERSTACK_TESTHUB_JWT, both of which the CLI flow itself
+        // sets. Left unguarded it keeps POSTing scenario events under the binary-issued JWT on top
+        // of whatever the tracker emits, reporting every scenario twice under two different uuids.
+        if (!BrowserstackCLI.getInstance().isRunning()) {
+            await this._insightsHandler?.beforeFeature(uri, feature)
+        }
     }
 
     /**
@@ -635,7 +641,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
     async beforeScenario (world: ITestCaseHookParameter) {
         this._currentTest = world
         await this._accessibilityHandler?.beforeScenario(world)
-        await this._insightsHandler?.beforeScenario(world)
+        // legacy transport — see beforeFeature
+        if (!BrowserstackCLI.getInstance().isRunning()) {
+            await this._insightsHandler?.beforeScenario(world)
+        }
         const scenarioName = world.pickle.name || 'unknown scenario'
         await this._setAnnotation(`Scenario: ${scenarioName}`)
     }
@@ -676,14 +685,19 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         await this._accessibilityHandler?.afterScenario(world)
-        await this._insightsHandler?.afterScenario(world)
+        // legacy transport — see beforeFeature
         if (!BrowserstackCLI.getInstance().isRunning()) {
+            await this._insightsHandler?.afterScenario(world)
             await this._percyHandler?.afterScenario()
         }
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeStep' })
     async beforeStep (step: Frameworks.PickleStep, scenario: Pickle) {
+        // NOT CLI-guarded, unlike the scenario hooks: beforeStep/afterStep emit nothing, they only
+        // build the step list that afterScenario reads back via hasTestStepFailures() to separate
+        // step failures from hook failures. That read is not CLI-gated and feeds the process exit
+        // code, so guarding these would make every step failure invisible under ignoreHooksStatus.
         await this._insightsHandler?.beforeStep(step, scenario)
         await this._setAnnotation(`Step: ${step.keyword}${step.text}`)
     }
