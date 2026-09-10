@@ -1,5 +1,17 @@
 # @wdio/browserstack-service
 
+## 9.35.3
+
+### Patch Changes
+
+- a3f15f3: - Fixed skipped tests staying stuck on "In Progress" in Test Hub — and their build later being marked as timed out — when a spec ends with skipped tests, such as `describe.skip()` or a trailing `it.skip()`.
+
+## 9.35.2
+
+### Patch Changes
+
+- 75da58d: - Add repo-root .npmrc with supply-chain hardening directives (strict-ssl, save-exact,
+
 ## 9.35.1
 
 ### Patch Changes
