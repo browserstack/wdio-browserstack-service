@@ -233,6 +233,21 @@ describe('TestHubModule — deferred last-test-finish delivery (SDK-7265)', () =
         expect(mockGrpcClient.testFrameworkEvent.mock.calls[0][0]).toMatchObject({ uuid: 'at-defer' })
     })
 
+    it('pins the uuid INSIDE event_json too — the binary routes on that, not the top-level field', async () => {
+        // `webdriverio/index.js` does `const event = JSON.parse(eventJson)` and the mocha
+        // handler builds the run with `uuid: event.test_uuid`. A stale test_uuid in the blob
+        // closes the wrong run, so pinning only the top-level field is not enough.
+        const inst = makeMochaTestInstance('pinned')
+        testHubModule.onAllTestEvents({ instance: inst, test: { title: 't' } as Frameworks.Test })
+
+        inst.__uuid = 'rewritten-after-defer'
+        await testHubModule.flushPendingTestFinishEvent()
+
+        const payload = mockGrpcClient.testFrameworkEvent.mock.calls[0][0] as { uuid: string, eventJson: Buffer }
+        expect(payload.uuid).toBe('pinned')
+        expect(JSON.parse(payload.eventJson.toString()).test_uuid).toBe('pinned')
+    })
+
     it('re-stashing the SAME uuid replaces rather than duplicating (LOG_REPORT re-entry)', async () => {
         // onAllTestEvents re-enters for one test via the LOG_REPORT/POST recovery path; that
         // must not send the same finish twice.

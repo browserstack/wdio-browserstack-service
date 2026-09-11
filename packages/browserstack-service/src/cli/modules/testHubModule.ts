@@ -218,7 +218,17 @@ export default class TestHubModule extends BaseModule {
             // Nested values such as test_hooks_started/test_hooks_finished are JS Maps, which
             // JSON.stringify would serialise to `{}` and strip the hook data. Convert any Map to
             // a plain object so the binary receives populated hook maps.
-            const eventJson = Buffer.from(JSON.stringify(Object.fromEntries(testData), (_key, value) => value instanceof Map ? Object.fromEntries(value) : value))
+            // SDK-7493: the pinned uuid must go INSIDE event_json too, not just the top-level
+            // field. The binary routes a mocha test_run on the uuid it parses out of this blob —
+            // `webdriverio/index.js` does `const event = JSON.parse(eventJson)` and the mocha
+            // handler builds the test run with `uuid: event.test_uuid` — so a stale `test_uuid`
+            // here would close the wrong run and leave the deferred one open, which is the very
+            // failure the pin exists to prevent. Overriding a copy keeps the instance untouched.
+            const eventData = Object.fromEntries(testData)
+            if (stateOverride?.uuid) {
+                eventData[TestFrameworkConstants.KEY_TEST_UUID] = stateOverride.uuid
+            }
+            const eventJson = Buffer.from(JSON.stringify(eventData, (_key, value) => value instanceof Map ? Object.fromEntries(value) : value))
             const executionContext = { hash: trackedContext.getId(), threadId: trackedContext.getThreadId().toString(), processId: trackedContext.getProcessId().toString() }
             const payload: Omit<TestFrameworkEventRequest, 'binSessionId'> = {
                 platformIndex,
