@@ -52,14 +52,39 @@ interface QueuedSkip {
 }
 const queuedSkips: QueuedSkip[] = []
 
-/** Emit one queued skip's full event sequence. Only ever called from drainSkipReports(). */
+/**
+ * Emit one skip's full event sequence, in order.
+ *
+ * Every step is attempted even if an earlier one rejects. TEST/POST is what ultimately
+ * produces the TestRunFinished, and abandoning the sequence on an earlier failure is the
+ * exact outcome this ticket exists to prevent: a test that is started and never finished
+ * sits "In Progress" until Test Hub's ~60-min idle reap. A partial report — worse ordering,
+ * a missing log payload — is strictly better than an unterminated test run.
+ *
+ * The first error is retained and rethrown so the caller still logs a real failure rather
+ * than silently reporting success.
+ */
 async function emitSkipReport({ framework, test, result, suiteTitle }: QueuedSkip): Promise<void> {
     // LOG_REPORT/POST is what loads the result into the instance (loadTestResult is
     // gated on it, not on TEST/POST) — same sequence afterTest uses
-    await framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test })
-    await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
-    await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result })
-    await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result, suiteTitle })
+    const steps: Array<[State, State, Record<string, unknown>]> = [
+        [TestFrameworkState.INIT_TEST, HookState.PRE, { test }],
+        [TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle }],
+        [TestFrameworkState.LOG_REPORT, HookState.POST, { test, result }],
+        [TestFrameworkState.TEST, HookState.POST, { test, result, suiteTitle }],
+    ]
+
+    let firstError: unknown
+    for (const [state, hook, args] of steps) {
+        try {
+            await framework.trackEvent(state, hook, args)
+        } catch (err: unknown) {
+            firstError ??= err
+        }
+    }
+    if (firstError !== undefined) {
+        throw firstError
+    }
 }
 
 export function markTestStarted(identifier: string) {
@@ -88,21 +113,42 @@ export function drainSkipReports(): Promise<void> {
     return reportChain
 }
 
-export function reportSkippedTest(framework: TestFramework, identifier: string, test: Frameworks.Test, suiteTitle?: string): Promise<void> {
+export function reportSkippedTest(
+    framework: TestFramework,
+    identifier: string,
+    test: Frameworks.Test,
+    suiteTitle?: string,
+    options?: { immediate?: boolean }
+): Promise<void> {
     if (startedTests.has(identifier) || reportedSkips.has(identifier)) {
         return reportChain
     }
     reportedSkips.add(identifier)
     const result = { passed: false, skipped: true } as Frameworks.TestResult
-    // SDK-7493: queue only — see the QueuedSkip docs above. Emitting here would interleave
-    // this skip's events with whatever test is currently running.
+    const queued: QueuedSkip = { framework, test, result, suiteTitle }
+
+    // SDK-7493: only the DETACHED caller needs deferring. `immediate` is for callers wdio
+    // awaits — the hook cascade (afterHook) and the bail cascade (afterTest). Those never had
+    // the interleave, because wdio holds the lifecycle open until they resolve, so nothing else
+    // can claim the tracked slot underneath them. Deferring those too would be a behaviour
+    // change for no benefit: their skips would move to end-of-run and their reports would no
+    // longer be part of the hook/test they belong to.
+    if (options?.immediate) {
+        reportChain = reportChain.then(() => emitSkipReport(queued)).catch((err: unknown) => {
+            BStackLogger.debug(`Failed reporting skipped test '${identifier}': ${err}`)
+        })
+        return reportChain
+    }
+
+    // The un-awaited `onTestSkip` path: queue it — see the QueuedSkip docs above. Emitting here
+    // would interleave this skip's events with whatever test is currently running.
     //
     // Tradeoff: delivery now depends on service.after() running. If the worker dies before it
     // (SIGKILL, OOM, a teardown error that skips after()), queued skips are dropped with no
     // send attempted, where the old inline path would at least have tried. Accepted because
     // the inline path is the bug being fixed, and an aborted worker already leaves its
     // in-progress test runs to Test Hub's idle reap regardless.
-    queuedSkips.push({ framework, test, result, suiteTitle })
+    queuedSkips.push(queued)
     return reportChain
 }
 
@@ -110,6 +156,11 @@ export function reportSkippedTest(framework: TestFramework, identifier: string, 
  * Port of the legacy insights-handler skip propagation: when a BEFORE_ALL/BEFORE_EACH/
  * AFTER_EACH hook fails (or skips), mocha silently drops the remaining tests in the
  * suite — report each state-undefined test as skipped, recursing into nested describes.
+ *
+ * Reports IMMEDIATELY (SDK-7493): every caller of this — the failed-hook cascade in
+ * `afterHook` and the bail cascade in `afterTest` — is awaited by wdio, so these reports
+ * cannot interleave with a live test the way the un-awaited `onTestSkip` path could. They
+ * belong to the hook/test being reported, so they must not slide to end-of-run.
  */
 export async function reportSuiteSkipped(framework: TestFramework, suite: { tests?: unknown[], suites?: unknown[] }): Promise<void> {
     for (const t of (suite.tests || []) as MochaRuntimeTest[]) {
@@ -128,7 +179,7 @@ export async function reportSuiteSkipped(framework: TestFramework, suite: { test
             file: t.file,
             ctx: { test: { parent: t.parent } }
         } as unknown as Frameworks.Test
-        await reportSkippedTest(framework, identifier, synthetic, parentTitle)
+        await reportSkippedTest(framework, identifier, synthetic, parentTitle, { immediate: true })
     }
     for (const sub of (suite.suites || []) as { tests?: unknown[], suites?: unknown[] }[]) {
         await reportSuiteSkipped(framework, sub)

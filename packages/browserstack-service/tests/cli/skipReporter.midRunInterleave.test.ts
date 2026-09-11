@@ -86,6 +86,33 @@ describe('skipReporter — a skip must not interleave with a running test (SDK-7
         ])
     })
 
+    it('still attempts TEST/POST when an earlier lifecycle event rejects', async () => {
+        // TEST/POST is what produces the TestRunFinished. Bailing out of the sequence on an
+        // earlier failure would leave the test started-but-never-finished — i.e. "In Progress"
+        // until the ~60-min reap, which is the whole defect this ticket is about.
+        const seen: string[] = []
+        const framework = {
+            trackEvent: vi.fn().mockImplementation(async (state: unknown, hook: unknown) => {
+                const name = `${String(state).split('.')[1]}/${String(hook).split('.')[1]}`
+                seen.push(name)
+                if (name === 'TEST/PRE') {
+                    throw new Error('transport blip on TEST/PRE')
+                }
+            })
+        } as unknown as TestFramework
+
+        void reportSkippedTest(framework, 'Test A - rejects midway', makeTest('rejects midway'), 'Test A')
+        await drainSkipReports()
+
+        // every step attempted, in order, despite the rejection in the middle
+        expect(seen).toEqual([
+            'INIT_TEST/PRE',
+            'TEST/PRE',
+            'LOG_REPORT/POST',
+            'TEST/POST',
+        ])
+    })
+
     it('delivers every queued skip — none is dropped when several queue up', async () => {
         const framework = { trackEvent: vi.fn().mockResolvedValue(undefined) } as unknown as TestFramework
 
