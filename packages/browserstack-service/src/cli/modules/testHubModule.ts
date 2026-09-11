@@ -38,8 +38,23 @@ export default class TestHubModule extends BaseModule {
      * slot with a fresh instance for the next test — so it stays valid across tests.
      * Flushed at the next test's first event (INIT_TEST / TEST PRE) or, for the worker's
      * last test, from service.after() via flushPendingTestFinishEvent().
+     *
+     * SDK-7493: keyed by test uuid, NOT a single slot. wdio does not await `onTestSkip`, so a
+     * skip report runs detached and can interleave with a live test — its events land between
+     * the live test's own, on the same per-worker tracked-instance context. With one slot the
+     * second stash silently REPLACED the first (the old guard only flushed when the instance
+     * OBJECT differed, and an interleave can present the same object), so one test's
+     * TestRunFinished was never sent and TRA left it rendering "In Progress" until the ~60-min
+     * idle reap. A map cannot evict: every deferred finish is delivered, each under its own uuid.
+     *
+     * NOTE ON REDUNDANCY: SDK-7493's queue-and-drain (skipReporter) already stops a skip report
+     * running while a test is in flight, so on the normal path that collision can no longer be
+     * triggered and this map is not the primary fix. It is retained deliberately as
+     * defence-in-depth for a reporting path with a real incident history (SDK-7265, SDK-7493,
+     * ~60-min reaps): if any future caller reintroduces an interleave, the worst case degrades
+     * to a late send rather than a silently lost TestRunFinished.
      */
-    private pendingTestFinish: { args: Record<string, unknown> } | null = null
+    private pendingTestFinishes: Map<string, { args: Record<string, unknown>, uuid: string }> = new Map()
 
     /**
      * Create a new TestHubModule
@@ -84,7 +99,7 @@ export default class TestHubModule extends BaseModule {
         // A NEW test is starting (INIT_TEST minted a fresh instance) — the previous test's
         // after-each hook window is definitively over, so flush its deferred finish first
         // (payload build is synchronous, so gRPC send order is preserved).
-        if (this.pendingTestFinish && (testState === TestFrameworkState.INIT_TEST || (testState === TestFrameworkState.TEST && hookState === HookState.PRE))) {
+        if (this.pendingTestFinishes.size > 0 && (testState === TestFrameworkState.INIT_TEST || (testState === TestFrameworkState.TEST && hookState === HookState.PRE))) {
             this.flushPendingTestFinishEvent()
         }
         if (testState === TestFrameworkState.LOG) {
@@ -119,13 +134,16 @@ export default class TestHubModule extends BaseModule {
             if (testState === TestFrameworkState.TEST && hookState === HookState.POST && frameworkName.toLowerCase().includes('mocha')) {
                 // Defer the TestRunFinished send past the Mocha after-each hook window so
                 // custom tags set in `afterEach` still make the payload (see field docs).
-                // If a previous finish is somehow still pending for a DIFFERENT test, flush
-                // it first; a re-stash for the same instance just replaces the stash.
-                if (this.pendingTestFinish && (this.pendingTestFinish.args.instance as TestFrameworkInstance) !== instance) {
-                    this.flushPendingTestFinishEvent()
-                }
-                this.pendingTestFinish = { args }
-                this.logger.debug('onAllTestEvents: deferred TEST/POST send past the after-each hook window')
+                // SDK-7493: key the stash by the test's uuid, captured NOW. Two different tests
+                // can present the same tracked instance when a detached skip report interleaves
+                // with a live test, so keying on the instance object silently dropped one of the
+                // two finishes. Re-stashing the SAME uuid (e.g. the LOG_REPORT/POST recovery
+                // re-entry below) correctly replaces only that test's own entry.
+                const deferUuid = String(
+                    TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) || instance.getRef()
+                )
+                this.pendingTestFinishes.set(deferUuid, { args, uuid: deferUuid })
+                this.logger.debug(`onAllTestEvents: deferred TEST/POST send past the after-each hook window (uuid=${deferUuid}, pending=${this.pendingTestFinishes.size})`)
             } else {
                 this.sendTestFrameworkEvent(args)
             }
@@ -140,34 +158,45 @@ export default class TestHubModule extends BaseModule {
      * next test's boundary and from service.after() at worker end.
      */
     flushPendingTestFinishEvent(): Promise<void> | undefined {
-        if (!this.pendingTestFinish) {
+        if (this.pendingTestFinishes.size === 0) {
             return undefined
         }
-        const { args } = this.pendingTestFinish
-        this.pendingTestFinish = null
-        this.logger.debug('flushPendingTestFinishEvent: sending deferred TEST/POST event')
+        // Drain every pending finish, not just the newest. Take and clear the whole batch up
+        // front so a concurrent stash (the detached skip chain) starts a fresh entry rather
+        // than being swallowed by this in-flight drain.
+        const batch = [...this.pendingTestFinishes.values()]
+        this.pendingTestFinishes.clear()
+        this.logger.debug(`flushPendingTestFinishEvent: sending ${batch.length} deferred TEST/POST event(s)`)
+
         // SDK-7265: this is the only send of a mocha test's TestRunFinished, and the worker's last
         // test relies on this single flush from service.after(). A dropped send orphans the test →
         // Test Hub reaps it at its ~60-min idle timeout → the passing build is stamped `timeout`.
-        // Retry with backoff. `args` is captured locally and the shared slot is only cleared (never
-        // written back), so concurrent flushes can't clobber one another.
+        // Retry with backoff. Each entry is captured locally, so concurrent flushes can't clobber
+        // one another.
         const maxAttempts = 3
-        const attempt = (n: number): Promise<void> =>
-            this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST' }).then((sent) => {
-                if (sent) {
-                    return
-                }
-                this.logger.debug(`flushPendingTestFinishEvent: attempt ${n}/${maxAttempts} failed`)
-                if (n >= maxAttempts) {
-                    this.logger.error('flushPendingTestFinishEvent: deferred TEST/POST send failed after all retries')
-                    return
-                }
-                return new Promise<void>((resolve) => setTimeout(resolve, 200 * n)).then(() => attempt(n + 1))
-            })
-        return attempt(1)
+        const sendOne = ({ args, uuid }: { args: Record<string, unknown>, uuid: string }): Promise<void> => {
+            // SDK-7493: pin the uuid captured at DEFER time. The payload is otherwise serialized
+            // from the instance's live data at send time, and an interleaved skip report can have
+            // rewritten the uuid on that instance since — which would close the wrong test_run and
+            // leave this one open forever.
+            const attempt = (n: number): Promise<void> =>
+                this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST', uuid }).then((sent) => {
+                    if (sent) {
+                        return
+                    }
+                    this.logger.debug(`flushPendingTestFinishEvent: uuid=${uuid} attempt ${n}/${maxAttempts} failed`)
+                    if (n >= maxAttempts) {
+                        this.logger.error(`flushPendingTestFinishEvent: deferred TEST/POST send failed after all retries (uuid=${uuid})`)
+                        return
+                    }
+                    return new Promise<void>((resolve) => setTimeout(resolve, 200 * n)).then(() => attempt(n + 1))
+                })
+            return attempt(1)
+        }
+        return Promise.all(batch.map(sendOne)).then(() => undefined)
     }
 
-    async sendTestFrameworkEvent(args: Record<string, unknown>, stateOverride?: { testFrameworkState: string, testHookState: string }): Promise<boolean> {
+    async sendTestFrameworkEvent(args: Record<string, unknown>, stateOverride?: { testFrameworkState: string, testHookState: string, uuid?: string }): Promise<boolean> {
         try {
             const testArgs = args as { test: Frameworks.Test, instance: TestFrameworkInstance }
             const instance = testArgs.instance as TestFrameworkInstance
@@ -182,11 +211,24 @@ export default class TestHubModule extends BaseModule {
 
             this.logger.debug(`sendTestFrameworkEvent for testState: ${testFrameworkState} hookState: ${testHookState}`)
             const platformIndex = process.env.WDIO_WORKER_ID ? parseInt(process.env.WDIO_WORKER_ID.split('-')[0]) : 0
-            const uuid = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) || instance.getRef()
+            // SDK-7493: a deferred flush pins the uuid captured when the finish was stashed;
+            // reading it live here can pick up another test's uuid if an interleaved skip
+            // report rewrote it on this instance in the meantime.
+            const uuid = stateOverride?.uuid || TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) || instance.getRef()
             // Nested values such as test_hooks_started/test_hooks_finished are JS Maps, which
             // JSON.stringify would serialise to `{}` and strip the hook data. Convert any Map to
             // a plain object so the binary receives populated hook maps.
-            const eventJson = Buffer.from(JSON.stringify(Object.fromEntries(testData), (_key, value) => value instanceof Map ? Object.fromEntries(value) : value))
+            // SDK-7493: the pinned uuid must go INSIDE event_json too, not just the top-level
+            // field. The binary routes a mocha test_run on the uuid it parses out of this blob —
+            // `webdriverio/index.js` does `const event = JSON.parse(eventJson)` and the mocha
+            // handler builds the test run with `uuid: event.test_uuid` — so a stale `test_uuid`
+            // here would close the wrong run and leave the deferred one open, which is the very
+            // failure the pin exists to prevent. Overriding a copy keeps the instance untouched.
+            const eventData = Object.fromEntries(testData)
+            if (stateOverride?.uuid) {
+                eventData[TestFrameworkConstants.KEY_TEST_UUID] = stateOverride.uuid
+            }
+            const eventJson = Buffer.from(JSON.stringify(eventData, (_key, value) => value instanceof Map ? Object.fromEntries(value) : value))
             const executionContext = { hash: trackedContext.getId(), threadId: trackedContext.getThreadId().toString(), processId: trackedContext.getProcessId().toString() }
             const payload: Omit<TestFrameworkEventRequest, 'binSessionId'> = {
                 platformIndex,
