@@ -33,8 +33,6 @@ export const EVENTS = {
     SDK_AUTOMATION_FRAMEWORK_STOP: 'sdk:automationFrameworkStop',
     SDK_ACCESSIBILITY_CONFIG: 'sdk:accessibilityConfig',
     SDK_OBSERVABILITY_CONFIG: 'sdk:observabilityConfig',
-    SDK_AI_SELF_HEAL_STEP: 'sdk:aiSelfHealStep',
-    SDK_AI_SELF_HEAL_GET_RESULT: 'sdk:aiSelfHealGetResult',
     SDK_TEST_FRAMEWORK_EVENT: 'sdk:testFrameworkEvent',
     SDK_TEST_SESSION_EVENT: 'sdk:testSessionEvent',
     SDK_CLI_LOG_CREATED_EVENT: 'sdk:cli:logCreatedEvent',
@@ -149,14 +147,6 @@ export const FRAMEWORK_EVENTS = {
 export const CONFIG_EVENTS = {
     ACCESSIBILITY: EVENTS.SDK_ACCESSIBILITY_CONFIG,
     OBSERVABILITY: EVENTS.SDK_OBSERVABILITY_CONFIG
-}
-
-/**
- * AI self-healing events
- */
-export const AI_EVENTS = {
-    SELF_HEAL_STEP: EVENTS.SDK_AI_SELF_HEAL_STEP,
-    SELF_HEAL_GET_RESULT: EVENTS.SDK_AI_SELF_HEAL_GET_RESULT
 }
 
 /**
