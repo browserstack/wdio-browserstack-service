@@ -84,6 +84,15 @@ class _AccessibilityHandler {
      * cucumber goes through beforeScenario/afterScenario instead.
      */
     private static readonly TEST_HOOK_FRAMEWORKS = ['mocha', 'jasmine']
+    // Frameworks whose config-level hooks are covered by the pre-test window. Jasmine is
+    // excluded deliberately — App Accessibility is not supported there and its behaviour must
+    // not change; multiremote is excluded in the guard below, having no session id to gate on.
+    private static readonly PRE_TEST_SCAN_FRAMEWORKS = ['mocha', 'cucumber']
+
+    // Latched at the first framework hook or test of the session and never reset. Before it, a
+    // scan can only have come from a WDIO config hook; after it everything behaves as it always
+    // has, so nothing downstream of the first test changes.
+    private _testContextSeen = false
     private _platformA11yMeta: PlatformA11yMeta
     private _caps: Capabilities.ResolvedTestrunnerCapabilities
     private _suiteFile?: string
@@ -243,7 +252,9 @@ class _AccessibilityHandler {
         }
 
         browserWithA11y.performScan = async () => {
-            const results = await performA11yScan(this.isAppAutomate, (this._browser as WebdriverIO.Browser), isBrowserstackSession(this._browser), this._accessibility)
+            // Same parentage rule as the auto path, and the hook uuid the manual path never carried
+            // — a manual scan inside a framework hook used to land as a NULL hook row.
+            const results = await performA11yScan(this.isAppAutomate, (this._browser as WebdriverIO.Browser), isBrowserstackSession(this._browser), this._accessibility, undefined, undefined, this._currentHookRunUuid, this.hasNoParent)
             if (results) {
                 this._testMetadata[this._testIdentifier as string] = {
                     scanTestForAccessibility : true,
@@ -282,6 +293,19 @@ class _AccessibilityHandler {
         if (!this._accessibility) {
             return
         }
+
+        // WDIO's config-level hooks run before any test exists, so the per-test gate below has
+        // not been computed yet and driver commands issued there went unscanned. Every other
+        // validation still applies — an a11y-capable session (returned above), autoScanning, a
+        // supported framework, a real session id. The include/exclude tag filter is the one
+        // exception: it matches on suite and test titles, and neither exists yet.
+        //
+        // The framework allowlist is about SCANNING, not about attribution: App Accessibility is
+        // not supported on jasmine, so it must gain no scans it did not have before.
+        if (this._autoScanning && this.supportsPreTestWindow() && sessionId) {
+            AccessibilityHandler._a11yScanSessionMap[sessionId] = true
+            BStackLogger.debug('Accessibility scan gate opened ahead of the first test')
+        }
         if (!('overwriteCommand' in this._browser && Array.isArray(accessibilityScripts.commandsToWrap))) {
             return
         }
@@ -304,8 +328,20 @@ class _AccessibilityHandler {
 
     }
 
+    // Nothing can own a scan before the framework has started anything. Defined once: the auto
+    // path and the user-facing performScan() must not answer this differently.
+    private get hasNoParent(): boolean {
+        return !this._currentHookRunUuid && !this._testContextSeen
+    }
+
+    private supportsPreTestWindow(): boolean {
+        return AccessibilityHandler.PRE_TEST_SCAN_FRAMEWORKS.includes(this._framework as string) &&
+            !this._browser?.isMultiremote
+    }
+
     async beforeTest (suiteTitle: string | undefined, test: Frameworks.Test) {
         try {
+            this._testContextSeen = true
             if (
                 !AccessibilityHandler.TEST_HOOK_FRAMEWORKS.includes(this._framework as string) ||
                 !this.shouldRunTestHooks(this._browser, this._accessibility)
@@ -385,6 +421,7 @@ class _AccessibilityHandler {
       * Cucumber Only
     */
     async beforeScenario (world: ITestCaseHookParameter) {
+        this._testContextSeen = true
         const pickleData = world.pickle
         const gherkinDocument = world.gherkinDocument
         const featureData = gherkinDocument.feature
@@ -465,6 +502,7 @@ class _AccessibilityHandler {
      */
     async beforeHook (test: Frameworks.Test | undefined, context: unknown, hookRunUuid?: string | null) {
         try {
+            this._testContextSeen = true
             if (!this._accessibility || !this.shouldRunTestHooks(this._browser, this._accessibility)) {
                 return
             }
@@ -513,7 +551,16 @@ class _AccessibilityHandler {
                 )
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
-            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid)
+            // Parentless only before the framework has started anything: no hook run to own the
+            // scan and no test seen yet in this session. Once either has happened the latch stays
+            // set, so every later hook keeps the attribution it has always had.
+            // See the CLI module: the gate outlives the session now, and a scan attempted after
+            // the session is gone logs an error where main was silent.
+            if (!(this._browser as WebdriverIO.Browser)?.sessionId) {
+                BStackLogger.debug('Skipping accessibility scan: the session has ended')
+            } else {
+                await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this.hasNoParent)
+            }
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)
         }
