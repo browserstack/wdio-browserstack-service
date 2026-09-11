@@ -353,6 +353,13 @@ export interface ScreenshotLog extends LogData {
     kind: 'TEST_SCREENSHOT'
 }
 
+/** Which run the attachment hangs off; the binary switches on this to pick the uuid field. */
+export type AttachmentLevel = 'TestLevel' | 'HookLevel' | 'BuildLevel'
+
+export interface AttachmentOptions {
+    buildAttachment?: boolean
+}
+
 export interface LaunchResponse {
     jwt: string,
     build_hashed_id: string,
