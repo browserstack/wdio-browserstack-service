@@ -27,6 +27,9 @@ interface SessionData {
     lastTestName: string
     appliedName?: string // last name successfully PUT for this session, for de-duping
     testResults: Map<string, TestResult> // testName -> TestResult
+    scenariosRan: number // non-skipped cucumber scenarios, for preferScenarioName
+    lastScenarioName?: string
+    preferScenarioName?: boolean
 }
 
 export default class AutomateModule extends BaseModule {
@@ -46,6 +49,10 @@ export default class AutomateModule extends BaseModule {
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.POST, this.onAfterTest.bind(this))
         TestFramework.registerObserver(AutomationFrameworkState.EXECUTE, HookState.POST, this.onAfterExecute.bind(this))
+        // Build-level hooks carry no scenario result, so they reach the session verdict only
+        // through their own state. See onBuildLevelHookEnd — cucumber-gated inside the handler.
+        TestFramework.registerObserver(TestFrameworkState.BEFORE_ALL, HookState.POST, this.onBuildLevelHookEnd.bind(this, 'BEFORE_ALL'))
+        TestFramework.registerObserver(TestFrameworkState.AFTER_ALL, HookState.POST, this.onBuildLevelHookEnd.bind(this, 'AFTER_ALL'))
     }
 
     getModuleName(): string {
@@ -63,8 +70,20 @@ export default class AutomateModule extends BaseModule {
         const suiteTitle = args.suiteTitle as string
         const testContextOptions = this.config.testContextOptions as TestContextOptions
 
-        if (testContextOptions.skipSessionName || !isBrowserstackSession(browser)) {
+        if (!isBrowserstackSession(browser)) {
+            return
+        }
+
+        // `setSessionName: false` suppresses the NAME, not the registration. The session still has
+        // to enter sessionMap or onAfterExecute has nothing to status-mark, and legacy marks it
+        // either way — its `after()` status block gates on setSessionStatus alone. Registering with
+        // an empty lastTestName is safe: flushSessionName early-returns both on the flag and on an
+        // empty name, so no name can be sent from here.
+        if (testContextOptions.skipSessionName) {
             this.logger.info('Skipping session name update as per configuration')
+            if (sessionId && !this.sessionMap.has(sessionId)) {
+                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map(), scenariosRan: 0 })
+            }
             return
         }
 
@@ -88,7 +107,8 @@ export default class AutomateModule extends BaseModule {
         if (!existingSession) {
             this.sessionMap.set(sessionId, {
                 lastTestName: name,
-                testResults: new Map()
+                testResults: new Map(),
+                scenariosRan: 0
             })
         } else {
             existingSession.lastTestName = name
@@ -185,12 +205,12 @@ export default class AutomateModule extends BaseModule {
         // (service.onReload has already pointed KEY_FRAMEWORK_SESSION_ID at it) and adopt it while
         // it is still open.
         //
-        // Deliberately gated on skipSessionName, NOT skipSessionStatus: naming and status are
-        // independent options, so a `setSessionStatus: false` user must still get the name repair,
-        // and a `setSessionName: false` user must not be pulled into sessionMap — that would hand
-        // onAfterExecute a session to status-mark where it previously had none.
-        if (sessionId && !testContextOptions.skipSessionName && !this.sessionMap.has(sessionId)) {
-            this.sessionMap.set(sessionId, { lastTestName: name, testResults: new Map() })
+        // Registration is independent of both opt-outs: `setSessionStatus: false` must still get the
+        // name repair, and `setSessionName: false` must still be status-marked. The name is what the
+        // flag suppresses, so a skipped-name session registers with an empty lastTestName.
+        if (sessionId && !this.sessionMap.has(sessionId)) {
+            const repairName = testContextOptions.skipSessionName ? '' : name
+            this.sessionMap.set(sessionId, { lastTestName: repairName, testResults: new Map(), scenariosRan: 0 })
         }
         // No-op for the steady state: when no mid-test reload happened, onBeforeTest already
         // applied this exact name and `appliedName` de-dupes it away — no extra API call.
@@ -209,12 +229,105 @@ export default class AutomateModule extends BaseModule {
 
         const sessionData = this.sessionMap.get(sessionId)
         if (sessionData) {
-            sessionData.testResults.set(name, testResult)
+            // `name` is the session NAME, which for cucumber is the Feature title and therefore
+            // shared by every scenario in the file — keying the results map on it collapses N
+            // scenarios into one last-write-wins entry, so a feature whose last scenario passes
+            // reports a passed session however many earlier ones failed. Mocha leaves `fullName`
+            // undefined, so the key is unchanged there.
+            const resultKey = (test && test.fullName) ? String(test.fullName) : name
+            sessionData.testResults.set(resultKey, testResult)
+            if (!skipped && this.isCucumberInstance(instace)) {
+                sessionData.scenariosRan++
+                sessionData.lastScenarioName = testTitle
+                sessionData.preferScenarioName = isTrue(args.preferScenarioName)
+            }
             this.sessionMap.set(sessionId, sessionData)
         }
 
         TestFramework.setState(instace, TestFrameworkConstants.KEY_AUTOMATE_SESSION_STATUS, status)
         TestFramework.setState(instace, TestFrameworkConstants.KEY_AUTOMATE_SESSION_REASON, reason)
+    }
+
+    /**
+     * A `BeforeAll` / `AfterAll` failure produces no scenario result, so it can never enter the
+     * per-test `testResults` map that onAfterExecute aggregates — a run whose BeforeAll blew up
+     * reports its session as PASSED. Legacy pushed the hook error into `_failReasons` and
+     * `after()` marked the session failed; that whole accumulation is gated
+     * `setSessionStatus && !BrowserstackCLI.isRunning()`, so it is dead while the binary is up.
+     *
+     * Cucumber-gated deliberately. `wdio_mocha` has the identical latent shape on this flow, but
+     * legacy mocha behaved the same way, so repairing it here would be an unrequested behaviour
+     * change to the one framework already working on the CLI flow.
+     */
+    async onBuildLevelHookEnd(hookKey: string, args: Record<string, unknown>) {
+        try {
+            const instance = (args?.instance as TestFrameworkInstance) || TestFramework.getTrackedInstance()
+            if (!instance || !this.isCucumberInstance(instance)) {
+                return
+            }
+
+            const result = args?.result as { passed?: boolean, error?: Error } | undefined
+            if (!result || result.passed) {
+                return
+            }
+
+            const testContextOptions = this.config.testContextOptions as TestContextOptions
+            if (testContextOptions?.skipSessionStatus) {
+                return
+            }
+
+            const autoInstance = AutomationFramework.getTrackedInstance()
+            const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
+            if (!sessionId) {
+                this.logger.debug(`onBuildLevelHookEnd: no session id resolved for ${hookKey}; nothing to mark`)
+                return
+            }
+
+            const sessionData = this.sessionMap.get(sessionId)
+            // Keyed on the absence of scenario results, never on the flag: legacy's
+            // `ignoreHooksStatus && this._specsRan` arm needs BOTH, and with no scenario recorded it
+            // falls through to marking `failed` regardless of the flag. The count is final here — a
+            // `BeforeAll` failure aborts the run, and by `AfterAll` every scenario has been recorded.
+            const specsRan = (sessionData?.testResults.size ?? 0) > 0
+            if (specsRan && isTrue(args?.ignoreHooksStatus)) {
+                this.logger.debug(`onBuildLevelHookEnd: ${hookKey} failed but ignoreHooksStatus is set; not failing the session`)
+                return
+            }
+
+            if (!sessionData) {
+                // A BeforeAll can fail before any scenario ran, so the session may not be
+                // registered yet. `lastTestName` stays empty on purpose — flushSessionName
+                // early-returns on it, so registering here cannot rename the session.
+                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map(), scenariosRan: 0 })
+            }
+
+            const name = this.resolveHookName(instance, hookKey)
+            this.sessionMap.get(sessionId)!.testResults.set(name, {
+                testName: name,
+                status: 'failed',
+                reason: (result.error && result.error.message) || 'Hook failed'
+            })
+            this.logger.info(`onBuildLevelHookEnd: recorded ${hookKey} failure against session ${sessionId}`)
+        } catch (error) {
+            this.logger.error(`Exception in automate onBuildLevelHookEnd: ${error}`)
+        }
+    }
+
+    private isCucumberInstance(instance: TestFrameworkInstance): boolean {
+        const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
+        return frameworkName.toLowerCase().includes('cucumber')
+    }
+
+    /** The hook's reported name (`BEFORE_ALL for <feature>`), so the session reason names the hook. */
+    private resolveHookName(instance: TestFrameworkInstance, hookKey: string): string {
+        try {
+            const finished = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOKS_FINISHED) as Map<string, Record<string, unknown>[]> | undefined
+            const hooks = finished?.get(hookKey)
+            const hookName = hooks?.length ? hooks[hooks.length - 1][TestFrameworkConstants.KEY_HOOK_NAME] : undefined
+            return (hookName as string) || hookKey
+        } catch {
+            return hookKey
+        }
     }
 
     async onAfterExecute() {
@@ -242,6 +355,15 @@ export default class AutomateModule extends BaseModule {
                     }
                 }
 
+                // preferScenarioName: cucumber names the session after the FEATURE, but when
+                // exactly one non-skipped scenario ran the user can ask for that scenario's name
+                // instead. Only decidable here — "exactly one" is not knowable while tests are
+                // still arriving. `skipSessionName` still wins, inside flushSessionName.
+                if (sessionData.preferScenarioName && sessionData.scenariosRan === 1 && sessionData.lastScenarioName) {
+                    sessionData.lastTestName = sessionData.lastScenarioName
+                    this.sessionMap.set(sessionId, sessionData)
+                }
+
                 // Final sweep — a no-op for sessions already named per-test in onBeforeTest.
                 await this.flushSessionName(sessionId)
 
@@ -266,29 +388,64 @@ export default class AutomateModule extends BaseModule {
         return this.hasAppCapInFrameworkState()
     }
 
+    // The binary echoes the parsed `turboScale` flag back on the session config; the env var is
+    // written unconditionally by the service constructor in this same worker process, so it stands
+    // in when a config shape predates the flag.
+    private isTurboScale(): boolean {
+        return isTrue(this.config.turboScale) || isTrue(process.env.BROWSERSTACK_TURBOSCALE_INTERNAL)
+    }
+
+    /**
+     * Resolve the REST endpoint a session marker must hit.
+     *
+     * Turboscale is not a variant of Automate here — it is a different API on a different path
+     * with a different VERB (PATCH, not PUT). The legacy path expressed this through
+     * `_sessionBaseUrl` + `_update()`, both gated `!BrowserstackCLI.isRunning()`, so neither
+     * survives onto the CLI flow and nothing in the binary compensates.
+     *
+     * Precedence mirrors legacy's assignment order in `beforeSession()`: the turboscale base URL
+     * is assigned AFTER the app-automate one, so a turboscale grid wins even with an app cap set.
+     *
+     * Single resolver for both markers deliberately: naming and status previously duplicated the
+     * ternary, which is how the two can drift apart.
+     */
+    private resolveSessionApi(sessionId: string): { url: string, method: 'PUT' | 'PATCH', product: string } {
+        if (this.isTurboScale()) {
+            return {
+                url: `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate-turboscale/v1/sessions/${sessionId}.json`,
+                method: 'PATCH',
+                product: 'Automate TurboScale'
+            }
+        }
+        if (this.isAppAutomate()) {
+            return {
+                url: `${APIUtils.BROWSERSTACK_AA_API_URL}/app-automate/sessions/${sessionId}.json`,
+                method: 'PUT',
+                product: 'App Automate'
+            }
+        }
+        return {
+            url: `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate/sessions/${sessionId}.json`,
+            method: 'PUT',
+            product: 'Automate'
+        }
+    }
+
     async markSessionName(sessionId: string, sessionName: string, config: { user: string; key: string; }): Promise<void> {
         return await PerformanceTester.measureWrapper(
             PERFORMANCE_SDK_EVENTS.AUTOMATE_EVENTS.SESSION_NAME,
             async (sessionId: string, sessionName: string, config: { user: string; key: string; }) => {
                 try {
                     const auth = Buffer.from(`${config.user}:${config.key}`).toString('base64')
-                    const isAppAutomate = this.isAppAutomate()
-                    if (isAppAutomate) {
-                        this.logger.info('Marking session name for App Automate')
-                    } else {
-                        this.logger.info('Marking session name for Automate')
-                    }
-
-                    const sessionNameApiUrl = isAppAutomate
-                        ? `${APIUtils.BROWSERSTACK_AA_API_URL}/app-automate/sessions/${sessionId}.json`
-                        : `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate/sessions/${sessionId}.json`
+                    const { url: sessionNameApiUrl, method, product } = this.resolveSessionApi(sessionId)
+                    this.logger.info(`Marking session name for ${product}`)
 
                     const requestBody = {
                         name: sessionName
                     }
 
                     const options = {
-                        method: 'PUT',
+                        method,
                         headers: {
                             Authorization: `Basic ${auth}`,
                             'Content-Type': 'application/json'
@@ -312,16 +469,8 @@ export default class AutomateModule extends BaseModule {
             async (sessionId: string, sessionStatus: 'passed' | 'failed', sessionErrorMessage: string | undefined, config: { user: string; key: string; }) => {
                 try {
                     const auth = Buffer.from(`${config.user}:${config.key}`).toString('base64')
-                    const isAppAutomate = this.isAppAutomate()
-                    if (isAppAutomate) {
-                        this.logger.info('Marking session status for App Automate')
-                    } else {
-                        this.logger.info('Marking session status for Automate')
-                    }
-
-                    const sessionStatusApiUrl = isAppAutomate
-                        ? `${APIUtils.BROWSERSTACK_AA_API_URL}/app-automate/sessions/${sessionId}.json`
-                        : `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate/sessions/${sessionId}.json`
+                    const { url: sessionStatusApiUrl, method, product } = this.resolveSessionApi(sessionId)
+                    this.logger.info(`Marking session status for ${product}`)
 
                     const body = {
                         status: sessionStatus,
@@ -329,7 +478,7 @@ export default class AutomateModule extends BaseModule {
                     }
 
                     const options = {
-                        method: 'PUT',
+                        method,
                         headers: {
                             Authorization: `Basic ${auth}`,
                             'Content-Type': 'application/json'

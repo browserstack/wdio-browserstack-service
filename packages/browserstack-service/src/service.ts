@@ -44,6 +44,7 @@ import { AutomationFrameworkState } from './cli/states/automationFrameworkState.
 import { HookState } from './cli/states/hookState.js'
 import { AutomationFrameworkConstants } from './cli/frameworks/constants/automationFrameworkConstants.js'
 import TestFramework from './cli/frameworks/testFramework.js'
+import WdioCucumberTestFramework from './cli/frameworks/wdioCucumberTestFramework.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
 import AccessibilityModule from './cli/modules/accessibilityModule.js'
@@ -301,6 +302,17 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     BStackLogger.error(`[Accessibility Test Run] Error in service class before function: ${err}`)
                 }
 
+                // The driver registration is an automation-lifecycle concern, not an observability
+                // one. With EVERY product off, shouldProcessEventForTesthub() closes (it is a
+                // disjunction over the three product flags, and '' bypasses the eventType guards),
+                // so the CREATE/POST event inside the block below never fires: onDriverCreated never
+                // runs, and the session goes unnamed and unmarked while browser.setCustomTags is
+                // never defined. This covers exactly that case — when the gate is open the block
+                // below still raises the event, so nothing fires twice.
+                if (BrowserstackCLI.getInstance().isRunning() && !shouldProcessEventForTesthub('')) {
+                    await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { browser: this._browser, hubUrl: this._config.hostname })
+                }
+
                 if (shouldProcessEventForTesthub('')) {
                     patchConsoleLogs()
 
@@ -439,7 +451,17 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // during any startup race, so a `!` here could throw a TypeError inside this awaited
             // WDIO hook and break the user's suite. Instrumentation must degrade quietly.
             const framework = BrowserstackCLI.getInstance().getTestFramework()
-            if (framework) {
+            if (framework instanceof WdioCucumberTestFramework) {
+                // A cucumber hook invocation carries no title, and BeforeAll/AfterAll pass no hook
+                // object at all, so getHookType — which matches Mocha's quoted titles — can only
+                // return 'unknown' here or throw on the property access. The framework classifies
+                // them from its own bookkeeping, and returns null for the step-scoped hooks that
+                // are deliberately never reported.
+                const hookFrameworkState = framework.classifyHookState(test as CucumberHook|undefined)
+                if (hookFrameworkState) {
+                    await framework.trackEvent(hookFrameworkState, HookState.PRE, { test })
+                }
+            } else if (framework) {
                 const hookFrameworkState = TestFrameworkState[getHookType((test as Frameworks.Test).title) as keyof typeof TestFrameworkState]
                 if (hookFrameworkState) {
                     await framework.trackEvent(hookFrameworkState, HookState.PRE, { test })
@@ -476,6 +498,23 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // Null-check the tracker rather than asserting (see beforeHook) so a missing tracker
             // degrades quietly instead of throwing inside this awaited hook.
             const framework = BrowserstackCLI.getInstance().getTestFramework()
+            if (framework instanceof WdioCucumberTestFramework) {
+                // Cucumber's taxonomy, not Mocha's titles — see beforeHook.
+                const hookFrameworkState = framework.classifyHookState(test as CucumberHook|undefined)
+                if (hookFrameworkState) {
+                    // ignoreHooksStatus rides the event so the cucumber-only policy stays out of
+                    // automateModule, which mocha and jasmine share.
+                    await framework.trackEvent(hookFrameworkState, HookState.POST, {
+                        test,
+                        result,
+                        ignoreHooksStatus: this._options.testObservabilityOptions?.ignoreHooksStatus === true
+                    })
+                }
+                if (hookFrameworkState === TestFrameworkState.BEFORE_ALL && result && !result.passed) {
+                    await this._reportCucumberScenariosSkipped(framework)
+                }
+                return
+            }
             if (framework) {
                 const hookFrameworkState = TestFrameworkState[getHookType((test as Frameworks.Test).title) as keyof typeof TestFrameworkState]
                 if (hookFrameworkState) {
@@ -495,6 +534,45 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
         await this._insightsHandler?.afterHook(test, result)
         await this._accessibilityHandler?.afterHook()
+    }
+
+    /**
+     * Cucumber abandons the whole feature when a `BeforeAll` throws, so every scenario in it
+     * (Rule-nested included) is reported SKIPPED rather than vanishing. Ports
+     * `insights-handler.processCucumberHook`, whose cascade publishes over the legacy HTTP
+     * listener and is inert once the binary is up.
+     *
+     * Sent straight to TestHub rather than via `framework.trackEvent()`: legacy called
+     * `listener.testFinished()` directly, so routing these through the observers would rename the
+     * session, stop accessibility and run a Percy teardown per skipped row — none of which legacy
+     * does.
+     */
+    private async _reportCucumberScenariosSkipped(framework: WdioCucumberTestFramework) {
+        try {
+            const testHubModule = BrowserstackCLI.getInstance().modules.TestHubModule as TestHubModule | undefined
+            if (!testHubModule) {
+                BStackLogger.debug('BEFORE_ALL cascade: TestHub module not loaded; skipped scenarios will not be reported')
+                return
+            }
+
+            const instances = framework.buildSkippedScenarioInstances()
+            for (const instance of instances) {
+                // Both halves: TestHub's v2 pipeline creates the row from the START event, so a
+                // lone TestRunSkipped is accepted and counted in no bucket. Legacy's v1 listener
+                // created the row from the skip itself, which is why it sent only one.
+                await testHubModule.sendTestFrameworkEvent(
+                    { instance },
+                    { testFrameworkState: 'TEST', testHookState: 'PRE' }
+                )
+                await testHubModule.sendTestFrameworkEvent(
+                    { instance },
+                    { testFrameworkState: 'TEST', testHookState: 'POST' }
+                )
+            }
+            BStackLogger.debug(`BEFORE_ALL cascade: reported ${instances.length} scenario(s) as skipped`)
+        } catch (err) {
+            BStackLogger.debug(`Exception reporting the BEFORE_ALL skip cascade: ${util.format(err)}`)
+        }
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeTest' })
@@ -643,8 +721,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
             PerformanceTester.start(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.QUIT)
 
             const { preferScenarioName, setSessionName, setSessionStatus } = this._options
-            // For Cucumber: If only 1 Scenario ran and preferScenarioName is enabled,
-            // use the scenario name instead of the feature name
+            // One scenario and preferScenarioName set: name the session after the scenario
+            // rather than the feature. Legacy-flow only — `_fullTitle` reaches the session through
+            // `_updateJob`, whose call sites are all gated `!isRunning()`; on the CLI flow
+            // automateModule keeps its own tally and applies this in onAfterExecute.
             if (preferScenarioName && this._scenariosRanCount === 1 && this._lastScenarioName) {
                 this._fullTitle = this._lastScenarioName
             }
@@ -819,7 +899,90 @@ export default class BrowserstackService implements Services.ServiceInstance {
         this._suiteTitle = feature.name
         await this._setSessionName(feature.name)
         await this._setAnnotation(`Feature: ${feature.name}`)
+
+        const cliFramework = this._cliCucumberFramework()
+        if (cliFramework) {
+            cliFramework.onFeatureStart(uri, feature)
+            return
+        }
         await this._insightsHandler?.beforeFeature(uri, feature)
+    }
+
+    /**
+     * The CLI test framework, only when it is the cucumber one and the CLI is actually running.
+     * Returns null on the legacy flow and on any startup race, so every call site degrades to the
+     * classic handlers instead of throwing inside an awaited WDIO hook.
+     */
+    private _cliCucumberFramework(): WdioCucumberTestFramework|null {
+        if (!BrowserstackCLI.getInstance().isRunning()) {
+            return null
+        }
+        const framework = BrowserstackCLI.getInstance().getTestFramework()
+        return framework instanceof WdioCucumberTestFramework ? framework : null
+    }
+
+    /**
+     * A `Frameworks.Test`-shaped view of a scenario, for the cli/modules that read `args.test`.
+     *
+     * `fullName` is set deliberately. automateModule's session naming is SHAPE-keyed
+     * (`else if (test && !test.fullName)`), so leaving it unset drops the scenario into the mocha
+     * arm and names the session `<feature> - <scenario>`; legacy names the session after the
+     * feature alone, which is what the populated `fullName` preserves.
+     */
+    private _cucumberTestView(world: ITestCaseHookParameter): Frameworks.Test {
+        const scenarioName = world.pickle?.name ?? ''
+        return {
+            title: scenarioName,
+            fullName: scenarioName,
+            parent: this._suiteTitle ?? '',
+            file: world.gherkinDocument?.uri,
+        } as unknown as Frameworks.Test
+    }
+
+    /**
+     * A `Frameworks.TestResult`-shaped view of a scenario result, for automateModule's
+     * session-status marking.
+     *
+     * Which statuses count as a session failure is `_failureStatuses`, NOT the passed/failed
+     * collapse the o11y result applies: cucumber's UNDEFINED / AMBIGUOUS / UNKNOWN fail the
+     * session on legacy while still being reported to Observability as `skipped`, and PENDING
+     * joins them only under `cucumberOpts.strict`. Reading the o11y collapse here instead marked
+     * a feature with an undefined step `passed` where legacy marks it `failed`.
+     */
+    private _cucumberTestResult(world: ITestCaseHookParameter): Frameworks.TestResult {
+        const status = world.result?.status?.toLowerCase()
+
+        // `ignoreHooksStatus` has to reach session marking as well as the o11y result. On the CLI
+        // flow automateModule derives the session status from this view alone —
+        // service.after()'s _failReasons accumulation, which applied the flag on the legacy path,
+        // is gated off while the binary is up. A missing framework keeps the raw status.
+        const ignoreHooksStatus = this._options.testObservabilityOptions?.ignoreHooksStatus === true
+        const hasStepFailures = this._cliCucumberFramework()?.hasStepFailures() ?? true
+        const hookOnlyFailure = ignoreHooksStatus && status === 'failed' && !hasStepFailures
+
+        const passed = status === 'passed' || hookOnlyFailure
+        const failed = !passed && status !== undefined && this._failureStatuses.includes(status)
+
+        // The statuses that only fail the session via `_failureStatuses` carry no `world.result
+        // .message` — PENDING under `cucumberOpts.strict`, and equally UNDEFINED / AMBIGUOUS — so
+        // automateModule falls back to its generic 'Unknown Error'. Legacy synthesises the reason
+        // in the same afterScenario() block that consults `_failureStatuses`; mirror it verbatim.
+        let error: Error | undefined
+        if (failed) {
+            error = new Error(world.result?.message || (status === 'pending'
+                ? `Some steps/hooks are pending for scenario "${world.pickle.name}"`
+                : 'Unknown Error'))
+        } else if (world.result?.message) {
+            error = new Error(world.result.message)
+        }
+
+        return {
+            passed,
+            skipped: !passed && !failed,
+            error,
+            duration: 0,
+            retries: { attempts: 0, limit: 0 },
+        } as unknown as Frameworks.TestResult
     }
 
     /**
@@ -829,9 +992,24 @@ export default class BrowserstackService implements Services.ServiceInstance {
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeScenario' })
     async beforeScenario (world: ITestCaseHookParameter) {
         this._currentTest = world
+        const scenarioName = world.pickle.name || 'unknown scenario'
+
+        // The scenario IS the unit of work, so it raises TEST/PRE — the state every cli/modules
+        // observer subscribes to. WDIO never calls beforeTest for cucumber, so there is no other
+        // moment at which the modules could be driven.
+        const cliFramework = this._cliCucumberFramework()
+        if (cliFramework) {
+            await cliFramework.trackEvent(TestFrameworkState.TEST, HookState.PRE, {
+                world,
+                test: this._cucumberTestView(world),
+                suiteTitle: this._suiteTitle,
+            })
+            await this._setAnnotation(`Scenario: ${scenarioName}`)
+            return
+        }
+
         await this._accessibilityHandler?.beforeScenario(world)
         await this._insightsHandler?.beforeScenario(world)
-        const scenarioName = world.pickle.name || 'unknown scenario'
         await this._setAnnotation(`Scenario: ${scenarioName}`)
     }
 
@@ -873,6 +1051,19 @@ export default class BrowserstackService implements Services.ServiceInstance {
             }
         }
 
+        const cliFramework = this._cliCucumberFramework()
+        if (cliFramework) {
+            await cliFramework.trackEvent(TestFrameworkState.TEST, HookState.POST, {
+                world,
+                test: this._cucumberTestView(world),
+                suiteTitle: this._suiteTitle,
+                result: this._cucumberTestResult(world),
+                ignoreHooksStatus: this._options.testObservabilityOptions?.ignoreHooksStatus === true,
+                preferScenarioName: this._options.preferScenarioName === true,
+            })
+            return
+        }
+
         await this._accessibilityHandler?.afterScenario(world)
         await this._insightsHandler?.afterScenario(world)
         await this._percyHandler?.afterScenario()
@@ -880,12 +1071,24 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeStep' })
     async beforeStep (step: Frameworks.PickleStep, scenario: Pickle) {
-        await this._insightsHandler?.beforeStep(step, scenario)
+        // Steps travel inside the scenario payload, never as their own wire event — this only
+        // feeds the bookkeeping the hook classifier reads.
+        const cliFramework = this._cliCucumberFramework()
+        if (cliFramework) {
+            cliFramework.onStepStart(step)
+        } else {
+            await this._insightsHandler?.beforeStep(step, scenario)
+        }
         await this._setAnnotation(`Step: ${step.keyword}${step.text}`)
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'afterStep' })
     async afterStep (step: Frameworks.PickleStep, scenario: Pickle, result: Frameworks.PickleResult) {
+        const cliFramework = this._cliCucumberFramework()
+        if (cliFramework) {
+            cliFramework.onStepEnd(step, result)
+            return
+        }
         await this._insightsHandler?.afterStep(step, scenario, result)
     }
 

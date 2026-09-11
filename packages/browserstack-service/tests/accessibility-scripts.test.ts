@@ -145,3 +145,36 @@ describe('getWritableDir', () => {
         expect(writableDir).toBe(process.cwd()) // Should return the second path
     })
 })
+
+describe('nonBStackInfraA11yChromeOptions across flows', () => {
+    const scripts: typeof AccessibilityScripts = AccessibilityScripts
+    const payload = (chromeOptions: unknown) => ({
+        commands: [],
+        scripts: { scan: 'scan', getResults: 'getResults', getResultsSummary: 'getResultsSummary', saveResults: 'saveResults' },
+        nonBStackInfraA11yChromeOptions: chromeOptions
+    } as unknown as Parameters<typeof scripts.update>[0])
+
+    beforeEach(() => {
+        scripts.ChromeExtension = {}
+    })
+
+    it('keeps the object the HTTP launch response delivers', () => {
+        scripts.update(payload({ args: ['--headless=new'], extensions: ['b64'] }))
+        expect(scripts.ChromeExtension).to.deep.equal({ args: ['--headless=new'], extensions: ['b64'] })
+    })
+
+    it('decodes the JSON string the gRPC response delivers', () => {
+        scripts.update(payload('{"args":["--headless=new"],"extensions":["b64"]}'))
+        expect(scripts.ChromeExtension).to.deep.equal({ args: ['--headless=new'], extensions: ['b64'] })
+    })
+
+    it('drops a value that is not an object instead of writing it into a capability', () => {
+        scripts.update(payload('[object Object]'))
+        expect(scripts.ChromeExtension).to.deep.equal({})
+    })
+
+    it('leaves the extension untouched when the capability set has no chrome options', () => {
+        scripts.update(payload(undefined))
+        expect(scripts.ChromeExtension).to.deep.equal({})
+    })
+})

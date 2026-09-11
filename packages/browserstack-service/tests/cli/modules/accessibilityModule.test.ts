@@ -648,10 +648,17 @@ describe('AccessibilityModule', () => {
             }
         })
 
-        it('captures the hook run uuid and opens the scan gate at hook start', async () => {
-            vi.mocked(TestFramework.getState).mockReturnValue('hook-uuid-123')
+        // The gate write is Mocha-only, exactly as legacy gates it. Keyed rather than blanket
+        // mock: the handler now reads the framework name off the instance too.
+        const mockInstanceState = (frameworkName: string) => {
+            vi.mocked(TestFramework.getState).mockImplementation((_i: any, key: string) =>
+                (key === 'test_framework_name' ? frameworkName : 'hook-uuid-123') as any)
             vi.mocked(AutomationFramework.getState).mockImplementation((instance: any, key: string) =>
                 (key.includes('session_id') ? 12345 : {}) as any)
+        }
+
+        it('captures the hook run uuid and opens the scan gate at hook start', async () => {
+            mockInstanceState('WebdriverIO-mocha')
 
             await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
 
@@ -659,9 +666,40 @@ describe('AccessibilityModule', () => {
             expect(accessibilityModule.accessibilityMap.get(12345)).toBe(true)
         })
 
+        // 8-C. Discriminating: identical call, opposite answers. Mocha's beforeEach precedes
+        // beforeTest so the re-open is harmless; cucumber's scenario boundary precedes its Before
+        // hooks, so the same write would permanently force the gate open and defeat the
+        // includeTagsInTestingScope / excludeTagsInTestingScope filtering.
+        it('does NOT re-open the scan gate for cucumber — the per-test gate stands', async () => {
+            mockInstanceState('WebdriverIO-cucumber')
+            accessibilityModule.accessibilityMap.set(12345, false)
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
+
+            expect(accessibilityModule.currentHookRunUuid).toBe('hook-uuid-123')
+            expect(accessibilityModule.accessibilityMap.get(12345)).toBe(false)
+        })
+
+        it('re-opens a closed gate for mocha — the opposite answer on the same input', async () => {
+            mockInstanceState('WebdriverIO-mocha')
+            accessibilityModule.accessibilityMap.set(12345, false)
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
+
+            expect(accessibilityModule.accessibilityMap.get(12345)).toBe(true)
+        })
+
+        it('still captures the hook run uuid for cucumber (app-a11y hook-scan stamping)', async () => {
+            mockInstanceState('WebdriverIO-cucumber')
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
+
+            expect(accessibilityModule.currentHookRunUuid).toBe('hook-uuid-123')
+        })
+
         it('does not open the scan gate when accessibility is disabled', async () => {
             accessibilityModule.accessibility = false
-            vi.mocked(TestFramework.getState).mockReturnValue('hook-uuid-123')
+            mockInstanceState('WebdriverIO-mocha')
 
             await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
 
