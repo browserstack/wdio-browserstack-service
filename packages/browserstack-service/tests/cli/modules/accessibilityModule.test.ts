@@ -77,6 +77,8 @@ describe('AccessibilityModule', () => {
         }
 
         mockBrowser = {
+            // a live session: the wrapper skips scanning when the driver has no sessionId
+            sessionId: 'session-w',
             executeAsync: vi.fn().mockResolvedValue([]),
             execute: vi.fn().mockResolvedValue({}),
             overwriteCommand: vi.fn()
@@ -159,6 +161,118 @@ describe('AccessibilityModule', () => {
         it('should return the correct module name', () => {
             expect(accessibilityModule.getModuleName()).toBe('BaseModule') // AccessibilityModule doesn't override getModuleName
             expect(AccessibilityModule.MODULE_NAME).toBe('AccessibilityModule')
+        })
+    })
+
+    describe('scan gate ahead of the first test', () => {
+        // afterEach's vi.resetAllMocks() drops the factory's mockReturnValue, so the caps
+        // validators return undefined and onBeforeExecute bails before the gate. Re-arm them.
+        const withA11yCaps = () => {
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            vi.mocked(validateCapsWithAppA11y).mockReturnValue(true)
+            return vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+                if (key.includes('INPUT_CAPABILITIES')) {
+                    return {}
+                }
+                if (key.includes('CAPABILITIES')) {
+                    return { browserName: 'chrome' }
+                }
+                return 'session-w'
+            })
+        }
+
+        const fireWrappedCommand = async () => {
+            const orig = vi.fn().mockResolvedValue('ok')
+            await (accessibilityModule as any).commandWrapper({ name: 'click', class: 'Element' }, orig, 'arg')
+        }
+
+        it('opens the scan gate at driver creation, before any test exists', async () => {
+            withA11yCaps()
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
+        })
+
+        it('respects autoScanning — the one validation the window still owns', async () => {
+            withA11yCaps()
+            accessibilityModule.autoScanning = false
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBeUndefined()
+        })
+
+        // The rule is stateless: a scan is parentless only when no framework hook run and no test
+        // can own it. These drive the REAL call site (commandWrapper), so they pin the wiring.
+        it('sends no test run uuid for a scan with no hook run and no test', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+
+            await fireWrappedCommand()
+
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, null, true)
+        })
+
+        it('keeps the test run uuid once a framework hook is running', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            vi.mocked(TestFramework.getState).mockReturnValue('hook-uuid-1')
+            await accessibilityModule.onHookStart({ instance: mockTestInstance })
+
+            await fireWrappedCommand()
+
+            const call = vi.mocked(_getParamsForAppAccessibility).mock.calls.at(-1)
+            expect(call?.[2]).toBe('hook-uuid-1')
+            expect(call?.[3]).toBe(false)
+        })
+
+        it('skips the scan once the session is gone, instead of logging a failure', async () => {
+            withA11yCaps()
+            await accessibilityModule.onBeforeExecute()
+            const orig = vi.fn().mockResolvedValue('ok')
+            mockBrowser.sessionId = undefined
+
+            await (accessibilityModule as any).commandWrapper({ name: 'click', class: 'Element' }, orig, 'arg')
+
+            // the command still runs; only the scan is skipped
+            expect(orig).toHaveBeenCalled()
+            expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
+        })
+
+        it('leaves the gate open after a test, so afterSuite/after still scan', async () => {
+            withA11yCaps()
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            await accessibilityModule.onBeforeExecute()
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'suite', test: { title: 'a test' } })
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
+
+            // drive onAfterTest all the way to the end: its guards, and then the stop-event
+            // internals, which throw against these mocks and would swallow the line under test
+            vi.mocked(mockTestInstance.getData).mockReturnValue({
+                accessibilityScanStarted: true,
+                scanTestForAccessibility: true
+            })
+            vi.spyOn(accessibilityModule as any, 'getDriverExecuteParams').mockResolvedValue({})
+            vi.spyOn(accessibilityModule as any, 'sendTestStopEvent').mockResolvedValue(undefined)
+            await accessibilityModule.onAfterTest()
+
+            // deleting it here used to silence every scan between tests and after the last one
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
+        })
+
+        it('keeps the test run uuid once a test is running', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'suite', test: { title: 'a test' } })
+
+            await fireWrappedCommand()
+
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', 'a test', null, false)
         })
     })
 
@@ -570,7 +684,7 @@ describe('AccessibilityModule', () => {
 
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click', 'hook-uuid-99')
 
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99')
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99', undefined)
         })
 
         it('passes no hook uuid for an ordinary (non-hook) app scan', async () => {
@@ -580,7 +694,7 @@ describe('AccessibilityModule', () => {
 
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click')
 
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined)
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined, undefined)
         })
     })
 })
