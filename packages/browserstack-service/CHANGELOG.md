@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.36.1
+
+### Patch Changes
+
+- 8923993: - Fixed a skipped test staying stuck on "In Progress" in Test Hub when it sits between two running tests — for example a `it.skip()` in the middle of a spec. Completes the fix shipped in 9.35.3, which only covered skips at the end of a spec. Skipped tests are now reported when the run finishes, so they appear grouped at the end of the build rather than in source order.
+
 ## 9.36.0
 
 ### Minor Changes
