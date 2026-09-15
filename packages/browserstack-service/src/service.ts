@@ -775,9 +775,13 @@ export default class BrowserstackService implements Services.ServiceInstance {
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeFeature' })
     async beforeFeature(uri: string, feature: Feature) {
         this._suiteTitle = feature.name
+        // Ordered ahead of the two awaits deliberately: onFeatureStart is local bookkeeping that
+        // raises no wire event, but _setSessionName issues a session-update REST call. Sequenced
+        // behind it, any rejection (a turboscale 401, or any 4xx/5xx) aborts the rest of the hook
+        // and Observability silently loses the feature path for that feature.
+        this._cliCucumberFramework()?.onFeatureStart(uri, feature)
         await this._setSessionName(feature.name)
         await this._setAnnotation(`Feature: ${feature.name}`)
-        this._cliCucumberFramework()?.onFeatureStart(uri, feature)
         // The legacy InsightsHandler -> Listener -> api/v1/batch transport is gated only on
         // TESTOPS_BUILD_COMPLETED and BROWSERSTACK_TESTHUB_JWT, both of which the CLI flow itself
         // sets. Left unguarded it keeps POSTing scenario events under the binary-issued JWT on top
