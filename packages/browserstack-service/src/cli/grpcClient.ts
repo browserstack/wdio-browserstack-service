@@ -278,6 +278,7 @@ export class GrpcClient {
             try {
                 const response = await stopBinSessionPromise(request)
                 this.logger.info('StopBinSession successful')
+                this.renderCustomerVisibleSummary(response)
                 PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_CLI_ON_STOP)
                 return response
             } catch (error: unknown) {
@@ -289,6 +290,52 @@ export class GrpcClient {
         } catch (error) {
             PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_CLI_ON_STOP, false, util.format(error))
             this.logger.error(`Error in stopBinSession: ${util.format(error)}`)
+        }
+    }
+
+    /**
+     * Render end-of-build customer-visible summary entries.
+     *
+     * Per the binary proto contract (CustomerVisibleSummaryEntry in
+     * sdk-messages.proto): iterate by `severity` + `body`, write `body` verbatim,
+     * and pick the stream from `severity`. Never branches on `entryType`, so new
+     * entry types need no SDK change.
+     * @private
+     */
+    private renderCustomerVisibleSummary(response: unknown) {
+        try {
+            const entries = (response as { entries?: Array<{ severity?: string, body?: string }> })?.entries
+            if (!entries?.length) {
+                return
+            }
+
+            for (const entry of entries) {
+                const body = entry?.body || ''
+                if (!body) {
+                    continue
+                }
+
+                const severity = (entry?.severity || 'info').toLowerCase()
+                // warn/warning/error -> stderr, everything else (info AND unknown) ->
+                // stdout, so a malformed severity cannot false-alarm CI tooling
+                // watching stderr.
+                const isErrorStream = severity === 'warn' || severity === 'warning' || severity === 'error'
+                // Written directly rather than through the logger, whose per-line
+                // prefix would break the binary's box-border alignment.
+                ;(isErrorStream ? process.stderr : process.stdout).write(`${body}\n`)
+
+                // Archived copy — terminal scrollback is lost on CI runners that
+                // keep only the log directory.
+                if (severity === 'error') {
+                    this.logger.error(body)
+                } else if (isErrorStream) {
+                    this.logger.warn(body)
+                } else {
+                    this.logger.info(body)
+                }
+            }
+        } catch (error: unknown) {
+            this.logger.debug(`StopBinSession entries forwarding failed: ${util.format(error)}`)
         }
     }
 
