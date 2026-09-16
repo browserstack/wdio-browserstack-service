@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.36.2
+
+### Patch Changes
+
+- 13b5f31: - N/A — CI/workflow-only change; no customer-facing or package impact.
+
 ## 9.36.1
 
 ### Patch Changes
