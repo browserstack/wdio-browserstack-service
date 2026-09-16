@@ -51,3 +51,76 @@ describe('GrpcClient.stopBinSession', () => {
         expect(request.exitReason).toBeUndefined()
     })
 })
+
+describe('GrpcClient.stopBinSession customer-visible summary entries', () => {
+    let client: GrpcClient
+    let stdoutSpy: ReturnType<typeof vi.spyOn>
+    let stderrSpy: ReturnType<typeof vi.spyOn>
+
+    const respondWith = (response: unknown) => {
+        client.client = {
+            stopBinSession: vi.fn((_req: unknown, cb: (err: unknown, res: unknown) => void) => cb(null, response))
+        } as any
+    }
+
+    beforeEach(() => {
+        client = new GrpcClient()
+        client.binSessionId = 'bin-1'
+        stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+        stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    })
+
+    afterEach(() => {
+        stdoutSpy.mockRestore()
+        stderrSpy.mockRestore()
+        vi.clearAllMocks()
+    })
+
+    it('writes the body verbatim to stdout for an info entry', async () => {
+        respondWith({ entries: [{ entryType: 'version_nudge', severity: 'info', body: 'line one\nline two' }] })
+        await client.stopBinSession()
+        expect(stdoutSpy).toHaveBeenCalledWith('line one\nline two\n')
+        expect(stderrSpy).not.toHaveBeenCalled()
+    })
+
+    it('routes warn and error entries to stderr', async () => {
+        respondWith({ entries: [
+            { entryType: 'version_nudge', severity: 'warn', body: 'outdated' },
+            { entryType: 'version_nudge', severity: 'error', body: 'deprecated' }
+        ] })
+        await client.stopBinSession()
+        expect(stderrSpy).toHaveBeenCalledWith('outdated\n')
+        expect(stderrSpy).toHaveBeenCalledWith('deprecated\n')
+        expect(stdoutSpy).not.toHaveBeenCalled()
+    })
+
+    it('treats the server\'s "warning" spelling as an error stream', async () => {
+        respondWith({ entries: [{ entryType: 'version_nudge', severity: 'warning', body: 'outdated' }] })
+        await client.stopBinSession()
+        expect(stderrSpy).toHaveBeenCalledWith('outdated\n')
+    })
+
+    it('sends an unknown severity to stdout so CI stderr watchers are not tripped', async () => {
+        respondWith({ entries: [{ entryType: 'version_nudge', severity: 'bogus', body: 'body' }] })
+        await client.stopBinSession()
+        expect(stdoutSpy).toHaveBeenCalledWith('body\n')
+        expect(stderrSpy).not.toHaveBeenCalled()
+    })
+
+    it('writes nothing when entries are absent, empty, or bodiless', async () => {
+        for (const response of [{ done: true }, { entries: [] }, { entries: [{ severity: 'warn', body: '' }] }]) {
+            respondWith(response)
+            await client.stopBinSession()
+        }
+        expect(stdoutSpy).not.toHaveBeenCalled()
+        expect(stderrSpy).not.toHaveBeenCalled()
+    })
+
+    it('still returns the response when rendering throws', async () => {
+        stdoutSpy.mockImplementation(() => {
+            throw new Error('stream closed')
+        })
+        respondWith({ entries: [{ severity: 'info', body: 'body' }], done: true })
+        await expect(client.stopBinSession()).resolves.toMatchObject({ done: true })
+    })
+})
