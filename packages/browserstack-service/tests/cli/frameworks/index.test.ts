@@ -141,8 +141,7 @@ describe('BrowserstackCLI', () => {
 
     // Mock wdio config for testing
     const mockWdioConfig = {
-        capabilities: [],
-        selfHeal: false
+        capabilities: []
     }
 
     beforeEach(() => {
