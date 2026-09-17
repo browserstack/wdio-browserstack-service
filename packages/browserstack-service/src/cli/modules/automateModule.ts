@@ -30,15 +30,19 @@ export default class AutomateModule extends BaseModule {
 
     logger = BStackLogger
     browserStackConfig: Options.Testrunner
+    // The live, in-process service options. Injected rather than imported: cli/index.ts constructs
+    // this module, so importing it back would close an ESM cycle.
+    private serviceOptions: Record<string, any>
     private sessionMap: Map<string, SessionData> = new Map()
 
     static readonly MODULE_NAME = 'AutomateModule'
     /**
      * Create a new AutomateModule
      */
-    constructor(browserStackConfig: Options.Testrunner) {
+    constructor(browserStackConfig: Options.Testrunner, serviceOptions: Record<string, any> = {}) {
         super()
         this.browserStackConfig = browserStackConfig
+        this.serviceOptions = serviceOptions
         this.logger.info('AutomateModule: Initializing Automate Module')
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.POST, this.onAfterTest.bind(this))
@@ -82,9 +86,14 @@ export default class AutomateModule extends BaseModule {
         }
 
         let name = suiteTitle
-        if (testContextOptions.sessionNameFormat) {
+        // Resolved from the live in-process options, NOT from testContextOptions: that config is
+        // round-tripped through the binary as JSON, which silently drops function-valued keys, so
+        // testContextOptions.sessionNameFormat is always absent. Reading it here keeps every naming
+        // decision inside this module instead of splitting it across the legacy path.
+        const sessionNameFormat = this.serviceOptions?.sessionNameFormat
+        if (sessionNameFormat) {
             const caps = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_CAPABILITIES)
-            name = testContextOptions.sessionNameFormat(
+            name = sessionNameFormat(
                 this.browserStackConfig,
                 caps,
                 suiteTitle,
@@ -144,9 +153,11 @@ export default class AutomateModule extends BaseModule {
         }
 
         let name = suiteTitle
-        if (testContextOptions.sessionNameFormat) {
+        // See onBeforeTest: the formatter exists only in-process; the round-tripped config drops it.
+        const sessionNameFormat = this.serviceOptions?.sessionNameFormat
+        if (sessionNameFormat) {
             const caps = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_CAPABILITIES)
-            name = testContextOptions.sessionNameFormat(
+            name = sessionNameFormat(
                 this.browserStackConfig,
                 caps,
                 suiteTitle,
@@ -292,12 +303,7 @@ export default class AutomateModule extends BaseModule {
                 // An empty name means nothing ever named this session — a BeforeAll that failed
                 // before any feature loaded, so beforeFeature never ran. Legacy makes no naming
                 // call at all in that state; PUTting '' would be an API call it never made.
-                // sessionNameFormat is a function and is dropped by JSON, so this module can
-                // never reproduce the user's format — it would PUT the raw title over the correctly
-                // formatted name the SDK already wrote. Defer whenever a formatter was configured.
-                // Bookkeeping above is untouched: lastTestName still keys testResults and percy.
-                if (!testContextOptions.skipSessionName && sessionData.lastTestName &&
-                    !testContextOptions.sessionNameFormatProvided) {
+                if (!testContextOptions.skipSessionName && sessionData.lastTestName) {
                     await this.markSessionName(sessionId, sessionData.lastTestName, { user: userName, key: accessKey })
                 }
 

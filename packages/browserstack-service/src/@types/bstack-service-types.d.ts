@@ -35,9 +35,6 @@ declare global {
             suiteTitle: string,
             testTitle?: string
         ) => string
-        // A function cannot survive JSON, so sessionNameFormat never reaches the binary. This
-        // boolean does, and tells the module that the SDK holds the only usable formatter.
-        sessionNameFormatProvided?: boolean
     }
 
     interface GRRUrls {

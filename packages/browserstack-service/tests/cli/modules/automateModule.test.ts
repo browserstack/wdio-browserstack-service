@@ -1,6 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import got from 'got'
 import AutomateModule from '../../../src/cli/modules/automateModule.js'
+import TestFramework from '../../../src/cli/frameworks/testFramework.js'
+import AutomationFramework from '../../../src/cli/frameworks/automationFramework.js'
+import { TestFrameworkConstants } from '../../../src/cli/frameworks/constants/testFrameworkConstants.js'
+import { isBrowserstackSession } from '../../../src/util.js'
 import type { Options } from '@wdio/types'
 
 // Mock dependencies
@@ -165,6 +169,55 @@ describe('AutomateModule', () => {
         }
 
         await expect(moduleWithSkip.onBeforeTest(mockArgs)).resolves.toBeUndefined()
+    })
+
+    it('applies sessionNameFormat from the injected service options', async () => {
+        // The formatter is a function, so JSON drops it from the config the binary echoes back.
+        // It reaches the module only through the injected options; testContextOptions below is
+        // deliberately shaped as the binary really returns it, with no sessionNameFormat key.
+        const sessionNameFormat = vi.fn((_config, _caps, suiteTitle, testTitle) => `FMT::${suiteTitle}::${testTitle}`)
+        const moduleWithFormat = new AutomateModule(mockConfig, { sessionNameFormat })
+        moduleWithFormat.config = {
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false }
+        } as any
+
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(AutomationFramework.getState).mockReturnValue('session-1')
+
+        await moduleWithFormat.onBeforeTest({
+            instance: {},
+            test: { title: 'test title' },
+            suiteTitle: 'suite title'
+        })
+
+        expect(sessionNameFormat).toHaveBeenCalled()
+        expect(TestFramework.setState).toHaveBeenCalledWith(
+            expect.anything(),
+            TestFrameworkConstants.KEY_AUTOMATE_SESSION_NAME,
+            'FMT::suite title::test title'
+        )
+    })
+
+    it('falls back to the suite title when no sessionNameFormat is configured', async () => {
+        const moduleNoFormat = new AutomateModule(mockConfig, {})
+        moduleNoFormat.config = {
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false }
+        } as any
+
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(AutomationFramework.getState).mockReturnValue('session-2')
+
+        await moduleNoFormat.onBeforeTest({
+            instance: {},
+            test: { title: 'test title', fullName: 'full name' },
+            suiteTitle: 'suite title'
+        })
+
+        expect(TestFramework.setState).toHaveBeenCalledWith(
+            expect.anything(),
+            TestFrameworkConstants.KEY_AUTOMATE_SESSION_NAME,
+            'suite title'
+        )
     })
 
     it('should handle onAfterTest with skipSessionStatus enabled', async () => {

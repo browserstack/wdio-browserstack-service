@@ -136,7 +136,7 @@ export class BrowserstackCLI {
         this.setupAutomationFramework()
 
         this.modules[WebdriverIOModule.MODULE_NAME] = new WebdriverIOModule()
-        this.modules[AutomateModule.MODULE_NAME] = new AutomateModule(this.browserstackConfig as Options.Testrunner)
+        this.modules[AutomateModule.MODULE_NAME] = new AutomateModule(this.browserstackConfig as Options.Testrunner, this.options as Record<string, any>)
 
         if (startBinResponse.testhub) {
             this.logBuildStartErrors(startBinResponse.testhub)
