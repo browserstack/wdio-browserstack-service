@@ -3,7 +3,7 @@ import fs from 'node:fs'
 
 import type { TestData, UploadType } from '../types.js'
 import { batchAndPostEvents } from '../util.js'
-import { DATA_BATCH_ENDPOINT } from '../constants.js'
+import { DATA_BATCH_ENDPOINT, ORPHAN_FINALIZE_POST_TIMEOUT_MS } from '../constants.js'
 import { BStackLogger } from '../bstackLogger.js'
 
 /**
@@ -94,7 +94,7 @@ export async function finalizeOrphanedRuns(): Promise<number> {
             }
             return { event_type: 'TestRunFinished', test_run: finishedRun }
         })
-        await batchAndPostEvents(DATA_BATCH_ENDPOINT, 'ORPHANED_TEST_RUN_FINALIZATION', events)
+        await batchAndPostEvents(DATA_BATCH_ENDPOINT, 'ORPHANED_TEST_RUN_FINALIZATION', events, ORPHAN_FINALIZE_POST_TIMEOUT_MS)
         BStackLogger.info(`Finalized ${events.length} orphaned test/hook run(s) left behind by an interrupted run`)
         return events.length
     } catch (e) {
