@@ -381,7 +381,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
         this._accessibilityHandler?.setSuiteFile(suite.file)
 
         if (suite.title && suite.title !== 'Jasmine__TopLevel__Suite') {
-            if (!BrowserstackCLI.getInstance().isRunning() || this._config.framework !== 'mocha'){
+            // On CLI, naming belongs to automateModule — except when sessionNameFormat is set,
+            // which only this side can apply (the function cannot cross the gRPC/JSON boundary).
+            if (!BrowserstackCLI.getInstance().isRunning() || this._config.framework !== 'mocha'
+                || this._options.sessionNameFormat){
                 await this._setSessionName(suite.title)
             }
         }

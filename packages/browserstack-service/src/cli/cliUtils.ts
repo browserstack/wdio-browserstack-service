@@ -70,7 +70,8 @@ export class CLIUtils {
             skipSessionStatus: isFalse(modifiedOpts.setSessionStatus),
             sessionNameOmitTestTitle: modifiedOpts.sessionNameOmitTestTitle || false,
             sessionNamePrependTopLevelSuiteTitle: modifiedOpts.sessionNamePrependTopLevelSuiteTitle || false,
-            sessionNameFormat: modifiedOpts.sessionNameFormat || ''
+            sessionNameFormat: modifiedOpts.sessionNameFormat || '',
+            sessionNameFormatProvided: !!modifiedOpts.sessionNameFormat
         }
 
         const commonBstackOptions = (() => {

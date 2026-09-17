@@ -292,7 +292,12 @@ export default class AutomateModule extends BaseModule {
                 // An empty name means nothing ever named this session — a BeforeAll that failed
                 // before any feature loaded, so beforeFeature never ran. Legacy makes no naming
                 // call at all in that state; PUTting '' would be an API call it never made.
-                if (!testContextOptions.skipSessionName && sessionData.lastTestName) {
+                // sessionNameFormat is a function and is dropped by JSON, so this module can
+                // never reproduce the user's format — it would PUT the raw title over the correctly
+                // formatted name the SDK already wrote. Defer whenever a formatter was configured.
+                // Bookkeeping above is untouched: lastTestName still keys testResults and percy.
+                if (!testContextOptions.skipSessionName && sessionData.lastTestName &&
+                    !testContextOptions.sessionNameFormatProvided) {
                     await this.markSessionName(sessionId, sessionData.lastTestName, { user: userName, key: accessKey })
                 }
 
