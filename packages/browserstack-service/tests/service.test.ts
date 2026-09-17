@@ -580,6 +580,34 @@ describe('before', () => {
         expect(service['_sessionBaseUrl']).toEqual(sessionBaseUrl)
     })
 
+    it('registers the result event on the CLI path, and only that event', async () => {
+        // browserCommand is the only producer of TEST_SCREENSHOT logs, so the binary flow has to
+        // register the result event too (SDK-4177). `command` must stay unregistered — it only
+        // feeds browserCommand's HTTP-log half, which the binary owns on this path.
+        process.env.BROWSERSTACK_OBSERVABILITY = 'true'
+        const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => null,
+            getAutomationFramework: () => ({
+                trackEvent: vi.fn().mockResolvedValue(undefined)
+            })
+        } as any)
+        const service = new BrowserstackService({} as any, [{}] as any, {
+            user: 'foo',
+            key: 'bar',
+            capabilities: {}
+        })
+
+        await service.before(service['_config'] as any, [], browser)
+
+        const events = vi.mocked(browser.on).mock.calls.map(([event]) => event)
+        expect(events).toContain('result')
+        expect(events).not.toContain('command')
+
+        getInstanceSpy.mockRestore()
+        delete process.env.BROWSERSTACK_OBSERVABILITY
+    })
+
     it('should initialize correctly for multiremote', () => {
         const service = new BrowserstackService(
             {} as any,
