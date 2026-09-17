@@ -22,6 +22,12 @@ interface Command {
  * into a W3C capability, which the hub rejects outright.
  */
 function toChromeOptions(value: unknown): { [key: string]: unknown } | null {
+    // An absent field is the common case and not a drop — update() runs on every launch response
+    // and every readFromExistingFile(), so reporting it would bury the drop this logs for.
+    if (value === undefined || value === null) {
+        return null
+    }
+
     let parsed = value
     if (typeof parsed === 'string') {
         try {
@@ -36,7 +42,7 @@ function toChromeOptions(value: unknown): { [key: string]: unknown } | null {
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         return parsed as { [key: string]: unknown }
     }
-    BStackLogger.debug(`toChromeOptions: goog:chromeOptions resolved to ${Array.isArray(parsed) ? 'an array' : typeof parsed}, not an object; dropping it`)
+    BStackLogger.debug(`toChromeOptions: goog:chromeOptions resolved to ${parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : typeof parsed}, not an object; dropping it`)
     return null
 }
 

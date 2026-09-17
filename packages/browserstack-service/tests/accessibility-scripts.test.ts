@@ -154,8 +154,13 @@ describe('nonBStackInfraA11yChromeOptions across flows', () => {
         nonBStackInfraA11yChromeOptions: chromeOptions
     } as unknown as Parameters<typeof scripts.update>[0])
 
+    // A distinguishable seed, not {}: update() runs more than once per run, so the drop paths must
+    // leave an extension an earlier call installed alone. Seeding {} lets a clobbering
+    // implementation pass, since it writes back the same {} the assertion expects.
+    const SEED = { sentinel: true }
+
     beforeEach(() => {
-        scripts.ChromeExtension = {}
+        scripts.ChromeExtension = { ...SEED }
     })
 
     it('keeps the object the HTTP launch response delivers', () => {
@@ -170,11 +175,16 @@ describe('nonBStackInfraA11yChromeOptions across flows', () => {
 
     it('drops a value that is not an object instead of writing it into a capability', () => {
         scripts.update(payload('[object Object]'))
-        expect(scripts.ChromeExtension).to.deep.equal({})
+        expect(scripts.ChromeExtension).to.deep.equal(SEED)
     })
 
     it('leaves the extension untouched when the capability set has no chrome options', () => {
         scripts.update(payload(undefined))
-        expect(scripts.ChromeExtension).to.deep.equal({})
+        expect(scripts.ChromeExtension).to.deep.equal(SEED)
+    })
+
+    it('leaves the extension untouched for an explicit null', () => {
+        scripts.update(payload(null))
+        expect(scripts.ChromeExtension).to.deep.equal(SEED)
     })
 })
