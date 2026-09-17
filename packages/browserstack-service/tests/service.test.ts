@@ -10,7 +10,11 @@ import { BrowserstackCLI } from '../src/cli/index.js'
 import AccessibilityModule from '../src/cli/modules/accessibilityModule.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import AutomationFramework from '../src/cli/frameworks/automationFramework.js'
+import WdioCucumberTestFramework from '../src/cli/frameworks/wdioCucumberTestFramework.js'
+import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
+import { HookState } from '../src/cli/states/hookState.js'
 import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
+import { AutomationFrameworkState } from '../src/cli/states/automationFrameworkState.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
@@ -2771,5 +2775,326 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
 
         const trackEvent = await runAfterTest(svc, failing, { passed: false })
         expect(skippedTitles(trackEvent)).toEqual([])
+    })
+})
+
+describe('afterScenario session-status view honours ignoreHooksStatus', () => {
+    let getInstanceSpy: ReturnType<typeof vi.spyOn>
+
+    const makeService = (ignoreHooksStatus: boolean) => new BrowserstackService(
+        { testObservability: false, testObservabilityOptions: { ignoreHooksStatus } } as any,
+        [] as any,
+        { user: 'foo', key: 'bar', framework: 'cucumber' } as any
+    )
+
+    const runAfterScenario = async (svc: BrowserstackService, hadStepFailures: boolean) => {
+        const framework = new WdioCucumberTestFramework(['cucumber'], { cucumber: '10.0.0' }, 'bin-session')
+        vi.spyOn(framework, 'hasStepFailures').mockReturnValue(hadStepFailures)
+        const trackEvent = vi.spyOn(framework, 'trackEvent').mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => framework
+        } as any)
+
+        await svc.afterScenario({
+            pickle: { name: 'a scenario' },
+            result: { status: 'FAILED', message: 'hook blew up' }
+        } as any)
+
+        return (trackEvent.mock.calls.at(-1)?.[2] as any)?.result
+    }
+
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+    })
+
+    it('reports a hook-only failure as passed so the session is not marked failed', async () => {
+        const result = await runAfterScenario(makeService(true), false)
+        expect(result.passed).toBe(true)
+    })
+
+    it('still reports a step failure as failed under the same flag', async () => {
+        const result = await runAfterScenario(makeService(true), true)
+        expect(result.passed).toBe(false)
+    })
+
+    it('leaves a hook-only failure failed when the flag is not set', async () => {
+        const result = await runAfterScenario(makeService(false), false)
+        expect(result.passed).toBe(false)
+    })
+})
+
+describe('BEFORE_ALL skip cascade + hook flag pass-through (SDK-7047)', () => {
+    let getInstanceSpy: ReturnType<typeof vi.spyOn>
+
+    const feature = {
+        name: 'Login',
+        description: 'a description',
+        children: [
+            { scenario: { name: 'Scenario A', steps: [{ id: 's1', text: 'I log in', keyword: 'Given ' }] } },
+            { background: {} },
+            { rule: { children: [{ background: {} }, { scenario: { name: 'Rule-nested B', steps: [] } }] } }
+        ]
+    }
+
+    const makeService = (ignoreHooksStatus = false) => new BrowserstackService(
+        { testObservability: false, testObservabilityOptions: { ignoreHooksStatus } } as any,
+        [] as any,
+        { user: 'foo', key: 'bar', framework: 'cucumber' } as any
+    )
+
+    const runAfterHook = async (svc: BrowserstackService, result: unknown, scenariosStarted = false) => {
+        const framework = new WdioCucumberTestFramework(['cucumber'], { cucumber: '10.0.0' }, 'bin-session')
+        framework.onFeatureStart('features/login.feature', feature as any)
+        if (scenariosStarted) {
+            // flips classifyHookType from BEFORE_ALL to AFTER_ALL
+            (framework as any).cucumberData.scenariosStarted = true
+        }
+        const trackEvent = vi.spyOn(framework, 'trackEvent').mockResolvedValue(undefined)
+        const sendTestFrameworkEvent = vi.fn().mockResolvedValue(true)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => framework,
+            modules: { TestHubModule: { sendTestFrameworkEvent } }
+        } as any)
+
+        await svc.afterHook(undefined as any, {}, result as any)
+        return { sendTestFrameworkEvent, trackEvent }
+    }
+
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+    })
+
+    it('reports every not-run scenario as skipped, Rule-nested ones included', async () => {
+        const { sendTestFrameworkEvent } = await runAfterHook(makeService(), { passed: false, error: new Error('boom') })
+
+        // two scenarios x (start, skip)
+        expect(sendTestFrameworkEvent).toHaveBeenCalledTimes(4)
+        const names = sendTestFrameworkEvent.mock.calls.map(([args]: any[]) =>
+            args.instance.getAllData().get('test_name'))
+        expect(names).toEqual(['Scenario A', 'Scenario A', 'Rule-nested B', 'Rule-nested B'])
+    })
+
+    // TestHub's v2 batch pipeline creates the test row from the START event; a lone TestRunSkipped
+    // is accepted and lands in no bucket at all (observed: O11Y build ad39yy… reported skipped=0
+    // for three sent TestRunSkipped events, lwbpu2… reported skipped=3 for the pair).
+    it('sends a start then a skip per scenario, so the binary emits TestRunStarted + TestRunSkipped', async () => {
+        const { sendTestFrameworkEvent } = await runAfterHook(makeService(), { passed: false, error: new Error('boom') })
+
+        const overrides = sendTestFrameworkEvent.mock.calls.map(([, o]: any[]) => o.testHookState)
+        expect(overrides).toEqual(['PRE', 'POST', 'PRE', 'POST'])
+
+        for (const [args, override] of sendTestFrameworkEvent.mock.calls as any[]) {
+            expect(override.testFrameworkState).toBe('TEST')
+            const data = args.instance.getAllData()
+            expect(data.get('test_result')).toBe('skipped')
+            expect(data.get('test_skipped_cascade')).toBe(true)
+            // the cascade payload has no world, so no tags
+            expect(data.get('test_tags')).toBeUndefined()
+            expect(data.get('test_scopes')).toEqual(['Login'])
+        }
+    })
+
+    it('marks every step of a skipped scenario skipped', async () => {
+        const { sendTestFrameworkEvent } = await runAfterHook(makeService(), { passed: false, error: new Error('boom') })
+
+        const meta = sendTestFrameworkEvent.mock.calls[0][0].instance.getAllData().get('bdd_meta_info') as any
+        expect(meta.steps).toEqual([{ id: 's1', text: 'I log in', keyword: 'Given ', result: 'skipped' }])
+        expect(meta.feature.name).toBe('Login')
+    })
+
+    it('does not cascade when the BEFORE_ALL passed', async () => {
+        const { sendTestFrameworkEvent } = await runAfterHook(makeService(), { passed: true })
+        expect(sendTestFrameworkEvent).not.toHaveBeenCalled()
+    })
+
+    it('does not cascade for an AFTER_ALL failure — the scenarios already ran', async () => {
+        const { sendTestFrameworkEvent } = await runAfterHook(makeService(), { passed: false, error: new Error('boom') }, true)
+        expect(sendTestFrameworkEvent).not.toHaveBeenCalled()
+    })
+
+    it('passes ignoreHooksStatus on the hook event so the module can honour it', async () => {
+        const { trackEvent } = await runAfterHook(makeService(true), { passed: false, error: new Error('boom') })
+        expect((trackEvent.mock.calls.at(-1)?.[2] as any).ignoreHooksStatus).toBe(true)
+
+        const off = await runAfterHook(makeService(false), { passed: false, error: new Error('boom') })
+        expect((off.trackEvent.mock.calls.at(-1)?.[2] as any).ignoreHooksStatus).toBe(false)
+    })
+
+    it('reports the hook failure on the hook event itself, not as passed', async () => {
+        const framework = new WdioCucumberTestFramework(['cucumber'], { cucumber: '10.0.0' }, 'bin-session')
+        framework.onFeatureStart('features/login.feature', feature as any)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => framework,
+            modules: { TestHubModule: { sendTestFrameworkEvent: vi.fn().mockResolvedValue(true) } }
+        } as any)
+
+        await framework.trackEvent(TestFrameworkState.BEFORE_ALL, HookState.PRE, { test: undefined })
+        await framework.trackEvent(TestFrameworkState.BEFORE_ALL, HookState.POST, {
+            test: undefined,
+            result: { passed: false, error: new Error('boom'), duration: 12, retries: { attempts: 0, limit: 0 } }
+        })
+
+        const instance = (framework as any).constructor.getTrackedInstance()
+        const finished = instance.getAllData().get('test_hooks_finished') as Map<string, any[]>
+        expect(finished.get('BEFORE_ALL')![0].hook_result).toBe('failed')
+    })
+})
+
+describe('driver registration is not gated on observability', () => {
+    // CREATE/POST is the driver registration — onDriverCreated and the product modules' init
+    // handlers hang off it. It used to be raised only inside `shouldProcessEventForTesthub('')`,
+    // a disjunction over the three product flags, so with every product off the gate closed and
+    // the session went unnamed and unmarked with setCustomTags undefined. The second and third
+    // cases guard the fix's shape: it must not double-raise where the gate is already open.
+    const PRODUCT_ENV = ['BROWSERSTACK_OBSERVABILITY', 'BROWSERSTACK_ACCESSIBILITY', 'BROWSERSTACK_PERCY']
+    let trackEvent: ReturnType<typeof vi.fn>
+    let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
+    const saved: Record<string, string | undefined> = {}
+
+    const createPostCalls = () => trackEvent.mock.calls.filter(
+        ([state, hook]) => state === AutomationFrameworkState.CREATE && hook === HookState.POST)
+
+    const runBefore = async () => {
+        const svc = new BrowserstackService({} as never, [{}] as never, { capabilities: {} } as never)
+        await svc.beforeSession({} as never)
+        await svc.before(svc['_config'] as never, [], { sessionId: 'sess-1' } as never)
+    }
+
+    beforeEach(() => {
+        PRODUCT_ENV.forEach(k => { saved[k] = process.env[k]; delete process.env[k] })
+        trackEvent = vi.fn().mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => null,
+            getAutomationFramework: () => ({ trackEvent }),
+            modules: {}
+        } as never)
+    })
+
+    afterEach(() => {
+        PRODUCT_ENV.forEach(k => { if (saved[k] === undefined) { delete process.env[k] } else { process.env[k] = saved[k] } })
+        getInstanceSpy?.mockRestore()
+    })
+
+    it('registers the driver with every product turned off', async () => {
+        await runBefore()
+
+        expect(createPostCalls()).toHaveLength(1)
+    })
+
+    it('does not double-register when observability is on', async () => {
+        process.env.BROWSERSTACK_OBSERVABILITY = 'true'
+
+        await runBefore()
+
+        expect(createPostCalls()).toHaveLength(1)
+    })
+
+    it('does not double-register when only accessibility is on', async () => {
+        process.env.BROWSERSTACK_ACCESSIBILITY = 'true'
+
+        await runBefore()
+
+        expect(createPostCalls()).toHaveLength(1)
+    })
+})
+
+// automateModule decides the rename — it is the only place that knows the final scenario count —
+// but it cannot read service options, so the flag rides the scenario event, as `ignoreHooksStatus`
+// does. The decision itself is covered in tests/cli/modules/automateModule.preferScenarioName.test.ts.
+describe('preferScenarioName reaches the module', () => {
+    let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
+    let trackEvent: ReturnType<typeof vi.fn>
+
+    const makeService = (options: Record<string, unknown> = {}) => new BrowserstackService(
+        { testObservability: false, setSessionName: true, setSessionStatus: true, ...options } as never,
+        [] as never,
+        { user: 'foo', key: 'bar', framework: 'cucumber', cucumberOpts: { strict: false } } as never
+    )
+
+    const scenarioEventArgs = () => trackEvent.mock.calls.at(-1)?.[2] as Record<string, unknown>
+
+    beforeEach(() => {
+        trackEvent = vi.fn().mockResolvedValue(undefined)
+        const cucumberFramework = Object.create(WdioCucumberTestFramework.prototype)
+        cucumberFramework.trackEvent = trackEvent
+        cucumberFramework.hasStepFailures = () => false
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => cucumberFramework,
+            getAutomationFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) })
+        } as never)
+    })
+
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+    })
+
+    it('carries preferScenarioName: true on the scenario event when set', async () => {
+        const service = makeService({ preferScenarioName: true })
+        await service.afterScenario({ pickle: { name: 'Can do something single' }, result: { status: 'passed' } } as never)
+
+        expect(scenarioEventArgs().preferScenarioName).toBe(true)
+    })
+
+    // Absent must travel as an explicit false, not undefined: the module treats the field as the
+    // whole opt-in, so a missing value and an opted-out value must be indistinguishable there.
+    it('carries preferScenarioName: false when the option is absent', async () => {
+        const service = makeService()
+        await service.afterScenario({ pickle: { name: 'Can do something single' }, result: { status: 'passed' } } as never)
+
+        expect(scenarioEventArgs().preferScenarioName).toBe(false)
+    })
+
+    // The count itself stays on the service side too, because `_scenariosRanCount` is what legacy
+    // reads; the module keeps its own tally for the CLI flow. Both must ignore skipped scenarios.
+    it('does not count a skipped scenario toward the service-side tally', async () => {
+        const service = makeService({ preferScenarioName: true })
+        await service.afterScenario({ pickle: { name: 'Skipped one' }, result: { status: 'skipped' } } as never)
+
+        expect(service['_scenariosRanCount']).toBe(0)
+    })
+})
+
+describe('_cucumberTestResult failure reason adjacent', () => {
+    const makeService = (strict: boolean) => new BrowserstackService(
+        { testObservability: false } as never,
+        [] as never,
+        { user: 'foo', key: 'bar', framework: 'cucumber', cucumberOpts: { strict } } as never
+    )
+
+    const world = (status: string, message?: string) => ({
+        pickle: { name: 'CfgGate pending scenario' },
+        result: message ? { status, message } : { status }
+    })
+
+    it('synthesises legacy\'s pending reason when strict makes a pending scenario fail', () => {
+        const result = makeService(true)['_cucumberTestResult'](world('PENDING') as never)
+
+        expect(result.passed).toBe(false)
+        expect(result.error?.message).toBe('Some steps/hooks are pending for scenario "CfgGate pending scenario"')
+    })
+
+    it('leaves a pending scenario unfailed — and unreasoned — when strict is off', () => {
+        const result = makeService(false)['_cucumberTestResult'](world('PENDING') as never)
+
+        expect(result.passed).toBe(false)
+        expect(result.skipped).toBe(true)
+        expect(result.error).toBeUndefined()
+    })
+
+    it('keeps the real message when the result carries one', () => {
+        const result = makeService(false)['_cucumberTestResult'](world('FAILED', 'AssertionError: nope') as never)
+
+        expect(result.error?.message).toBe('AssertionError: nope')
+    })
+
+    it('falls back to Unknown Error for a message-less non-pending failure', () => {
+        const result = makeService(false)['_cucumberTestResult'](world('UNDEFINED') as never)
+
+        expect(result.error?.message).toBe('Unknown Error')
     })
 })
