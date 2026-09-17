@@ -216,6 +216,18 @@ export default class AutomateModule extends BaseModule {
         // applied this exact name and `appliedName` de-dupes it away — no extra API call.
         await this.flushSessionName(sessionId)
 
+        // Scenario bookkeeping feeds the session NAME, not its status, so it sits above the status
+        // opt-out: `setSessionStatus: false` must still get the preferScenarioName rename.
+        const isCucumber = this.isCucumberInstance(instace)
+        if (!skipped && isCucumber) {
+            const nameData = this.sessionMap.get(sessionId)
+            if (nameData) {
+                nameData.scenariosRan++
+                nameData.lastScenarioName = testTitle
+                nameData.preferScenarioName = isTrue(args.preferScenarioName)
+            }
+        }
+
         if (testContextOptions.skipSessionStatus) {
             this.logger.info('Skipping session status update as per configuration')
             return
@@ -229,18 +241,17 @@ export default class AutomateModule extends BaseModule {
 
         const sessionData = this.sessionMap.get(sessionId)
         if (sessionData) {
-            // `name` is the session NAME, which for cucumber is the Feature title and therefore
-            // shared by every scenario in the file — keying the results map on it collapses N
-            // scenarios into one last-write-wins entry, so a feature whose last scenario passes
-            // reports a passed session however many earlier ones failed. Mocha leaves `fullName`
-            // undefined, so the key is unchanged there.
-            const resultKey = (test && test.fullName) ? String(test.fullName) : name
+            // Cucumber keys on the scenario's own uuid. The session NAME is the Feature title,
+            // shared by every scenario; `fullName` is the raw pickle name, shared by every Examples
+            // row of an outline whose title carries no placeholder. Either collapses rows
+            // last-write-wins, so one failing row followed by a passing one reports it passed.
+            const scenarioUuid = isCucumber
+                ? TestFramework.getState(instace, TestFrameworkConstants.KEY_TEST_UUID)
+                : undefined
+            const resultKey = scenarioUuid
+                ? String(scenarioUuid)
+                : ((test && test.fullName) ? String(test.fullName) : name)
             sessionData.testResults.set(resultKey, testResult)
-            if (!skipped && this.isCucumberInstance(instace)) {
-                sessionData.scenariosRan++
-                sessionData.lastScenarioName = testTitle
-                sessionData.preferScenarioName = isTrue(args.preferScenarioName)
-            }
             this.sessionMap.set(sessionId, sessionData)
         }
 

@@ -824,6 +824,21 @@ describe('AutomateModule — session marking', () => {
             return call ? JSON.parse((call[1] as { body: string }).body) : undefined
         }
 
+        // Every Examples row of an outline whose title carries no placeholder shares one pickle
+        // name, so keying the results map on the name drops the failing row.
+        it('keeps both rows of a Scenario Outline that share a name', async () => {
+            const mod = newModule()
+            let row = 0
+            vi.mocked(TestFramework.getState).mockImplementation((instance, key) =>
+                key === TestFrameworkConstants.KEY_TEST_UUID ? `row-${++row}` : stateFor(instance, key))
+
+            await runScenario(mod, false)
+            await runScenario(mod, true)
+            await mod.onAfterExecute()
+
+            expect(statusBody().status).toBe('failed')
+        })
+
         it('marks the session failed for cucumber when a BeforeAll fails', async () => {
             const mod = newModule()
             await mod.onBuildLevelHookEnd('BEFORE_ALL', { instance: cucumberInstance, result: failing })
@@ -901,11 +916,21 @@ describe('AutomateModule preferScenarioName', () => {
         }
     })
 
+    const runScenario = (mod: AutomateModule, result: Record<string, unknown> = {}) => mod.onAfterTest({
+        instance: cucumberInstance,
+        result: { error: null, passed: true, ...result },
+        test: { title: 'Can log in', fullName: 'Can log in' },
+        suiteTitle: 'Login Feature',
+        preferScenarioName: true
+    })
+
     beforeEach(() => {
         vi.clearAllMocks()
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
         vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as never)
         vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) =>
             key === 'framework_session_id' ? 'sess-1' : ({} as never))
+        vi.mocked(TestFramework.getState).mockImplementation((instance, key) => stateFor(instance, key))
         vi.mocked(fetch).mockResolvedValue({ json: async () => ({ ok: true }) } as never)
     })
 
@@ -948,12 +973,35 @@ describe('AutomateModule preferScenarioName', () => {
     })
 
     // A skipped scenario is not a scenario that ran; legacy's counter is gated the same way.
+    // Paired with the next test, which is what makes this one able to fail.
     it('does not count a skipped scenario', async () => {
         const mod = newModule()
-        register(mod, 'Login Feature', { preferScenarioName: true })
+        register(mod, 'Login Feature')
 
+        await runScenario(mod, { skipped: true })
         await mod.onAfterExecute()
 
         expect(namesPUT()).not.toContain('Can log in')
+    })
+
+    it('counts a scenario that actually ran', async () => {
+        const mod = newModule()
+        register(mod, 'Login Feature')
+
+        await runScenario(mod)
+        await mod.onAfterExecute()
+
+        expect(namesPUT()).toContain('Can log in')
+    })
+
+    // The rename is a NAME decision, so opting out of session status must not disable it.
+    it('renames even when setSessionStatus is false', async () => {
+        const mod = newModule({ testContextOptions: { skipSessionName: false, skipSessionStatus: true } })
+        register(mod, 'Login Feature')
+
+        await runScenario(mod)
+        await mod.onAfterExecute()
+
+        expect(namesPUT()).toContain('Can log in')
     })
 })
