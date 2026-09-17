@@ -101,5 +101,8 @@ describe('CustomTagsModule — framework gate', () => {
         await setCustomTags('TC', 'TC-1')
 
         expect(instance.updateMultipleEntries).not.toHaveBeenCalled()
+        expect(BStackLogger.warn).toHaveBeenCalledWith(
+            'setCustomTags is only supported for the mocha framework; ignoring call'
+        )
     })
 })

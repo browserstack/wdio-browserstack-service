@@ -393,6 +393,27 @@ describe('AccessibilityModule', () => {
             expect(TestFramework.setState).toHaveBeenCalled()
         })
 
+        // The 6-arg form is what lets cucumber filter scans by gherkin tag. `args.world` is the
+        // only discriminator, so these pin that mocha/jasmine keep the exact 3-arg behaviour —
+        // if `world` ever started arriving on those paths, the tag branch would silently engage.
+        it('passes the world through so cucumber can filter scans by tag', async () => {
+            const world = { pickle: { tags: [{ name: '@a11y' }] } }
+
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'Feature', test: { title: 'Scenario' }, world })
+
+            expect(shouldScanTestForAccessibility).toHaveBeenCalledWith(
+                'Feature', 'Scenario', expect.anything(), world, true
+            )
+        })
+
+        it('leaves the tag branch untaken when no world is supplied', async () => {
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'Suite', test: { title: 'Test' } })
+
+            expect(shouldScanTestForAccessibility).toHaveBeenCalledWith(
+                'Suite', 'Test', expect.anything(), undefined, false
+            )
+        })
+
         it('should handle missing test arguments gracefully', async () => {
             await accessibilityModule.onBeforeTest({})
 

@@ -1,6 +1,7 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
+import { BStackLogger } from '../bstackLogger.js'
 
 interface Scripts {
     scan: string
@@ -25,13 +26,17 @@ function toChromeOptions(value: unknown): { [key: string]: unknown } | null {
     if (typeof parsed === 'string') {
         try {
             parsed = JSON.parse(parsed)
-        } catch {
+        } catch (err) {
+            // Dropping this leaves the extension uninjected and the a11y report empty, with the
+            // run still green — so the drop has to be findable in the log.
+            BStackLogger.debug(`toChromeOptions: goog:chromeOptions is not valid JSON, dropping it: ${err}`)
             return null
         }
     }
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         return parsed as { [key: string]: unknown }
     }
+    BStackLogger.debug(`toChromeOptions: goog:chromeOptions resolved to ${Array.isArray(parsed) ? 'an array' : typeof parsed}, not an object; dropping it`)
     return null
 }
 
