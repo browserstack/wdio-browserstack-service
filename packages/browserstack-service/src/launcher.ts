@@ -1154,8 +1154,11 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             return
         }
 
-        if ((!this._buildName || process.env.BROWSERSTACK_BUILD_NAME) && this._buildIdentifier) {
+        if (!this._buildName) {
             this._updateCaps(capabilities, 'buildIdentifier')
+            // drop it here too: the raw '${BUILD_NUMBER}'/'${DATE_TIME}' template is never a
+            // usable value, and onPrepare forwards this field to TestHub as build_identifier
+            this._buildIdentifier = undefined
             BStackLogger.warn('Skipping buildIdentifier as buildName is not passed.')
             return
         }
