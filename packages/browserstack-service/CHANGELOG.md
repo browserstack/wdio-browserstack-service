@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 8.51.0
+
+### Minor Changes
+
+- 650c514: - Added support for attaching custom test metadata to test runs via `BrowserStackSDK.setTestMetadata()` for central-user integrations.
+
 ## 8.50.0
 
 ### Minor Changes
