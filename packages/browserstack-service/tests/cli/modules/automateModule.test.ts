@@ -11,7 +11,8 @@ import type { Options } from '@wdio/types'
 vi.mock('../../../src/cli/frameworks/testFramework.js', () => ({
     default: {
         registerObserver: vi.fn(),
-        setState: vi.fn()
+        setState: vi.fn(),
+        getState: vi.fn()
     }
 }))
 
@@ -196,6 +197,35 @@ describe('AutomateModule', () => {
             TestFrameworkConstants.KEY_AUTOMATE_SESSION_NAME,
             'FMT::suite title::test title'
         )
+    })
+
+    it('renames the session to the scenario when preferScenarioName and exactly one scenario ran', async () => {
+        // The rename is only decidable at EXECUTE/POST — "exactly one" is not knowable while
+        // scenarios are still arriving — so the module counts them and applies it there.
+        const mod = new AutomateModule(mockConfig, {})
+        mod.config = {
+            userName: 'testuser',
+            accessKey: 'testkey',
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false }
+        } as any
+
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(AutomationFramework.getState).mockReturnValue('session-pref')
+        vi.mocked(TestFramework.getState).mockReturnValue('cucumber')   // isCucumberInstance
+
+        await mod.onBeforeTest({ instance: {}, test: { title: 'ignored' }, suiteTitle: 'Feature title' })
+        await mod.onAfterTest({
+            instance: {},
+            result: { error: null, passed: true },
+            test: { title: 'The only scenario' },
+            suiteTitle: 'Feature title',
+            preferScenarioName: true
+        })
+
+        const spy = vi.spyOn(mod, 'markSessionName').mockResolvedValue(undefined)
+        await mod.onAfterExecute()
+
+        expect(spy).toHaveBeenCalledWith('session-pref', 'The only scenario', expect.anything())
     })
 
     it('falls back to the suite title when no sessionNameFormat is configured', async () => {

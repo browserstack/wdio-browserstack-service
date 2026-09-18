@@ -546,16 +546,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
             const { preferScenarioName, setSessionName, setSessionStatus } = this._options
             // For Cucumber: Checks scenarios that ran (i.e. not skipped) on the session
             // Only 1 Scenario ran and option enabled => Redefine session name to Scenario's name
+            // CLI flow: automateModule owns this rename — it counts non-skipped scenarios itself
+            // and applies it at EXECUTE/POST, where "exactly one" first becomes knowable. This
+            // branch is the legacy path only.
             if (preferScenarioName && this._scenariosThatRan.length === 1){
                 this._fullTitle = this._scenariosThatRan.pop()
-                // On the CLI flow the _updateJob below that carries this name is gated off, and
-                // automateModule has already named the session from the feature name it saw at
-                // TEST/PRE — so without this write the option is a silent no-op. Sequenced after
-                // the EXECUTE/POST tracker call above, not racing it. Unreachable for mocha and
-                // jasmine: _scenariosThatRan is only ever pushed from afterScenario.
-                if (setSessionName && BrowserstackCLI.getInstance().isRunning()) {
-                    await this._updateJob({ name: this._fullTitle })
-                }
             }
 
             await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.AUTOMATE_EVENTS.SESSION_STATUS, async () => {
@@ -872,6 +867,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 result: this._cucumberTestResult(world),
                 ignoreHooksStatus: this._options.testObservabilityOptions?.ignoreHooksStatus === true,
                 hasStepFailures: this._insightsHandler ? this._insightsHandler.hasTestStepFailures(world) : true,
+                preferScenarioName: this._options.preferScenarioName === true,
             })
             return
         }

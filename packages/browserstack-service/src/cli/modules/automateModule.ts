@@ -24,6 +24,9 @@ interface TestResult {
 interface SessionData {
     lastTestName: string
     testResults: Map<string, TestResult> // testName -> TestResult
+    scenariosRan: number // non-skipped cucumber scenarios, for preferScenarioName
+    lastScenarioName?: string
+    preferScenarioName?: boolean
 }
 
 export default class AutomateModule extends BaseModule {
@@ -80,7 +83,7 @@ export default class AutomateModule extends BaseModule {
         if (testContextOptions.skipSessionName) {
             this.logger.info('Skipping session name update as per configuration')
             if (sessionId && !this.sessionMap.has(sessionId)) {
-                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map() })
+                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map(), scenariosRan: 0 })
             }
             return
         }
@@ -110,7 +113,8 @@ export default class AutomateModule extends BaseModule {
         if (!existingSession) {
             this.sessionMap.set(sessionId, {
                 lastTestName: name,
-                testResults: new Map()
+                testResults: new Map(),
+                scenariosRan: 0
             })
         } else {
             existingSession.lastTestName = name
@@ -146,6 +150,17 @@ export default class AutomateModule extends BaseModule {
         const testTitle = test.title as string
         const suiteTitle = args.suiteTitle as string
         const testContextOptions = this.config.testContextOptions as TestContextOptions
+
+        // Tracked before the skipSessionStatus return on purpose: `setSessionStatus: false` opts
+        // out of the STATUS, not of the preferScenarioName rename.
+        if (!skipped && this.isCucumberInstance(instace)) {
+            const nameData = this.sessionMap.get(sessionId)
+            if (nameData) {
+                nameData.scenariosRan++
+                nameData.lastScenarioName = testTitle
+                nameData.preferScenarioName = isTrue(args.preferScenarioName)
+            }
+        }
 
         if (testContextOptions.skipSessionStatus || !isBrowserstackSession(browser)) {
             this.logger.info('Skipping session status update as per configuration')
@@ -243,7 +258,7 @@ export default class AutomateModule extends BaseModule {
                 // registered yet. `lastTestName` stays empty on purpose: onAfterExecute's naming
                 // call is what consumes it, and an empty name is what beforeFeature's own
                 // (un-gated) _setSessionName has already applied.
-                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map() })
+                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map(), scenariosRan: 0 })
             }
 
             const name = this.resolveHookName(instance, hookKey)
@@ -303,6 +318,14 @@ export default class AutomateModule extends BaseModule {
                 // An empty name means nothing ever named this session — a BeforeAll that failed
                 // before any feature loaded, so beforeFeature never ran. Legacy makes no naming
                 // call at all in that state; PUTting '' would be an API call it never made.
+                // preferScenarioName: cucumber names the session after the FEATURE, but when
+                // exactly one non-skipped scenario ran the user can ask for that scenario's name
+                // instead. Only decidable here — "exactly one" is not knowable while scenarios are
+                // still arriving. skipSessionName still wins, on the guard below.
+                if (sessionData.preferScenarioName && sessionData.scenariosRan === 1 && sessionData.lastScenarioName) {
+                    sessionData.lastTestName = sessionData.lastScenarioName
+                }
+
                 if (!testContextOptions.skipSessionName && sessionData.lastTestName) {
                     await this.markSessionName(sessionId, sessionData.lastTestName, { user: userName, key: accessKey })
                 }
