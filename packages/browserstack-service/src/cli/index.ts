@@ -16,6 +16,8 @@ import { BROWSERSTACK_ACCESSIBILITY, BROWSERSTACK_OBSERVABILITY, BROWSERSTACK_TE
 import type { Options } from '@wdio/types'
 import TestOpsConfig from '../testOps/testOpsConfig.js'
 import WdioMochaTestFramework from './frameworks/wdioMochaTestFramework.js'
+import WdioCucumberTestFramework from './frameworks/wdioCucumberTestFramework.js'
+import type TestFramework from './frameworks/testFramework.js'
 import WdioAutomationFramework from './frameworks/wdioAutomationFramework.js'
 import WebdriverIOModule from './modules/webdriverIOModule.js'
 import AccessibilityModule from './modules/accessibilityModule.js'
@@ -44,7 +46,7 @@ export class BrowserstackCLI {
     isChildConnected = false
     binSessionId: string | null = null
     modules: Record<string, BaseModule> = {}
-    testFramework: WdioMochaTestFramework|null = null
+    testFramework: TestFramework|null = null
     cliParams: Record<string, string> | null = null
     automationFramework: WdioAutomationFramework|null = null
     SDK_CLI_BIN_PATH: string | null = null
@@ -134,7 +136,7 @@ export class BrowserstackCLI {
         this.setupAutomationFramework()
 
         this.modules[WebdriverIOModule.MODULE_NAME] = new WebdriverIOModule()
-        this.modules[AutomateModule.MODULE_NAME] = new AutomateModule(this.browserstackConfig as Options.Testrunner)
+        this.modules[AutomateModule.MODULE_NAME] = new AutomateModule(this.browserstackConfig as Options.Testrunner, this.options as Record<string, any>)
 
         if (startBinResponse.testhub) {
             this.logBuildStartErrors(startBinResponse.testhub)
@@ -488,8 +490,15 @@ export class BrowserstackCLI {
      */
     setupTestFramework() {
         const testFrameworkDetail = CLIUtils.getTestFrameworkDetail()
-        if (testFrameworkDetail.name.toLowerCase() === 'webdriverio-mocha') {
+        switch (testFrameworkDetail.name.toLowerCase()) {
+        case 'webdriverio-mocha':
             this.testFramework = new WdioMochaTestFramework([testFrameworkDetail.name], testFrameworkDetail.version, this.binSessionId as string)
+            break
+        case 'webdriverio-cucumber':
+            this.testFramework = new WdioCucumberTestFramework([testFrameworkDetail.name], testFrameworkDetail.version, this.binSessionId as string)
+            break
+        default:
+            this.logger.debug(`setupTestFramework: no CLI test framework for name=${testFrameworkDetail.name}`)
         }
     }
 
