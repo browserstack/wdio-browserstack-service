@@ -872,6 +872,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
             return
         }
 
+        // cliFramework being null subsumes the old !isRunning() guard on the Percy call: the CLI
+        // branch returns above, so percyModule.onAfterTest and this teardown never both run. The
+        // guard also skipped Percy when the binary ran but resolved a non-cucumber framework, which
+        // raises no TEST/POST either — so the teardown was lost rather than duplicated.
         await this._accessibilityHandler?.afterScenario(world)
         await this._insightsHandler?.afterScenario(world)
         await this._percyHandler?.afterScenario()

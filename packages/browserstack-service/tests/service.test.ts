@@ -8,6 +8,10 @@ import BrowserstackService from '../src/service.js'
 import * as utils from '../src/util.js'
 import InsightsHandler from '../src/insights-handler.js'
 import * as bstackLogger from '../src/bstackLogger.js'
+import { BrowserstackCLI } from '../src/cli/index.js'
+import WdioCucumberTestFramework from '../src/cli/frameworks/wdioCucumberTestFramework.js'
+import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
+import { HookState } from '../src/cli/states/hookState.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
@@ -917,6 +921,66 @@ describe('afterScenario', () => {
             'Step XYZ is undefined',
             'Step XYZ2 is ambiguous',
             'Some steps/hooks are pending for scenario "Can do something"'])
+    })
+
+    describe('_cucumberTestResult / _cucumberTestView mapping', () => {
+        const world = (result: Record<string, unknown>) => ({
+            pickle: { name: 'Can checkout' },
+            gherkinDocument: { uri: 'features/checkout.feature' },
+            result: { duration: { seconds: 0, nanos: 0 }, willBeRetried: false, ...result },
+        }) as any
+
+        beforeEach(() => {
+            service = new BrowserstackService({ testObservability: false } as any, [] as any,
+                { user: 'foo', key: 'bar', cucumberOpts: { strict: false } } as any)
+            service['_suiteTitle'] = 'Checkout feature'
+            service['_insightsHandler'] = new InsightsHandler(browser)
+        })
+
+        it('maps a passed scenario', () => {
+            const result = service['_cucumberTestResult'](world({ status: 'PASSED' }))
+            expect(result.passed).toBe(true)
+            expect((result as any).skipped).toBe(false)
+            expect(result.error).toBeUndefined()
+        })
+
+        it('maps a failed scenario and carries the message', () => {
+            const result = service['_cucumberTestResult'](world({ status: 'FAILED', message: 'boom' }))
+            expect(result.passed).toBe(false)
+            expect(result.error?.message).toBe('boom')
+        })
+
+        it('maps a skipped scenario as neither passed nor failed', () => {
+            const result = service['_cucumberTestResult'](world({ status: 'SKIPPED' }))
+            expect(result.passed).toBe(false)
+            expect((result as any).skipped).toBe(true)
+        })
+
+        it('synthesises the pending reason exactly as afterScenario does', () => {
+            service['_failureStatuses'].push('pending')
+            const result = service['_cucumberTestResult'](world({ status: 'PENDING' }))
+            expect(result.error?.message).toBe('Some steps/hooks are pending for scenario "Can checkout"')
+        })
+
+        it('treats a hook-only failure as passed when ignoreHooksStatus is on', () => {
+            service['_options'].testObservabilityOptions = { ignoreHooksStatus: true } as any
+            vi.spyOn(service['_insightsHandler']!, 'hasTestStepFailures').mockReturnValue(false)
+
+            expect(service['_cucumberTestResult'](world({ status: 'FAILED', message: 'hook blew up' })).passed).toBe(true)
+        })
+
+        it('still fails when ignoreHooksStatus is on but a step actually failed', () => {
+            service['_options'].testObservabilityOptions = { ignoreHooksStatus: true } as any
+            vi.spyOn(service['_insightsHandler']!, 'hasTestStepFailures').mockReturnValue(true)
+
+            expect(service['_cucumberTestResult'](world({ status: 'FAILED', message: 'step blew up' })).passed).toBe(false)
+        })
+
+        it('falls back to the suite title when the pickle has no name', () => {
+            const w = world({ status: 'PASSED' })
+            w.pickle.name = ''
+            expect(service['_cucumberTestView'](w).fullName).toBe('Checkout feature')
+        })
     })
 })
 
@@ -1916,4 +1980,131 @@ describe('_isAppAutomate honors skipAppOverride', () => {
         const svc = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} } as any)
         expect(svc._isAppAutomate()).toBe(false)
     })
+})
+
+describe('cucumber CLI dispatch (binary flow)', () => {
+    const makeFramework = () => {
+        const framework = new WdioCucumberTestFramework(['cucumber'], {}, 'bin-session')
+        framework.trackEvent = vi.fn().mockResolvedValue(undefined)
+        return framework
+    }
+
+    const stubCLI = (opts: { running?: boolean, framework?: unknown, modules?: Record<string, unknown> } = {}) => {
+        vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => opts.running ?? true,
+            getTestFramework: () => opts.framework,
+            modules: opts.modules ?? {},
+        } as any)
+    }
+
+    const makeWorld = (result: Record<string, unknown> = { status: 'PASSED' }) => ({
+        pickle: { name: 'Can checkout' },
+        gherkinDocument: { uri: 'features/checkout.feature' },
+        result: { duration: { seconds: 0, nanos: 0 }, willBeRetried: false, ...result },
+    }) as any
+
+    beforeEach(() => {
+        service = new BrowserstackService({} as any, [] as any,
+            { user: 'foo', key: 'bar', capabilities: {} } as any)
+        service['_suiteTitle'] = 'Checkout feature'
+        service['_accessibilityHandler'] = { beforeScenario: vi.fn(), afterScenario: vi.fn() } as any
+        service['_insightsHandler'] = {
+            beforeScenario: vi.fn(),
+            afterScenario: vi.fn(),
+            hasTestStepFailures: vi.fn().mockReturnValue(true),
+        } as any
+        service['_percyHandler'] = { afterScenario: vi.fn() } as any
+        service['_setAnnotation'] = vi.fn()
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    describe('beforeScenario', () => {
+        it('raises TEST/PRE on the cucumber framework and leaves the legacy handlers alone', async () => {
+            const framework = makeFramework()
+            stubCLI({ framework })
+
+            await service.beforeScenario(makeWorld())
+
+            expect(framework.trackEvent).toHaveBeenCalledTimes(1)
+            const [testFrameworkState, hookState, args] = vi.mocked(framework.trackEvent).mock.calls[0]
+            expect(testFrameworkState).toBe(TestFrameworkState.TEST)
+            expect(hookState).toBe(HookState.PRE)
+            expect((args as any).test.fullName).toBe('Can checkout')
+            expect((args as any).suiteTitle).toBe('Checkout feature')
+            expect(service['_accessibilityHandler']!.beforeScenario).not.toHaveBeenCalled()
+            expect(service['_insightsHandler']!.beforeScenario).not.toHaveBeenCalled()
+        })
+    })
+
+    describe('afterScenario', () => {
+        it('raises TEST/POST on the cucumber framework and leaves the legacy handlers alone', async () => {
+            const framework = makeFramework()
+            stubCLI({ framework })
+
+            await service.afterScenario(makeWorld())
+
+            expect(framework.trackEvent).toHaveBeenCalledTimes(1)
+            const [testFrameworkState, hookState, args] = vi.mocked(framework.trackEvent).mock.calls[0]
+            expect(testFrameworkState).toBe(TestFrameworkState.TEST)
+            expect(hookState).toBe(HookState.POST)
+            expect((args as any).result.passed).toBe(true)
+            expect(service['_accessibilityHandler']!.afterScenario).not.toHaveBeenCalled()
+            expect(service['_insightsHandler']!.afterScenario).not.toHaveBeenCalled()
+            expect(service['_percyHandler']!.afterScenario).not.toHaveBeenCalled()
+        })
+
+        // Guards the dropped !isRunning() guard on the Percy call: with the binary up but no
+        // cucumber framework attached, no TEST/POST is raised, so percyModule.onAfterTest never
+        // fires and this teardown is the only one that runs.
+        it('runs the legacy Percy teardown when the binary runs a non-cucumber framework', async () => {
+            stubCLI({ framework: { trackEvent: vi.fn() } })
+
+            await service.afterScenario(makeWorld())
+
+            expect(service['_percyHandler']!.afterScenario).toHaveBeenCalledTimes(1)
+            expect(service['_accessibilityHandler']!.afterScenario).toHaveBeenCalledTimes(1)
+            expect(service['_insightsHandler']!.afterScenario).toHaveBeenCalledTimes(1)
+        })
+    })
+
+    describe('afterHook BEFORE_ALL cascade', () => {
+        it('cascades skipped scenarios when a BEFORE_ALL hook fails', async () => {
+            const framework = makeFramework()
+            stubCLI({ framework })
+            const cascade = vi.spyOn(service as any, '_reportCucumberScenariosSkipped')
+                .mockResolvedValue(undefined)
+
+            await service.afterHook(undefined as any, {}, { passed: false } as any)
+
+            expect(vi.mocked(framework.trackEvent).mock.calls[0][0]).toBe(TestFrameworkState.BEFORE_ALL)
+            expect(cascade).toHaveBeenCalledTimes(1)
+        })
+
+        it('does not cascade when the BEFORE_ALL hook passed', async () => {
+            const framework = makeFramework()
+            stubCLI({ framework })
+            const cascade = vi.spyOn(service as any, '_reportCucumberScenariosSkipped')
+                .mockResolvedValue(undefined)
+
+            await service.afterHook(undefined as any, {}, { passed: true } as any)
+
+            expect(cascade).not.toHaveBeenCalled()
+        })
+
+        it('does not cascade when a BEFORE_EACH hook fails', async () => {
+            const framework = makeFramework()
+            stubCLI({ framework })
+            const cascade = vi.spyOn(service as any, '_reportCucumberScenariosSkipped')
+                .mockResolvedValue(undefined)
+
+            await service.afterHook({ id: 'h1', hookId: 'h1' } as any, {}, { passed: false } as any)
+
+            expect(vi.mocked(framework.trackEvent).mock.calls[0][0]).toBe(TestFrameworkState.BEFORE_EACH)
+            expect(cascade).not.toHaveBeenCalled()
+        })
+    })
+
 })
