@@ -139,16 +139,24 @@ export default class AccessibilityModule extends BaseModule {
                 return
             }
 
-            // Wrap commands if accessibility scripts are available
+            // Guard EACH overwriteCommand individually: the list is server-sent and may name a
+            // command this driver never registered (appium omits web-only commands; the list also
+            // carries Selenium-shaped entries meant for other SDKs). overwriteCommand throws on an
+            // unknown name, so an unguarded loop aborts at the first one and drops every wrap after
+            // it. Skipping the unknown name keeps the rest of the list wrapped and auto-scanning.
             if (this.scriptInstance.commandsToWrap && this.scriptInstance.commandsToWrap.length > 0) {
                 this.scriptInstance.commandsToWrap
                     .filter((command) => command.name && command.class)
                     .forEach((command) => {
-                        browser.overwriteCommand(
-                            command.name,
-                            this.commandWrapper.bind(this, command),
-                            command.class === 'Element'
-                        )
+                        try {
+                            browser.overwriteCommand(
+                                command.name,
+                                this.commandWrapper.bind(this, command),
+                                command.class === 'Element'
+                            )
+                        } catch (wrapError) {
+                            this.logger.debug(`Skipping command wrap for ${command.name}: ${wrapError}`)
+                        }
                     })
             }
 

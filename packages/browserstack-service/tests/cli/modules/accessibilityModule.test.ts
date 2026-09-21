@@ -85,6 +85,7 @@ import { HookState } from '../../../src/cli/states/hookState.js'
 import { TestFrameworkState } from '../../../src/cli/states/testFrameworkState.js'
 import { BrowserstackCLI } from '../../../src/cli/index.js'
 import { shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y } from '../../../src/util.js'
+import accessibilityScripts from '../../../src/scripts/accessibility-scripts.js'
 
 describe('AccessibilityModule', () => {
     let accessibilityModule: AccessibilityModule
@@ -264,6 +265,39 @@ describe('AccessibilityModule', () => {
             await mockBrowser.stopA11yScanning()
 
             expect(loggerWarnSpy).toHaveBeenCalledWith('Accessibility scanning cannot be stopped from outside the test')
+        })
+
+        // SDK-7452: the server-sent commandsToWrap list ends with Selenium-shaped entries
+        // (startA11yScanning/stopA11yScanning/performScan, class HttpCommandExecutor) that a
+        // WebdriverIO driver never registers. overwriteCommand throws on those names, and without a
+        // per-command guard the throw escaped the forEach and aborted onBeforeExecute.
+        it('skips a command the driver did not register without aborting the wrap loop', async () => {
+            const loggerErrorSpy = vi.spyOn(accessibilityModule.logger, 'error')
+            accessibilityModule.accessibility = true
+            accessibilityModule.isAppAccessibility = true
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            vi.mocked(validateCapsWithAppA11y).mockReturnValue(true)
+
+            accessibilityScripts.commandsToWrap = [
+                { name: 'click', class: 'Element' },
+                { name: 'startA11yScanning', class: 'HttpCommandExecutor' },
+                { name: 'addValue', class: 'Element' }
+            ] as any
+            mockBrowser.overwriteCommand = vi.fn((name: string) => {
+                if (name === 'startA11yScanning') {
+                    throw new Error('overwriteCommand: no command to be overwritten: ' + name)
+                }
+            })
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(mockBrowser.overwriteCommand).toHaveBeenCalledTimes(3)
+            expect(mockBrowser.overwriteCommand).toHaveBeenLastCalledWith('addValue', expect.any(Function), true)
+            expect(loggerErrorSpy).not.toHaveBeenCalledWith(
+                expect.stringContaining('Error in onBeforeExecute')
+            )
+
+            accessibilityScripts.commandsToWrap = []
         })
     })
 
