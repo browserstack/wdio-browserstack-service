@@ -57,7 +57,7 @@
     "@bufbuild/protobuf": "^2.5.2",
     "@grpc/grpc-js": "~1.13.5",
     "@percy/appium-app": "^2.0.9",
-    "@percy/selenium-webdriver": "^2.2.2",
+    "@percy/selenium-webdriver": ">=2.2.2 <2.2.6",
     "@types/gitconfiglocal": "^2.0.1",
     "browserstack-local": "^1.5.1",
     "chalk": "^5.3.0",

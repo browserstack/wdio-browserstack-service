@@ -13,7 +13,8 @@ const tryRequire = function (pkg: string, fallback: unknown) {
             return (mod as { default: unknown }).default
         }
         return mod
-    } catch {
+    } catch (err) {
+        PercyLogger.debug(`Percy: could not load ${pkg} - ${(err as Error)?.message}`)
         return fallback
     }
 }
@@ -22,12 +23,30 @@ const percySnapshot = tryRequire('@percy/selenium-webdriver', null)
 
 const percyAppScreenshot = tryRequire('@percy/appium-app', {})
 
+/*
+Percy's SDKs raise their misuse guards - percySnapshot against a Percy-on-Automate build,
+percyScreenshot against anything else - before their own try/catch, so those rejections
+reach the caller. Every PercySDK entry point is publicly exported, so an unguarded one
+fails the user's test rather than their visual coverage. PERCY_RAISE_ERROR is Percy's own
+opt-in for the opposite behaviour and is honoured.
+*/
+const runPercy = async (label: string, call: () => unknown) => {
+    try {
+        return await call()
+    } catch (err) {
+        if (process.env.PERCY_RAISE_ERROR === 'true') {
+            throw err
+        }
+        PercyLogger.error(`Percy ${label} failed: ${(err as Error)?.message}`)
+    }
+}
+
 /* eslint-disable @typescript-eslint/no-unused-vars */
 let snapshotHandler = (...args: unknown[]) => {
     PercyLogger.error('Unsupported driver for percy')
 }
 if (percySnapshot) {
-    snapshotHandler = (browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, snapshotName: string, options?: { [key: string]: unknown }) => {
+    snapshotHandler = async (browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, snapshotName: string, options?: { [key: string]: unknown }) => {
         if (process.env.PERCY_SNAPSHOT === 'true') {
             let { name, uuid } = InsightsHandler.currentTest
             if (isUndefined(name)) {
@@ -38,7 +57,7 @@ if (percySnapshot) {
                 ...options,
                 testCase: name || ''
             }
-            return percySnapshot(browser, snapshotName, options)
+            return await runPercy(`snapshot "${snapshotName}"`, () => percySnapshot(browser, snapshotName, options))
         }
     }
 }
@@ -75,23 +94,25 @@ const screenshotHelper = (type: string, driverOrName: WebdriverIO.Browser | Webd
 }
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
-let screenshotHandler = async (...args: unknown[]) => {
+let screenshotHandler = async (...args: unknown[]): Promise<unknown> => {
     PercyLogger.error('Unsupported driver for percy')
+    return undefined
 }
 if (percySnapshot && percySnapshot.percyScreenshot) {
-    screenshotHandler = (browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser | string, screenshotName?: string | { [key: string]: unknown }, options?: { [key: string]: unknown }) => {
-        return screenshotHelper('web', browser, screenshotName, options)
+    screenshotHandler = async (browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser | string, screenshotName?: string | { [key: string]: unknown }, options?: { [key: string]: unknown }) => {
+        return await runPercy('screenshot', () => screenshotHelper('web', browser, screenshotName, options))
     }
 }
 export const screenshot = screenshotHandler
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
-let screenshotAppHandler = async (...args: unknown[]) => {
+let screenshotAppHandler = async (...args: unknown[]): Promise<unknown> => {
     PercyLogger.error('Unsupported driver for percy')
+    return undefined
 }
 if (percyAppScreenshot) {
-    screenshotAppHandler = (driverOrName: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser | string, nameOrOptions?: string | { [key: string]: unknown }, options?: { [key: string]: unknown }) => {
-        return screenshotHelper('app', driverOrName, nameOrOptions, options)
+    screenshotAppHandler = async (driverOrName: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser | string, nameOrOptions?: string | { [key: string]: unknown }, options?: { [key: string]: unknown }) => {
+        return await runPercy('app screenshot', () => screenshotHelper('app', driverOrName, nameOrOptions, options))
     }
 }
 export const screenshotApp = screenshotAppHandler
