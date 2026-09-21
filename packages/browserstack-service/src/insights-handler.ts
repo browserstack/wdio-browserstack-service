@@ -1237,15 +1237,16 @@ class _InsightsHandler {
         }
     }
 
-    public setTestData (test: Frameworks.Test, uuid: string) {
-        InsightsHandler.currentTest = {
-            test, uuid
-        }
-        if (this._framework !== 'mocha') {
+    public setTestData (test: Frameworks.Test | ITestCaseHookParameter, uuid: string) {
+        // Legacy's cucumber beforeScenario records the uuid alone; only mocha carries the test.
+        InsightsHandler.currentTest = 'pickle' in test ? { uuid } : { test, uuid }
+        // browserCommand resolves the active test through this map and returns before the
+        // screenshot branch without an entry, so the CLI cucumber path has to seed it too
+        // (SDK-4177). getIdentifier already keys a world by its pickle.
+        if (this._framework !== 'mocha' && !('pickle' in test)) {
             return
         }
-        const fullTitle = getUniqueIdentifier(test, this._framework)
-        this._tests[fullTitle] = {
+        this._tests[this.getIdentifier(test)] = {
             uuid,
             startedAt: (new Date()).toISOString()
         }

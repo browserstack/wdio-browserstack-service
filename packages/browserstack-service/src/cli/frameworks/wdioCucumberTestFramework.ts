@@ -557,9 +557,11 @@ export default class WdioCucumberTestFramework extends TestFramework {
         if (!logEntry) {
             return
         }
-        const { level, message, timestamp } = logEntry
+        const { level, message, timestamp, kind } = logEntry
         const logRecord: Record<string, unknown> = {
-            kind: TestFrameworkConstants.KIND_LOG,
+            // Console logs carry no kind and stay KIND_LOG; a producer that sets one (a screenshot,
+            // say) keeps it, or the entry reaches Observability labelled as a console log.
+            kind: kind ?? TestFrameworkConstants.KIND_LOG,
             message: Buffer.from(message as string),
             level,
             timestamp,
