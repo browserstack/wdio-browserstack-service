@@ -8,9 +8,13 @@
 declare namespace WebdriverIO {
     interface Browser {
         setCustomTags: (key: string, value: string) => Promise<void>
+        uploadAttachment: (filePath: string, options?: { buildAttachment?: boolean }) => Promise<void>
+        uploadMedia: (filePath: string, options?: { buildAttachment?: boolean }) => Promise<void>
     }
 
     interface MultiRemoteBrowser {
         setCustomTags: (key: string, value: string) => Promise<void>
+        uploadAttachment: (filePath: string, options?: { buildAttachment?: boolean }) => Promise<void>
+        uploadMedia: (filePath: string, options?: { buildAttachment?: boolean }) => Promise<void>
     }
 }
