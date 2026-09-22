@@ -1784,10 +1784,20 @@ export async function pollApi(
             await new Promise((resolve) => setTimeout(resolve, elapsedTime))
             return pollApi(url, params, headers, upperLimit, startTime)
         } else if (error.response) {
+            const statusCode = error.response.statusCode
+            const body = typeof error.response.body === 'string' ? error.response.body : ''
+            let message: string | undefined
+            try {
+                message = body ? JSON.parse(body).message : undefined
+            } catch {
+                // non-JSON body; the raw-body message below carries it instead
+            }
             throw {
                 data: {},
                 headers: {},
-                message: error.response.body ? JSON.parse(error.response.body).message : 'Unknown error',
+                statusCode,
+                body,
+                message: message ?? `HTTP ${statusCode}${body ? `: ${body.slice(0, 300)}` : ''}`,
             }
         } else {
             BStackLogger.error(`Unexpected error occurred: ${error}`)
