@@ -660,7 +660,7 @@ export const getAppA11yResults = PerformanceTester.measureWrapper(PERFORMANCE_SD
         BStackLogger.debug(`Polling Result: ${JSON.stringify(result)}`)
         return result
     } catch (error: any) {
-        BStackLogger.error(`No accessibility results were found. Error: ${error?.message ?? util.inspect(error, { depth: 2 })}`)
+        BStackLogger.error(`No accessibility results were found for testRunUuid=${process.env.TEST_ANALYTICS_ID} sessionId=${sessionId}. Error: ${error?.message ?? util.inspect(error, { depth: 2 })}`)
         return []
     }
 })
@@ -682,7 +682,7 @@ export const getAppA11yResultsSummary = PerformanceTester.measureWrapper(PERFORM
         BStackLogger.debug(`Polling Result: ${JSON.stringify(result)}`)
         return result
     } catch (error: any) {
-        BStackLogger.error(`No accessibility summary was found. Error: ${error?.message ?? util.inspect(error, { depth: 2 })}`)
+        BStackLogger.error(`No accessibility summary was found for testRunUuid=${process.env.TEST_ANALYTICS_ID} sessionId=${sessionId}. Error: ${error?.message ?? util.inspect(error, { depth: 2 })}`)
         return {}
     }
 })
