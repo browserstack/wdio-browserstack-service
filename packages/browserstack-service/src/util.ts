@@ -2294,6 +2294,27 @@ export function getMochaTestHierarchy(test: Frameworks.Test) {
     return value.reverse()
 }
 
+const TEST_TAG_PATTERN = /@[\w-]+/g
+
+/**
+ * Mocha and Jasmine have no tag construct, so `@tag` tokens written into the suite and
+ * test titles are the tag source — the same convention the node SDK uses for Jest and
+ * Playwright. The leading `@` is kept so these match the Cucumber runner's pickle tags,
+ * which reach Observability with it intact.
+ */
+export function getTestTags(test: Frameworks.Test, scopes?: string[]): string[] {
+    const titles = [...(scopes ?? getMochaTestHierarchy(test)), test.title || test.description || '']
+    const tags: string[] = []
+    for (const title of titles) {
+        for (const tag of title.match(TEST_TAG_PATTERN) || []) {
+            if (!tags.includes(tag)) {
+                tags.push(tag)
+            }
+        }
+    }
+    return tags
+}
+
 /**
  * True only for the hub-interpreted `browserstack_executor: {…}` magic string.
  * Anchored to the start (leading whitespace tolerated) and case-sensitive, matching

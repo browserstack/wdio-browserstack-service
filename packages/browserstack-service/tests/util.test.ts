@@ -2430,3 +2430,37 @@ describe('coerceStringBooleans (SDK-3737)', () => {
         expect(utils.coerceStringBooleans({})).toEqual({})
     })
 })
+
+describe('getTestTags', () => {
+    const tagsFor = (title: string, scopes: string[] = []) =>
+        utils.getTestTags({ title } as any, scopes)
+
+    it('picks up a tag in the test title', () => {
+        expect(tagsFor('logs in @smoke')).toEqual(['@smoke'])
+    })
+
+    it('picks up a tag from the describe scope', () => {
+        expect(tagsFor('logs in', ['auth @regression'])).toEqual(['@regression'])
+    })
+
+    it('merges scope and title tags, deduped', () => {
+        expect(tagsFor('logs in @smoke', ['auth @smoke', 'nested @regression']))
+            .toEqual(['@smoke', '@regression'])
+    })
+
+    it('returns an empty array when nothing is tagged', () => {
+        expect(tagsFor('logs in', ['auth'])).toEqual([])
+    })
+
+    it('picks up multiple tags from one title', () => {
+        expect(tagsFor('logs in @smoke @p1')).toEqual(['@smoke', '@p1'])
+    })
+
+    it('keeps hyphens in a tag', () => {
+        expect(tagsFor('logs in @smoke-test')).toEqual(['@smoke-test'])
+    })
+
+    it('falls back to the Jasmine description when there is no title', () => {
+        expect(utils.getTestTags({ description: 'logs in @jasmine' } as any, [])).toEqual(['@jasmine'])
+    })
+})

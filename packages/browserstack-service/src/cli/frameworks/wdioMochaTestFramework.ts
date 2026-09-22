@@ -10,7 +10,7 @@ import TrackedInstance from '../instances/trackedInstance.js'
 import { TestFrameworkConstants } from './constants/testFrameworkConstants.js'
 import { BStackLogger as logger } from '../cliLogger.js'
 import type { Frameworks } from '@wdio/types'
-import { getMochaTestHierarchy, getUniqueIdentifier, isUndefined, removeAnsiColors } from '../../util.js'
+import { getMochaTestHierarchy, getTestTags, getUniqueIdentifier, isUndefined, removeAnsiColors } from '../../util.js'
 import { TEST_ANALYTICS_ID } from '../../constants.js'
 
 /**
@@ -216,6 +216,7 @@ export default class WdioMochaTestFramework extends TestFramework {
         const framework = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME)
         const fullTitle = getUniqueIdentifier(test, framework)
         const filename = test.file // || this._suiteFile
+        const scopes = getMochaTestHierarchy(test)
 
         const testData: Record<string, unknown> = {
             [TestFrameworkConstants.KEY_TEST_ID]: getUniqueIdentifier(test, framework),
@@ -223,7 +224,8 @@ export default class WdioMochaTestFramework extends TestFramework {
             [TestFrameworkConstants.KEY_TEST_CODE]: test.body || '',
             ...resolveTestFilePaths(filename),
             [TestFrameworkConstants.KEY_TEST_SCOPE]: fullTitle,
-            [TestFrameworkConstants.KEY_TEST_SCOPES]: getMochaTestHierarchy(test),
+            [TestFrameworkConstants.KEY_TEST_SCOPES]: scopes,
+            [TestFrameworkConstants.KEY_TEST_TAGS]: getTestTags(test, scopes),
         }
 
         return testData
