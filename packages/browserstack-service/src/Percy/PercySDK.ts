@@ -21,6 +21,21 @@ const tryRequire = function (pkg: string, fallback: unknown) {
 
 const percySnapshot = tryRequire('@percy/selenium-webdriver', null)
 
+/*
+Percy ships two disjoint web SDKs, and the correct one depends on the driver, not the
+product. percySnapshot from @percy/selenium-webdriver drives the browser through Selenium
+client APIs - executeScript(script) with a single argument, By, switchTo() - none of which
+a WebdriverIO browser provides, so it captures nothing and swallows the failure. The
+WebdriverIO-native port lives in @percy/webdriverio and is what `snapshot` binds to.
+
+percyScreenshot (Percy on Automate) deliberately stays on @percy/selenium-webdriver: it is
+driver-agnostic - it reads session metadata and posts, capturing server-side - and carries
+an explicit wdio branch in its DriverMetadata.
+*/
+const percyWebdriverioSnapshot = tryRequire('@percy/webdriverio', null)
+
+const webSnapshot = percyWebdriverioSnapshot || percySnapshot
+
 const percyAppScreenshot = tryRequire('@percy/appium-app', {})
 
 /*
@@ -45,7 +60,7 @@ const runPercy = async (label: string, call: () => unknown) => {
 let snapshotHandler = (...args: unknown[]) => {
     PercyLogger.error('Unsupported driver for percy')
 }
-if (percySnapshot) {
+if (webSnapshot) {
     snapshotHandler = async (browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, snapshotName: string, options?: { [key: string]: unknown }) => {
         if (process.env.PERCY_SNAPSHOT === 'true') {
             let { name, uuid } = InsightsHandler.currentTest
@@ -57,7 +72,7 @@ if (percySnapshot) {
                 ...options,
                 testCase: name || ''
             }
-            return await runPercy(`snapshot "${snapshotName}"`, () => percySnapshot(browser, snapshotName, options))
+            return await runPercy(`snapshot "${snapshotName}"`, () => webSnapshot(browser, snapshotName, options))
         }
     }
 }
