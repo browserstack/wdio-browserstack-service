@@ -57,8 +57,9 @@ const runPercy = async (label: string, call: () => unknown) => {
 }
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
-let snapshotHandler = (...args: unknown[]) => {
+let snapshotHandler = async (...args: unknown[]): Promise<unknown> => {
     PercyLogger.error('Unsupported driver for percy')
+    return undefined
 }
 if (webSnapshot) {
     snapshotHandler = async (browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, snapshotName: string, options?: { [key: string]: unknown }) => {
