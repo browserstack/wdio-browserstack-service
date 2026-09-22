@@ -14,6 +14,7 @@ import { getBrowserStackUserAndKey, isBrowserstackInfra } from './util.js'
 import type { BrowserstackOptions } from './types.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
+import { measureCommandPhase } from './instrumentation/performance/driver-command-metrics.js'
 
 class AiHandler {
     authResult: BrowserstackHealing.InitSuccessResponse | BrowserstackHealing.InitErrorResponse
@@ -82,10 +83,16 @@ class AiHandler {
         try {
             const result = await orginalFunc(using, value)
             if (!result.error) {
-                const script = await aiSDK.BrowserstackHealing.logData(locatorType, locatorValue, undefined, undefined, this.authResult.groupId, sessionId, undefined, tcgDetails)
-                if (script) {
-                    await browser.execute(script)
-                }
+                // logData + its browser.execute round trip run after every successful findElement.
+                // This is the wdio counterpart of the node agent's post-execute self-heal phase and
+                // is charged to the driver post-execute span rather than to the user's command.
+                const authResult = this.authResult as BrowserstackHealing.InitSuccessResponse
+                await measureCommandPhase(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.POST_EXECUTE, 'findElement', async () => {
+                    const script = await aiSDK.BrowserstackHealing.logData(locatorType, locatorValue, undefined, undefined, authResult.groupId, sessionId, undefined, tcgDetails)
+                    if (script) {
+                        await browser.execute(script)
+                    }
+                })
                 return result
             }
             if (options.selfHeal === true && this.authResult.isHealingEnabled) {

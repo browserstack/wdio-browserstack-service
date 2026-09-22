@@ -31,6 +31,7 @@ import AiHandler from './ai-handler.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import { EVENTS } from './instrumentation/performance/constants.js'
+import { commandLabelFromArgs, logDriverCommandSpanSummary, measureCommandPhase } from './instrumentation/performance/driver-command-metrics.js'
 import { BrowserstackCLI } from './cli/index.js'
 import { drainSkipReports, markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
 import { CLIUtils } from './cli/cliUtils.js'
@@ -313,15 +314,24 @@ export default class BrowserstackService implements Services.ServiceInstance {
                  */
                 if (!BrowserstackCLI.getInstance().isRunning()) {
                     this._browser.on('command', async (command) => {
-                        if (shouldProcessEventForTesthub('')) {
-                            this._insightsHandler?.browserCommand(
-                                'client:beforeCommand',
-                                Object.assign(command, { sessionId }),
-                                this._currentTest
-                            )
-                        }
-                        await this._percyHandler?.browserBeforeCommand(
-                            Object.assign(command, { sessionId }),
+                        // Everything the SDK does before a WebDriver command leaves the client
+                        // lives in this listener, so it is the wdio equivalent of the node agent's
+                        // patched `driver.execute` pre-execute phase.
+                        await measureCommandPhase(
+                            PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.PRE_EXECUTE,
+                            commandLabelFromArgs(command),
+                            async () => {
+                                if (shouldProcessEventForTesthub('')) {
+                                    this._insightsHandler?.browserCommand(
+                                        'client:beforeCommand',
+                                        Object.assign(command, { sessionId }),
+                                        this._currentTest
+                                    )
+                                }
+                                await this._percyHandler?.browserBeforeCommand(
+                                    Object.assign(command, { sessionId }),
+                                )
+                            }
                         )
                     })
 
@@ -329,15 +339,21 @@ export default class BrowserstackService implements Services.ServiceInstance {
                      * register result event
                      */
                     this._browser.on('result', (result) => {
-                        if (shouldProcessEventForTesthub('')) {
-                            this._insightsHandler?.browserCommand(
-                                'client:afterCommand',
-                                Object.assign(result, { sessionId }),
-                                this._currentTest
-                            )
-                        }
-                        this._percyHandler?.browserAfterCommand(
-                            Object.assign(result, { sessionId }),
+                        measureCommandPhase(
+                            PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.POST_EXECUTE,
+                            commandLabelFromArgs(result),
+                            () => {
+                                if (shouldProcessEventForTesthub('')) {
+                                    this._insightsHandler?.browserCommand(
+                                        'client:afterCommand',
+                                        Object.assign(result, { sessionId }),
+                                        this._currentTest
+                                    )
+                                }
+                                this._percyHandler?.browserAfterCommand(
+                                    Object.assign(result, { sessionId }),
+                                )
+                            }
                         )
                     })
                 }
@@ -694,6 +710,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // await new Promise(resolve => setTimeout(resolve, 100))
 
             // Track performance report generation (this is the big operation!)
+            logDriverCommandSpanSummary()
             await PerformanceTester.stopAndGenerate('performance-service.html')
             if (process.env[PERF_MEASUREMENT_ENV]) {
                 PerformanceTester.calculateTimes([

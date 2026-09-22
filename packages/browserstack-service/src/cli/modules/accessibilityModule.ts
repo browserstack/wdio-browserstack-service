@@ -16,6 +16,7 @@ import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
 import PerformanceTester from '../../instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from '../../instrumentation/performance/constants.js'
+import { isNavigationCommand, measureCommandPhase } from '../../instrumentation/performance/driver-command-metrics.js'
 import type { FetchDriverExecuteParamsEventRequest, FetchDriverExecuteParamsEventResponse } from '../../grpc/index.js'
 import { GrpcClient } from '../grpcClient.js'
 import { TestFrameworkConstants } from '../frameworks/constants/testFrameworkConstants.js'
@@ -233,7 +234,15 @@ export default class AccessibilityModule extends BaseModule {
                     !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
                 ) {
                     try {
-                        await this.performScanCli(browser, command.name, this.currentHookRunUuid)
+                        // Same per-command SDK work as the legacy AccessibilityHandler path, measured
+                        // under the same driver spans so a CLI run and a listener run are comparable.
+                        await measureCommandPhase(
+                            isNavigationCommand(command.name)
+                                ? PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.GET
+                                : PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.PRE_EXECUTE,
+                            command.name,
+                            () => this.performScanCli(browser, command.name, this.currentHookRunUuid)
+                        )
                         this.logger.debug(`Accessibility scan performed after ${command.name} command`)
                     } catch (scanError) {
                         this.logger.debug(`Error performing accessibility scan after ${command.name}: ${scanError}`)

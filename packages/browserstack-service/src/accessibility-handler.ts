@@ -74,6 +74,7 @@ import {
 import accessibilityScripts from './scripts/accessibility-scripts.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
+import { isNavigationCommand, measureCommandPhase } from './instrumentation/performance/driver-command-metrics.js'
 
 import { BStackLogger } from './bstackLogger.js'
 
@@ -480,7 +481,16 @@ class _AccessibilityHandler {
                 )
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
-            await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid)
+            // The per-command scan is SDK work that runs inside the driver session before the user's
+            // command does, so it is measured as the driver pre-execute phase (navigation commands
+            // get their own span — a navigation re-scans the whole page and dominates the bucket).
+            await measureCommandPhase(
+                isNavigationCommand(command.name)
+                    ? PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.GET
+                    : PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.PRE_EXECUTE,
+                command.name,
+                () => performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid)
+            )
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)
         }
