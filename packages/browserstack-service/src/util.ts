@@ -683,8 +683,7 @@ export const getAppA11yResultsSummary = PerformanceTester.measureWrapper(PERFORM
         BStackLogger.debug(`Polling Result: ${JSON.stringify(result)}`)
         return result
     } catch (error: any) {
-        BStackLogger.error('No accessibility summary was found.')
-        BStackLogger.debug(`getAppA11yResultsSummary Failed. Error: ${error}`)
+        BStackLogger.error(`No accessibility summary was found. Error: ${error}`)
         return {}
     }
 })
@@ -713,8 +712,7 @@ export const getA11yResultsSummary = PerformanceTester.measureWrapper(PERFORMANC
         const summaryResults: { [key: string]: any; } = await (browser as WebdriverIO.Browser).executeAsync(AccessibilityScripts.getResultsSummary as string)
         return summaryResults
     } catch (error: any) {
-        BStackLogger.error('No accessibility summary was found.')
-        BStackLogger.debug(`getA11yResultsSummary Failed. Error: ${error}`)
+        BStackLogger.error(`No accessibility summary was found. Error: ${error}`)
         return {}
     }
 })
