@@ -12,6 +12,8 @@ import { BrowserstackCLI } from '../src/cli/index.js'
 import WdioCucumberTestFramework from '../src/cli/frameworks/wdioCucumberTestFramework.js'
 import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
+import TestFramework from '../src/cli/frameworks/testFramework.js'
+import { TestFrameworkConstants } from '../src/cli/frameworks/constants/testFrameworkConstants.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
@@ -2036,6 +2038,40 @@ describe('cucumber CLI dispatch (binary flow)', () => {
             expect((args as any).suiteTitle).toBe('Checkout feature')
             expect(service['_accessibilityHandler']!.beforeScenario).not.toHaveBeenCalled()
             expect(service['_insightsHandler']!.beforeScenario).not.toHaveBeenCalled()
+        })
+
+        // SDK-4177: browserCommand resolves the active test through insightsHandler's map and
+        // returns before the screenshot branch without an entry. Legacy seeded it from
+        // beforeScenario, which the CLI branch skips, so the CLI branch has to seed it itself.
+        it('seeds insightsHandler with the scenario uuid, read after the event', async () => {
+            const framework = makeFramework()
+            stubCLI({ framework })
+            const setTestData = vi.fn()
+            service['_insightsHandler']!.setTestData = setTestData
+            vi.spyOn(TestFramework, 'getTrackedInstance').mockReturnValue({} as any)
+            vi.spyOn(TestFramework, 'getState').mockImplementation((_i: any, key: any) =>
+                key === TestFrameworkConstants.KEY_TEST_UUID ? 'scenario-uuid-1' : undefined)
+
+            const world = makeWorld()
+            await service.beforeScenario(world)
+
+            expect(setTestData).toHaveBeenCalledWith(world, 'scenario-uuid-1')
+            // read AFTER trackEvent — the uuid is minted on TEST/PRE
+            expect(vi.mocked(framework.trackEvent).mock.invocationCallOrder[0])
+                .toBeLessThan(setTestData.mock.invocationCallOrder[0])
+        })
+
+        it('does not seed insightsHandler when no scenario uuid was minted', async () => {
+            const framework = makeFramework()
+            stubCLI({ framework })
+            const setTestData = vi.fn()
+            service['_insightsHandler']!.setTestData = setTestData
+            vi.spyOn(TestFramework, 'getTrackedInstance').mockReturnValue({} as any)
+            vi.spyOn(TestFramework, 'getState').mockReturnValue(undefined as any)
+
+            await service.beforeScenario(makeWorld())
+
+            expect(setTestData).not.toHaveBeenCalled()
         })
     })
 

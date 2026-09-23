@@ -810,6 +810,18 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 test: this._cucumberTestView(world),
                 suiteTitle: this._suiteTitle,
             })
+            // Read AFTER the event: loadScenarioData mints this scenario's uuid on TEST/PRE, so
+            // reading earlier would seed the previous scenario's. Mirrors what beforeTest does for
+            // mocha off INIT_TEST, and is what lets browserCommand forward a screenshot (SDK-4177).
+            // getState dereferences the instance, so an absent tracked instance would throw out of
+            // the customer's hook rather than just losing the screenshot attribution.
+            const trackedInstance = TestFramework.getTrackedInstance()
+            const scenarioUuid = trackedInstance
+                ? TestFramework.getState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID)
+                : undefined
+            if (scenarioUuid) {
+                this._insightsHandler?.setTestData(world, scenarioUuid as string)
+            }
             await this._setAnnotation(`Scenario: ${scenarioName}`)
             return
         }
