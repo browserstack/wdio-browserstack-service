@@ -1,12 +1,15 @@
 name: SDK PR Review Gate
 
-# Required check for the SDK PR Review Agent's GTG signal. Green only when BOTH:
+# Required check that confirms the SDK PR Review Agent has RUN on the PR's latest commit.
+# Green only when BOTH:
 #   1. the `ready-for-review` label is present, and
-#   2. the SDK PR Review Agent's latest verdict marker reports `state=success` on the
-#      PR's current head SHA. The agent posts a single signed verdict comment carrying
-#      `<!-- sdk-pr-review:verdict sha=<HEAD> state=<success|failure|pending> -->`; this
-#      workflow reads that marker (there is no separate `sdk-pr-review` commit status, so
-#      the agent's outcome shows as this ONE check, never a raw status + derived check pair).
+#   2. the SDK PR Review Agent has posted a verdict marker for the PR's CURRENT head SHA —
+#      ANY verdict (success | failure | pending). The gate requires only that a review RAN
+#      on the latest commit; the verdict itself is ADVISORY (read the findings, use your
+#      judgement) and does NOT block merge. The agent posts a single signed verdict comment
+#      carrying `<!-- sdk-pr-review:verdict sha=<HEAD> state=<success|failure|pending> -->`;
+#      this workflow reads that marker (there is no separate `sdk-pr-review` commit status,
+#      so the outcome shows as this ONE check, never a raw status + derived check pair).
 # Native PR-review approval is enforced separately (branch-protection "Require
 # approvals"), not by this check.
 #
@@ -81,8 +84,10 @@ jobs:
             // Condition 1: ready-for-review label present.
             const hasLabel = pr.data.labels.map(l => l.name).includes('ready-for-review');
 
-            // Condition 2: the SDK PR Review Agent's verdict marker reports `success` on the
-            // CURRENT head SHA only — a stale marker from a prior commit must not count.
+            // Condition 2: the SDK PR Review Agent has RUN on the CURRENT head SHA — i.e. it
+            // posted a verdict marker (ANY state: success | failure | pending) for this exact
+            // commit. A stale marker from a prior commit must not count. The verdict itself is
+            // ADVISORY; the gate only requires that a review ran on the latest commit.
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number: prNumber, per_page: 100
             });
@@ -96,20 +101,14 @@ jobs:
                 if (m[1] === headSha) verdictState = m[2]; // latest matching marker wins
               }
             }
-            const reviewOk = verdictState === 'success';
+            const reviewRan = verdictState !== null;
 
-            const green = hasLabel && reviewOk;
+            const green = hasLabel && reviewRan;
 
             const reasons = [];
             if (!hasLabel) reasons.push('the `ready-for-review` label is not present.');
-            if (!reviewOk) {
-              if (verdictState === 'failure') {
-                reasons.push('the SDK PR Review Agent reported blocking findings (🔴) on the current head commit — fix them and re-run the agent.');
-              } else if (verdictState === 'pending') {
-                reasons.push('the SDK PR Review Agent flagged findings that need human review (⚠️) on the current head commit — a reviewer must resolve them before this can go green.');
-              } else {
-                reasons.push('the SDK PR Review Agent has not reviewed the current head commit yet — run the SDK PR Review Agent.');
-              }
+            if (!reviewRan) {
+              reasons.push('the SDK PR Review Agent has not been run on the current head commit yet — run the SDK PR Review Agent (its verdict is advisory; this gate only requires that it ran on the latest commit).');
             }
 
             core.setOutput('green', green ? 'true' : 'false');
@@ -126,18 +125,20 @@ jobs:
                 let body;
                 if (green) {
                   body = marker + '\n' +
-                    '🟢 **SDK PR Review gate is green** — the SDK PR Review Agent has given a GTG for this PR ' +
-                    '(the `ready-for-review` label is present and the latest SDK PR Review Agent run ' +
-                    'reports `success` on the current head commit).\n\n' +
+                    '🟢 **SDK PR Review gate is green** — the SDK PR Review Agent has run on the current ' +
+                    'head commit (verdict: `' + verdictState + '`).\n\n' +
+                    'This gate confirms a review **ran** on the latest commit. The verdict itself is ' +
+                    '**advisory** — read the findings and use your judgement; it does not block merge. ' +
                     'A native GitHub reviewer approval is still separately required by branch protection ' +
-                    'before this PR can merge — this check does not substitute for that.';
+                    'before this PR can merge.';
                 } else {
                   const pending = reasons.map(r => '- ' + r.charAt(0).toUpperCase() + r.slice(1)).join('\n');
                   body = marker + '\n' +
                     '🔴 **SDK PR Review gate is red.** Pending:\n\n' +
                     pending + '\n\n' +
-                    'It turns green once the latest SDK PR Review Agent run reports GTG on the current ' +
-                    'head commit. A native reviewer approval is separately required by branch protection before merge.';
+                    'It turns green once the SDK PR Review Agent has run on the current head commit ' +
+                    '(any verdict — the gate only requires that the review ran). A native reviewer ' +
+                    'approval is separately required by branch protection before merge.';
                 }
                 await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
               }
@@ -148,26 +149,26 @@ jobs:
       - name: Notify Slack on gate failure
         if: steps.gate.outputs.applicable == 'true' && steps.gate.outputs.green != 'true'
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_PR_SLA_WEBHOOK }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_PR_DM_WEBHOOK }}
           PR_URL: "${{ github.server_url }}/${{ github.repository }}/pull/${{ steps.gate.outputs.pr_number }}"
           PR_REF: "${{ github.repository }}#${{ steps.gate.outputs.pr_number }}"
           REASON: ${{ steps.gate.outputs.reason }}
           AUTHOR: ${{ steps.gate.outputs.author }}
         run: |
           if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "SLACK_PR_SLA_WEBHOOK not configured — skipping Slack notification"
+            echo "SLACK_PR_DM_WEBHOOK not configured — skipping Slack notification"
             exit 0
           fi
           text=":no_entry: sdk-pr-review-gate is red on ${PR_REF} (author: ${AUTHOR}) — ${REASON} ${PR_URL}"
-          payload=$(jq -n --arg text "$text" '{text: $text}')
+          payload=$(jq -n --arg text "$text" --arg github_username "$AUTHOR" '{text: $text, github_username: $github_username}')
           curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
             -d "$payload" "$SLACK_WEBHOOK_URL" \
             || echo "Slack notify failed (non-fatal)"
 
       - name: Require both gate conditions
-        # Hard gate: fails the required check whenever either condition (label, SDK
-        # PR Review Agent GTG verdict) is unmet on a real PR. No job-level `if` above
-        # can skip it — a skipped required check reads as passing on GitHub.
+        # Hard gate: fails the required check whenever either condition (the label, or the SDK
+        # PR Review Agent having RUN on the current head commit) is unmet on a real PR. No
+        # job-level `if` above can skip it — a skipped required check reads as passing on GitHub.
         if: steps.gate.outputs.applicable == 'true' && steps.gate.outputs.green != 'true'
         run: |
           echo "::error::sdk-pr-review-gate is red: ${{ steps.gate.outputs.reason }}"
