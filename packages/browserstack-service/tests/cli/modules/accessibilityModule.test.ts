@@ -278,26 +278,29 @@ describe('AccessibilityModule', () => {
             vi.mocked(validateCapsWithA11y).mockReturnValue(true)
             vi.mocked(validateCapsWithAppA11y).mockReturnValue(true)
 
-            accessibilityScripts.commandsToWrap = [
-                { name: 'click', class: 'Element' },
-                { name: 'startA11yScanning', class: 'HttpCommandExecutor' },
-                { name: 'addValue', class: 'Element' }
-            ] as any
-            mockBrowser.overwriteCommand = vi.fn((name: string) => {
-                if (name === 'startA11yScanning') {
-                    throw new Error('overwriteCommand: no command to be overwritten: ' + name)
-                }
-            })
+            const originalCommandsToWrap = accessibilityScripts.commandsToWrap
+            try {
+                accessibilityScripts.commandsToWrap = [
+                    { name: 'click', class: 'Element' },
+                    { name: 'startA11yScanning', class: 'HttpCommandExecutor' },
+                    { name: 'addValue', class: 'Element' }
+                ] as any
+                mockBrowser.overwriteCommand = vi.fn((name: string) => {
+                    if (name === 'startA11yScanning') {
+                        throw new Error('overwriteCommand: no command to be overwritten: ' + name)
+                    }
+                })
 
-            await accessibilityModule.onBeforeExecute()
+                await accessibilityModule.onBeforeExecute()
 
-            expect(mockBrowser.overwriteCommand).toHaveBeenCalledTimes(3)
-            expect(mockBrowser.overwriteCommand).toHaveBeenLastCalledWith('addValue', expect.any(Function), true)
-            expect(loggerErrorSpy).not.toHaveBeenCalledWith(
-                expect.stringContaining('Error in onBeforeExecute')
-            )
-
-            accessibilityScripts.commandsToWrap = []
+                expect(mockBrowser.overwriteCommand).toHaveBeenCalledTimes(3)
+                expect(mockBrowser.overwriteCommand).toHaveBeenLastCalledWith('addValue', expect.any(Function), true)
+                expect(loggerErrorSpy).not.toHaveBeenCalledWith(
+                    expect.stringContaining('Error in onBeforeExecute')
+                )
+            } finally {
+                accessibilityScripts.commandsToWrap = originalCommandsToWrap
+            }
         })
     })
 
