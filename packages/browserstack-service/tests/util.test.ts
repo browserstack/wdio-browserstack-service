@@ -2463,4 +2463,23 @@ describe('getTestTags', () => {
     it('falls back to the Jasmine description when there is no title', () => {
         expect(utils.getTestTags({ description: 'logs in @jasmine' } as any, [])).toEqual(['@jasmine'])
     })
+
+    it('ignores an @ embedded in a larger token', () => {
+        expect(tagsFor('sends the invite to user@example.com')).toEqual([])
+        expect(tagsFor('installs pkg@1.2.3')).toEqual([])
+    })
+
+    it('derives scopes from the mocha hierarchy when none are supplied', () => {
+        const test = {
+            title: 'logs in @smoke',
+            ctx: { test: {} },
+            parent: { title: 'auth @regression', parent: { title: '' } }
+        }
+        expect(utils.getTestTags(test as any)).toEqual(['@regression', '@smoke'])
+    })
+
+    it('derives scopes from the jasmine hierarchy when none are supplied', () => {
+        const test = { description: 'logs in @smoke', fullName: 'auth @regression logs in @smoke' }
+        expect(utils.getTestTags(test as any)).toEqual(['@regression', '@smoke'])
+    })
 })
