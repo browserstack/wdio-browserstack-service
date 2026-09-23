@@ -211,13 +211,20 @@ describe('AutomateModule', () => {
 
         vi.mocked(isBrowserstackSession).mockReturnValue(true)
         vi.mocked(AutomationFramework.getState).mockReturnValue('session-pref')
-        vi.mocked(TestFramework.getState).mockReturnValue('cucumber')   // isCucumberInstance
+        vi.mocked(TestFramework.getState).mockImplementation((_i: any, key: any) =>
+            key === TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME ? 'cucumber' : undefined)
 
-        await mod.onBeforeTest({ instance: {}, test: { title: 'ignored' }, suiteTitle: 'Feature title' })
+        // The `test` view is exactly what service.ts's _cucumberTestView emits — `title` is
+        // undefined by design, so the scenario name has to come off `world`. Fabricating a
+        // `title` here is what let this path regress while the test stayed green.
+        const cucumberView = { title: undefined, fullName: 'The only scenario', parent: 'Feature title' }
+
+        await mod.onBeforeTest({ instance: {}, test: cucumberView, suiteTitle: 'Feature title' })
         await mod.onAfterTest({
             instance: {},
             result: { error: null, passed: true },
-            test: { title: 'The only scenario' },
+            test: cucumberView,
+            world: { pickle: { name: 'The only scenario' } },
             suiteTitle: 'Feature title',
             preferScenarioName: true
         })
@@ -226,6 +233,46 @@ describe('AutomateModule', () => {
         await mod.onAfterExecute()
 
         expect(spy).toHaveBeenCalledWith('session-pref', 'The only scenario', expect.anything())
+    })
+
+    it('keeps a session failed when an outline row fails and a later row with the same name passes', async () => {
+        // Every Examples row of an outline whose title carries no placeholder shares one pickle
+        // name, so keying results on it would collapse them last-write-wins and report passed.
+        const mod = new AutomateModule(mockConfig, {})
+        mod.config = {
+            userName: 'testuser',
+            accessKey: 'testkey',
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false }
+        } as any
+
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(AutomationFramework.getState).mockReturnValue('session-outline')
+
+        let uuid = 'row-1'
+        vi.mocked(TestFramework.getState).mockImplementation((_i: any, key: any) => {
+            if (key === TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) { return 'cucumber' }
+            if (key === TestFrameworkConstants.KEY_TEST_UUID) { return uuid }
+            return undefined
+        })
+
+        const row = { title: undefined, fullName: 'Add two numbers', parent: 'Calculator' }
+        await mod.onBeforeTest({ instance: {}, test: row, suiteTitle: 'Calculator' })
+
+        await mod.onAfterTest({
+            instance: {}, test: row, suiteTitle: 'Calculator',
+            result: { error: { message: 'row 1 blew up' }, passed: false },
+        })
+        uuid = 'row-2'
+        await mod.onAfterTest({
+            instance: {}, test: row, suiteTitle: 'Calculator',
+            result: { error: null, passed: true },
+        })
+
+        const spy = vi.spyOn(mod, 'markSessionStatus').mockResolvedValue(undefined)
+        vi.spyOn(mod, 'markSessionName').mockResolvedValue(undefined)
+        await mod.onAfterExecute()
+
+        expect(spy).toHaveBeenCalledWith('session-outline', 'failed', 'row 1 blew up', expect.anything())
     })
 
     it('falls back to the suite title when no sessionNameFormat is configured', async () => {

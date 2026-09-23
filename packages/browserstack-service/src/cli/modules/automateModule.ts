@@ -157,7 +157,11 @@ export default class AutomateModule extends BaseModule {
             const nameData = this.sessionMap.get(sessionId)
             if (nameData) {
                 nameData.scenariosRan++
-                nameData.lastScenarioName = testTitle
+                // NOT testTitle: `_cucumberTestView` leaves `title` undefined on purpose, so that
+                // sessionNameFormat receives the same `undefined` fourth argument legacy gives it.
+                // The scenario name is read off the live world instead — this observer runs
+                // in-process, so the object has not been through the binary's JSON round-trip.
+                nameData.lastScenarioName = (args.world as { pickle?: { name?: string } } | undefined)?.pickle?.name
                 nameData.preferScenarioName = isTrue(args.preferScenarioName)
             }
         }
@@ -198,7 +202,16 @@ export default class AutomateModule extends BaseModule {
             // last-write-wins entry, so a feature whose last scenario passes reports a passed
             // session however many earlier ones failed. Mocha leaves `fullName` undefined, so its
             // key is unchanged.
-            const resultKey = (test && test.fullName) ? String(test.fullName) : name
+            // `fullName` is the raw pickle name, which every Examples row of an outline shares when
+            // the outline title carries no placeholder — keying on it collapses those rows
+            // last-write-wins, so a failing row followed by a passing one reports the session
+            // passed. The scenario's own uuid is unique per row.
+            const scenarioUuid = this.isCucumberInstance(instace)
+                ? TestFramework.getState(instace, TestFrameworkConstants.KEY_TEST_UUID)
+                : undefined
+            const resultKey = scenarioUuid
+                ? String(scenarioUuid)
+                : ((test && test.fullName) ? String(test.fullName) : name)
             sessionData.testResults.set(resultKey, testResult)
             this.sessionMap.set(sessionId, sessionData)
         }
