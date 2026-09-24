@@ -99,12 +99,10 @@ describe('NOT_ALLOWED_KEYS_IN_CAPS cloud-leak strip', () => {
         expect(NOT_ALLOWED_KEYS_IN_CAPS).toContain('skipAppOverride')
     })
 
-    // On the CLI flow service.before() merges the capabilities the binary hands back, which carry
-    // the SDK's own options, and this list is the only thing that strips them before the hub sees
-    // them. Without this key the hub rejects the session outright ("additional properties
-    // [\"preferScenarioName\"] outside of the schema") and the run exits 1 with no session.
-    it('includes preferScenarioName, which the binary round-trips into caps on the CLI flow', () => {
+    it('includes the SDK-only options the binary round-trips into caps on the CLI flow', () => {
         expect(NOT_ALLOWED_KEYS_IN_CAPS).toContain('preferScenarioName')
+        expect(NOT_ALLOWED_KEYS_IN_CAPS).toContain('sessionNamePrependTopLevelSuiteTitle')
+        expect(NOT_ALLOWED_KEYS_IN_CAPS).toContain('sessionNameOmitTestTitle')
     })
 })
 
