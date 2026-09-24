@@ -2294,6 +2294,29 @@ export function getMochaTestHierarchy(test: Frameworks.Test) {
     return value.reverse()
 }
 
+// The lookbehind is load-bearing: without it every `@` starts a match, so an address
+// like `user@example.com` in a title yields a bogus `@example` tag.
+const TEST_TAG_PATTERN = /(?<![\w-])@[\w-]+/g
+
+/**
+ * Mocha and Jasmine have no tag construct, so `@tag` tokens written into the suite and
+ * test titles are the tag source. The leading `@` is kept so these match the pickle tags
+ * the Cucumber path in this service already forwards; note the node SDK strips it for
+ * Jest/Playwright, so the two SDKs emit different shapes for the same logical tag.
+ */
+export function getTestTags(test: Frameworks.Test, scopes?: string[]): string[] {
+    const titles = [...(scopes ?? getMochaTestHierarchy(test)), test.title || test.description || '']
+    const tags: string[] = []
+    for (const title of titles) {
+        for (const tag of title.match(TEST_TAG_PATTERN) || []) {
+            if (!tags.includes(tag)) {
+                tags.push(tag)
+            }
+        }
+    }
+    return tags
+}
+
 /**
  * True only for the hub-interpreted `browserstack_executor: {…}` magic string.
  * Anchored to the start (leading whitespace tolerated) and case-sensitive, matching

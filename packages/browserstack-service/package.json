@@ -1,6 +1,6 @@
 {
   "name": "@wdio/browserstack-service",
-  "version": "9.36.2",
+  "version": "9.38.0",
   "description": "WebdriverIO service for better Browserstack integration",
   "author": "BrowserStack <support@browserstack.com>",
   "homepage": "https://github.com/browserstack/wdio-browserstack-service",
@@ -58,7 +58,11 @@
     "@grpc/grpc-js": "~1.13.5",
     "@percy/appium-app": "^2.0.9",
     "@percy/selenium-webdriver": "^2.2.2",
+    "@percy/webdriverio": ">=3.3.0 <3.3.3",
     "@types/gitconfiglocal": "^2.0.1",
+    "@wdio/logger": "^9.0.0",
+    "@wdio/reporter": "^9.0.0",
+    "@wdio/types": "^9.0.0",
     "browserstack-local": "^1.5.1",
     "chalk": "^5.3.0",
     "csv-writer": "^1.6.0",
@@ -68,12 +72,9 @@
     "tar": "^7.5.11",
     "undici": "^6.24.0",
     "uuid": "^11.1.0",
+    "webdriverio": "^9.0.0",
     "winston-transport": "^4.5.0",
-    "yauzl": "^3.4.0",
-    "@wdio/logger": "^9.0.0",
-    "@wdio/reporter": "^9.0.0",
-    "@wdio/types": "^9.0.0",
-    "webdriverio": "^9.0.0"
+    "yauzl": "^3.4.0"
   },
   "peerDependencies": {
     "@wdio/cli": "^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0 || ^9.0.0"
