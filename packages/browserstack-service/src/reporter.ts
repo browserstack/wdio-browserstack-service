@@ -17,7 +17,8 @@ import {
     getGitMetaData,
     removeAnsiColors,
     getHookType,
-    getPlatformVersion
+    getPlatformVersion,
+    getTestTags
 } from './util.js'
 import { BStackLogger } from './bstackLogger.js'
 import type { Capabilities } from '@wdio/types'
@@ -270,6 +271,7 @@ class _TestReporter extends WDIOReporter {
             },
             scope: scope,
             scopes: scopes,
+            tags: getTestTags(testStats as unknown as Frameworks.Test, scopes),
             identifier: identifier,
             file_name: suiteFileName ? path.relative(process.cwd(), suiteFileName) : undefined,
             location: suiteFileName ? path.relative(process.cwd(), suiteFileName) : undefined,

@@ -10,7 +10,7 @@ import TrackedInstance from '../instances/trackedInstance.js'
 import { TestFrameworkConstants } from './constants/testFrameworkConstants.js'
 import { BStackLogger as logger } from '../cliLogger.js'
 import type { Frameworks } from '@wdio/types'
-import { getGitMetaData, getMochaTestHierarchy, getUniqueIdentifier, isUndefined, removeAnsiColors } from '../../util.js'
+import { getGitMetaData, getMochaTestHierarchy, getTestTags, getUniqueIdentifier, isUndefined, removeAnsiColors } from '../../util.js'
 import { TEST_ANALYTICS_ID } from '../../constants.js'
 
 export default class WdioMochaTestFramework extends TestFramework {
@@ -192,6 +192,8 @@ export default class WdioMochaTestFramework extends TestFramework {
         const gitConfig = await getGitMetaData()
         const filename = test.file // || this._suiteFile
 
+        const scopes = getMochaTestHierarchy(test)
+
         const testData: Record<string, unknown> = {
             [TestFrameworkConstants.KEY_TEST_ID]: getUniqueIdentifier(test, framework),
             [TestFrameworkConstants.KEY_TEST_NAME]: test.title || test.description,
@@ -199,7 +201,8 @@ export default class WdioMochaTestFramework extends TestFramework {
             [TestFrameworkConstants.KEY_TEST_FILE_PATH]: (gitConfig?.root && filename) ? path.relative(gitConfig.root, filename) : undefined,
             [TestFrameworkConstants.KEY_TEST_LOCATION]: filename ? path.relative(process.cwd(), filename) : undefined,
             [TestFrameworkConstants.KEY_TEST_SCOPE]: fullTitle,
-            [TestFrameworkConstants.KEY_TEST_SCOPES]: getMochaTestHierarchy(test),
+            [TestFrameworkConstants.KEY_TEST_SCOPES]: scopes,
+            [TestFrameworkConstants.KEY_TEST_TAGS]: getTestTags(test, scopes),
         }
 
         return testData

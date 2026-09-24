@@ -660,8 +660,7 @@ export const getAppA11yResults = PerformanceTester.measureWrapper(PERFORMANCE_SD
         BStackLogger.debug(`Polling Result: ${JSON.stringify(result)}`)
         return result
     } catch (error: any) {
-        BStackLogger.error('No accessibility summary was found.')
-        BStackLogger.debug(`getAppA11yResults Failed. Error: ${error}`)
+        BStackLogger.error(`No accessibility results were found for testRunUuid=${process.env.TEST_ANALYTICS_ID} sessionId=${sessionId}. Error: ${error?.message ?? util.inspect(error, { depth: 2 })}`)
         return []
     }
 })
@@ -682,8 +681,8 @@ export const getAppA11yResultsSummary = PerformanceTester.measureWrapper(PERFORM
         const result = apiRespone?.data?.data?.summary
         BStackLogger.debug(`Polling Result: ${JSON.stringify(result)}`)
         return result
-    } catch {
-        BStackLogger.error('No accessibility summary was found.')
+    } catch (error: any) {
+        BStackLogger.error(`No accessibility summary was found for testRunUuid=${process.env.TEST_ANALYTICS_ID} sessionId=${sessionId}. Error: ${error?.message ?? util.inspect(error, { depth: 2 })}`)
         return {}
     }
 })
@@ -711,8 +710,8 @@ export const getA11yResultsSummary = PerformanceTester.measureWrapper(PERFORMANC
         await performA11yScan(isAppAutomate, browser, isBrowserStackSession, isAccessibility)
         const summaryResults: { [key: string]: any; } = await (browser as WebdriverIO.Browser).executeAsync(AccessibilityScripts.getResultsSummary as string)
         return summaryResults
-    } catch {
-        BStackLogger.error('No accessibility summary was found.')
+    } catch (error: any) {
+        BStackLogger.error(`No accessibility summary was found. Error: ${error?.message ?? util.inspect(error, { depth: 2 })}`)
         return {}
     }
 })
@@ -1785,10 +1784,20 @@ export async function pollApi(
             await new Promise((resolve) => setTimeout(resolve, elapsedTime))
             return pollApi(url, params, headers, upperLimit, startTime)
         } else if (error.response) {
+            const statusCode = error.response.statusCode
+            const body = typeof error.response.body === 'string' ? error.response.body : ''
+            let message: string | undefined
+            try {
+                message = body ? JSON.parse(body).message : undefined
+            } catch {
+                // non-JSON body; the raw-body message below carries it instead
+            }
             throw {
                 data: {},
                 headers: {},
-                message: error.response.body ? JSON.parse(error.response.body).message : 'Unknown error',
+                statusCode,
+                body,
+                message: message ?? `HTTP ${statusCode}${body ? `: ${body.slice(0, 300)}` : ''}`,
             }
         } else {
             BStackLogger.error(`Unexpected error occurred: ${error}`)
@@ -1935,6 +1944,29 @@ export function getMochaTestHierarchy(test: Frameworks.Test) {
         value.push(test.fullName.endsWith(descSuffix) ? test.fullName.slice(0, -descSuffix.length) : test.fullName)
     }
     return value.reverse()
+}
+
+// The lookbehind is load-bearing: without it every `@` starts a match, so an address
+// like `user@example.com` in a title yields a bogus `@example` tag.
+const TEST_TAG_PATTERN = /(?<![\w-])@[\w-]+/g
+
+/**
+ * Mocha and Jasmine have no tag construct, so `@tag` tokens written into the suite and
+ * test titles are the tag source. The leading `@` is kept so these match the pickle tags
+ * the Cucumber path in this service already forwards; note the node SDK strips it for
+ * Jest/Playwright, so the two SDKs emit different shapes for the same logical tag.
+ */
+export function getTestTags(test: Frameworks.Test, scopes?: string[]): string[] {
+    const titles = [...(scopes ?? getMochaTestHierarchy(test)), test.title || test.description || '']
+    const tags: string[] = []
+    for (const title of titles) {
+        for (const tag of title.match(TEST_TAG_PATTERN) || []) {
+            if (!tags.includes(tag)) {
+                tags.push(tag)
+            }
+        }
+    }
+    return tags
 }
 
 /**

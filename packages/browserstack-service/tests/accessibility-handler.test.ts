@@ -8,6 +8,7 @@ import logger from '@wdio/logger'
 
 import AccessibilityHandler from '../src/accessibility-handler.js'
 import * as utils from '../src/util.js'
+import accessibilityScripts from '../src/scripts/accessibility-scripts.js'
 import type { Capabilities, Options } from '@wdio/types'
 import * as bstackLogger from '../src/bstackLogger.js'
 import type { BrowserstackConfig, BrowserstackOptions } from '../src/types.js'
@@ -153,6 +154,37 @@ describe('before', () => {
         await accessibilityHandler.before('session123');
         (browser as WebdriverIO.Browser).getAccessibilityResults()
         expect(getA11yResultsSpy).toBeCalledTimes(1)
+    })
+
+    // The server-sent commandsToWrap list can name a command this driver never registered
+    // (Selenium-shaped entries meant for another SDK). overwriteCommand throws on those, and
+    // before() has no try/catch of its own, so an unguarded loop rejects the whole hook.
+    it('skips a command the driver did not register without aborting the wrap loop', async () => {
+        const originalCommandsToWrap = accessibilityScripts.commandsToWrap
+        try {
+            isBrowserstackSessionSpy.mockReturnValue(true)
+            isAccessibilityAutomationSessionSpy.mockReturnValue(true)
+            vi.spyOn(utils, 'validateCapsWithA11y').mockReturnValue(true)
+            accessibilityScripts.commandsToWrap = [
+                { name: 'click', class: 'Element' },
+                { name: 'startA11yScanning', class: 'HttpCommandExecutor' },
+                { name: 'addValue', class: 'Element' }
+            ] as any
+            const overwriteCommand = vi.fn((name: string) => {
+                if (name === 'startA11yScanning') {
+                    throw new Error('overwriteCommand: no command to be overwritten: ' + name)
+                }
+            });
+            (browser as any).overwriteCommand = overwriteCommand
+
+            await accessibilityHandler.before('session123')
+
+            expect(overwriteCommand).toHaveBeenCalledTimes(3)
+            expect(overwriteCommand).toHaveBeenLastCalledWith('addValue', expect.any(Function), true)
+        } finally {
+            accessibilityScripts.commandsToWrap = originalCommandsToWrap
+            delete (browser as any).overwriteCommand
+        }
     })
 })
 

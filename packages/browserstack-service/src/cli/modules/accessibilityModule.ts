@@ -139,16 +139,22 @@ export default class AccessibilityModule extends BaseModule {
                 return
             }
 
-            // Wrap commands if accessibility scripts are available
+            // Guard EACH overwriteCommand individually: a command the driver doesn't register just
+            // skips (logged) rather than aborting the whole wrap loop, so the commands appium DOES
+            // register (click, setValue, ...) still auto-scan on app.
             if (this.scriptInstance.commandsToWrap && this.scriptInstance.commandsToWrap.length > 0) {
                 this.scriptInstance.commandsToWrap
                     .filter((command) => command.name && command.class)
                     .forEach((command) => {
-                        browser.overwriteCommand(
-                            command.name,
-                            this.commandWrapper.bind(this, command),
-                            command.class === 'Element'
-                        )
+                        try {
+                            browser.overwriteCommand(
+                                command.name,
+                                this.commandWrapper.bind(this, command),
+                                command.class === 'Element'
+                            )
+                        } catch (wrapError) {
+                            this.logger.debug(`Skipping command wrap for ${command.name}: ${wrapError}`)
+                        }
                     })
             }
 
