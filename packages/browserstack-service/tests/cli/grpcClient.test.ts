@@ -270,6 +270,35 @@ describe('GrpcClient', () => {
                 errorSpy.mockRestore()
             })
 
+            it('keeps rendering and archiving the entries after one whose write throws', async () => {
+                // The catch is scoped per entry, not around the loop: a stream that
+                // rejects entry one must not silently drop entries two and three.
+                const toFile = vi.spyOn(CliBStackLogger, 'logToFile').mockImplementation(() => {})
+                stderrSpy.mockImplementation((chunk: any) => {
+                    if (String(chunk).includes('first')) {
+                        throw new Error('stream closed')
+                    }
+                    return true
+                })
+
+                respondWith({ entries: [
+                    { entryType: 'version_nudge', severity: 'warn', body: 'first' },
+                    { entryType: 'version_nudge', severity: 'warn', body: 'second' },
+                    { entryType: 'version_nudge', severity: 'info', body: 'third' }
+                ] })
+                await grpcClient.stopBinSession()
+
+                expect(stderrSpy).toHaveBeenCalledWith('\x1b[1;33msecond\x1b[0m\n')
+                expect(stdoutSpy).toHaveBeenCalledWith('third\n')
+                // Archival runs before the stream write, so even the entry whose
+                // write threw is still kept in the log directory.
+                expect(toFile).toHaveBeenCalledWith('first', 'warn')
+                expect(toFile).toHaveBeenCalledWith('second', 'warn')
+                expect(toFile).toHaveBeenCalledWith('third', 'info')
+
+                toFile.mockRestore()
+            })
+
             it('still returns the response when rendering throws', async () => {
                 stdoutSpy.mockImplementation(() => {
                     throw new Error('stream closed')
