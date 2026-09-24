@@ -4,7 +4,11 @@ import { GrpcClient } from '../../src/cli/grpcClient.js'
 import { BStackLogger } from '../../src/cli/cliLogger.js'
 
 vi.mock('../../src/grpc/index.js', () => ({
-    StopBinSessionRequestConstructor: { create: (fields: Record<string, unknown>) => ({ ...fields }) }
+    StopBinSessionRequestConstructor: { create: (fields: Record<string, unknown>) => ({ ...fields }) },
+    ExecutionContextConstructor: { create: (fields: Record<string, unknown>) => ({ ...fields }) },
+    LogCreatedEventRequestConstructor: { create: (fields: Record<string, unknown>) => ({ ...fields }) },
+    // eslint-disable-next-line camelcase
+    LogCreatedEventRequest_LogEntryConstructor: { create: (fields: Record<string, unknown>) => ({ ...fields }) }
 }))
 
 vi.mock('../../src/cli/cliUtils.js', () => ({
@@ -161,11 +165,79 @@ describe('GrpcClient.stopBinSession customer-visible summary entries', () => {
         }
     })
 
+    it('keeps rendering and archiving the entries after one whose write throws', async () => {
+        // The catch is scoped per entry, not around the loop: a stream that
+        // rejects entry one must not silently drop entries two and three.
+        stderrSpy.mockImplementation((chunk: any) => {
+            if (String(chunk).includes('first')) {
+                throw new Error('stream closed')
+            }
+            return true
+        })
+
+        respondWith({ entries: [
+            { entryType: 'version_nudge', severity: 'warn', body: 'first' },
+            { entryType: 'version_nudge', severity: 'warn', body: 'second' },
+            { entryType: 'version_nudge', severity: 'info', body: 'third' }
+        ] })
+        await client.stopBinSession()
+
+        expect(stderrSpy).toHaveBeenCalledWith('\x1b[1;33msecond\x1b[0m\n')
+        expect(stdoutSpy).toHaveBeenCalledWith('third\n')
+        // Archival runs before the stream write, so even the entry whose write
+        // threw is still kept in the log directory.
+        expect(BStackLogger.logToFile).toHaveBeenCalledWith('first', 'warn')
+        expect(BStackLogger.logToFile).toHaveBeenCalledWith('second', 'warn')
+        expect(BStackLogger.logToFile).toHaveBeenCalledWith('third', 'info')
+    })
+
     it('still returns the response when rendering throws', async () => {
         stdoutSpy.mockImplementation(() => {
             throw new Error('stream closed')
         })
         respondWith({ entries: [{ severity: 'info', body: 'body' }], done: true })
         await expect(client.stopBinSession()).resolves.toMatchObject({ done: true })
+    })
+})
+
+describe('GrpcClient.logCreatedEvent', () => {
+    let client: GrpcClient
+    let logCreatedEvent: ReturnType<typeof vi.fn>
+
+    beforeEach(() => {
+        logCreatedEvent = vi.fn((_req: unknown, cb: (err: unknown, res: unknown) => void) => cb(null, {}))
+        client = new GrpcClient()
+        client.binSessionId = 'bin-1'
+        client.client = { logCreatedEvent } as any
+    })
+
+    afterEach(() => {
+        vi.clearAllMocks()
+    })
+
+    it('forwards the attachment fields on a log entry to the binary', async () => {
+        // Attachment entries carry no message — the binary streams the file from
+        // filePath, so dropping these three silently breaks attachment upload.
+        await client.logCreatedEvent({
+            platformIndex: 0,
+            logs: [{
+                uuid: 'log-1',
+                kind: 'TEST_ATTACHMENT',
+                timestamp: '2026-01-01T00:00:00Z',
+                level: 'info',
+                fileName: 'screenshot.png',
+                fileSize: 2048,
+                filePath: '/tmp/screenshot.png'
+            }],
+            executionContext: { processId: 1, threadId: 2, hash: 'h' }
+        } as any)
+
+        expect(logCreatedEvent).toHaveBeenCalledTimes(1)
+        const sent = logCreatedEvent.mock.calls[0][0] as any
+        expect(sent.logs[0]).toMatchObject({
+            fileName: 'screenshot.png',
+            fileSize: 2048,
+            filePath: '/tmp/screenshot.png'
+        })
     })
 })

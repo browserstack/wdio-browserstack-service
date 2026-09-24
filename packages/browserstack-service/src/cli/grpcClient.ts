@@ -317,29 +317,38 @@ export class GrpcClient {
             }
 
             for (const entry of entries) {
-                const body = entry?.body || ''
-                if (!body) {
-                    continue
+                // Scoped per entry, not around the loop: a stream that rejects one
+                // entry must not drop the entries after it. The proto allows many
+                // entry types, so this widens as more are added.
+                try {
+                    const body = entry?.body || ''
+                    if (!body) {
+                        continue
+                    }
+
+                    const severity = (entry?.severity || 'info').toLowerCase()
+                    // warn/warning/error -> stderr, everything else (info AND unknown) ->
+                    // stdout, so a malformed severity cannot false-alarm CI tooling
+                    // watching stderr.
+                    const isErrorStream = severity === 'warn' || severity === 'warning' || severity === 'error'
+
+                    // Archived copy is written FIRST — terminal scrollback is lost on
+                    // CI runners that keep only the log directory, so the durable copy
+                    // must not depend on the stream write succeeding.
+                    //
+                    // logToFile, NOT the info/warn/error helpers: those also call
+                    // @wdio/logger, which writes to the console, so the customer
+                    // would see the block twice (once raw below, once prefixed).
+                    this.logger.logToFile(body, severity === 'error' ? 'error' : (isErrorStream ? 'warn' : 'info'))
+
+                    // Written directly rather than through the logger, whose per-line
+                    // prefix would break the binary's box-border alignment. Colour is
+                    // applied here only — the archived copy above stays plain.
+                    ;(isErrorStream ? process.stderr : process.stdout)
+                        .write(`${this.colouriseSummaryBody(body, severity)}\n`)
+                } catch (error: unknown) {
+                    this.logger.debug(`StopBinSession entry forwarding failed: ${util.format(error)}`)
                 }
-
-                const severity = (entry?.severity || 'info').toLowerCase()
-                // warn/warning/error -> stderr, everything else (info AND unknown) ->
-                // stdout, so a malformed severity cannot false-alarm CI tooling
-                // watching stderr.
-                const isErrorStream = severity === 'warn' || severity === 'warning' || severity === 'error'
-                // Written directly rather than through the logger, whose per-line
-                // prefix would break the binary's box-border alignment. Colour is
-                // applied here only — the archived copy below stays plain.
-                ;(isErrorStream ? process.stderr : process.stdout)
-                    .write(`${this.colouriseSummaryBody(body, severity)}\n`)
-
-                // Archived copy — terminal scrollback is lost on CI runners that
-                // keep only the log directory.
-                //
-                // logToFile, NOT the info/warn/error helpers: those also call
-                // @wdio/logger, which writes to the console, so the customer
-                // would see the block twice (once raw above, once prefixed).
-                this.logger.logToFile(body, severity === 'error' ? 'error' : (isErrorStream ? 'warn' : 'info'))
             }
         } catch (error: unknown) {
             this.logger.debug(`StopBinSession entries forwarding failed: ${util.format(error)}`)
