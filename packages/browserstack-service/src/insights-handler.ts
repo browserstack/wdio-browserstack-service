@@ -16,6 +16,7 @@ import {
     getHookType, getPlatformVersion,
     getResolvedDeviceName,
     getScenarioExamples,
+    getTestTags,
     getUniqueIdentifier,
     getUniqueIdentifierForCucumber,
     isBrowserstackSession,
@@ -942,6 +943,8 @@ class _InsightsHandler {
             InsightsHandler.currentTest.name = test.title || test.description
         }
 
+        const scopes = this.getHierarchy(test)
+
         const testData: TestData = {
             uuid: testMetaData.uuid,
             type: test.type || 'test',
@@ -951,7 +954,8 @@ class _InsightsHandler {
                 code: test.body
             },
             scope: fullTitle,
-            scopes: this.getHierarchy(test),
+            scopes,
+            tags: getTestTags(test, scopes),
             identifier: fullTitle,
             file_name: filename ? path.relative(process.cwd(), filename) : undefined,
             location: filename ? path.relative(process.cwd(), filename) : undefined,
