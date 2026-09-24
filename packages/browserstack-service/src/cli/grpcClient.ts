@@ -48,6 +48,14 @@ import { BStackLogger } from './cliLogger.js'
 // Increased from default 4 MB to accommodate large extension payloads
 const GRPC_MESSAGE_LIMIT = 20 * 1024 * 1024 // 20 MB in bytes
 
+// Explicit \x1b escapes so the ESC byte stays visible in source. Applied to the
+// terminal copy of a summary entry only; the archived copy stays plain.
+const SUMMARY_ANSI = {
+    reset: '\x1b[0m',
+    error: { base: '\x1b[31m', emphasis: '\x1b[1;31m' },
+    warn: { base: '\x1b[33m', emphasis: '\x1b[1;33m' }
+}
+
 /**
  * GrpcClient - Singleton class for managing gRPC client connections
  *
@@ -321,21 +329,61 @@ export class GrpcClient {
                 // watching stderr.
                 const isErrorStream = severity === 'warn' || severity === 'warning' || severity === 'error'
                 // Written directly rather than through the logger, whose per-line
-                // prefix would break the binary's box-border alignment.
-                ;(isErrorStream ? process.stderr : process.stdout).write(`${body}\n`)
+                // prefix would break the binary's box-border alignment. Colour is
+                // applied here only — the archived copy below stays plain.
+                ;(isErrorStream ? process.stderr : process.stdout)
+                    .write(`${this.colouriseSummaryBody(body, severity)}\n`)
 
                 // Archived copy — terminal scrollback is lost on CI runners that
                 // keep only the log directory.
-                if (severity === 'error') {
-                    this.logger.error(body)
-                } else if (isErrorStream) {
-                    this.logger.warn(body)
-                } else {
-                    this.logger.info(body)
-                }
+                //
+                // logToFile, NOT the info/warn/error helpers: those also call
+                // @wdio/logger, which writes to the console, so the customer
+                // would see the block twice (once raw above, once prefixed).
+                this.logger.logToFile(body, severity === 'error' ? 'error' : (isErrorStream ? 'warn' : 'info'))
             }
         } catch (error: unknown) {
             this.logger.debug(`StopBinSession entries forwarding failed: ${util.format(error)}`)
+        }
+    }
+
+    /**
+     * Tint a summary block by severity — yellow for warn (an outdated SDK), red for
+     * error (a deprecated one), untouched otherwise.
+     *
+     * Each line is wrapped and reset on its own rather than the block as a whole, so
+     * a truncated or interleaved write cannot leave the customer's terminal stuck in
+     * colour. The first non-blank, non-border line is emphasised.
+     * @private
+     */
+    private colouriseSummaryBody(body: string, severity: string): string {
+        try {
+            const palette = severity === 'error'
+                ? SUMMARY_ANSI.error
+                : ((severity === 'warn' || severity === 'warning') ? SUMMARY_ANSI.warn : null)
+            if (!palette) {
+                return body
+            }
+
+            let emphasised = false
+            return body.split('\n').map((line) => {
+                const trimmed = line.trim()
+                if (!trimmed) {
+                    return line
+                }
+                // A border is any line carrying no letters or digits, rather than a
+                // check for the binary's current U+2500 divider — so a change to the
+                // glyph cannot silently start emphasising the wrong line.
+                const isBorder = !/[A-Za-z0-9]/.test(trimmed)
+                if (!isBorder && !emphasised) {
+                    emphasised = true
+                    return `${palette.emphasis}${line}${SUMMARY_ANSI.reset}`
+                }
+                return `${palette.base}${line}${SUMMARY_ANSI.reset}`
+            }).join('\n')
+        } catch {
+            // Colour is cosmetic — never let it cost the customer the message.
+            return body
         }
     }
 
