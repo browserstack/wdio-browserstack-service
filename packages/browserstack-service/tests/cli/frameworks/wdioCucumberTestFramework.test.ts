@@ -238,6 +238,9 @@ describe('WdioCucumberTestFramework', () => {
             expect(first.test_skipped_cascade).toBe(true)
             expect(first[TestFrameworkConstants.KEY_TEST_TAGS]).toBeUndefined()
             expect(first.bdd_meta_info.steps).toEqual([{ id: 's1', text: 'I do a thing', keyword: 'Given ', result: 'skipped' }])
+            // the cascade builds its own meta blob, so it needs the same relative/absolute split
+            expect(first.bdd_meta_info.feature.path).toBe(path.relative(process.cwd(), FEATURE_URI))
+            expect(first[TestFrameworkConstants.KEY_TEST_FILE_PATH]).toBe(FEATURE_URI)
 
             // Detached: the live tracked instance is untouched.
             expect(TestFramework.getTrackedInstance()).toBeUndefined()

@@ -519,7 +519,7 @@ export default class WdioCucumberTestFramework extends TestFramework {
             ...this.featureFilePathEntries(),
             [KEY_TEST_SKIPPED_CASCADE]: true,
             [KEY_BDD_META_INFO]: {
-                feature: { name: feature.name, path: this.featurePath(), description: feature.description },
+                feature: { name: feature.name, path: this.featureUriForMeta(), description: feature.description },
                 scenario: { name: scenario.name },
                 steps: (scenario.steps || []).map((step: Step) => ({
                     id: step.id,
