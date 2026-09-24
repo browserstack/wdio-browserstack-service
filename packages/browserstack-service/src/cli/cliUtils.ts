@@ -252,14 +252,40 @@ export class CLIUtils {
             }
             queryParams.cli_version = version
         }
-        const response = await this.requestToUpdateCLI(queryParams, config)
+        const browserStackBinaryUrl =
+            process.env.BROWSERSTACK_BINARY_URL || null
+
+        let response
+        try {
+            response = await this.requestToUpdateCLI(queryParams, config)
+        } catch (err) {
+            // update_cli runs during bootstrap — before the binary is spawned and before GRR
+            // localizes the API hosts — so it always targets the production api host. On an internal
+            // staging run (BROWSERSTACK_STAGING_ENV) the staging creds are rejected there (401). If an
+            // explicit binary URL was supplied, use it so the run is not blocked on this call. Opt-in
+            // only: with no BROWSERSTACK_BINARY_URL the error propagates exactly as before, so
+            // production behaviour is unchanged.
+            if (!isNullOrEmpty(browserStackBinaryUrl)) {
+                const status = (err as { response?: { statusCode?: number } })?.response?.statusCode ?? (err as Error)?.message
+                logger.warn(
+                    `update_cli request failed (${status}); falling back to BROWSERSTACK_BINARY_URL`,
+                )
+                const fallbackBinaryPath = await this.downloadLatestBinary(
+                    browserStackBinaryUrl as string,
+                    cliDir,
+                )
+                PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
+                return fallbackBinaryPath
+            }
+            PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
+            throw err
+        }
+
         if (nestedKeyValue(response, ['updated_cli_version'])) {
             logger.debug(
                 `Need to update binary, current binary version: ${queryParams.cli_version}`,
             )
 
-            const browserStackBinaryUrl =
-                process.env.BROWSERSTACK_BINARY_URL || null
             if (!isNullOrEmpty(browserStackBinaryUrl)) {
                 logger.debug(
                     `Using BROWSERSTACK_BINARY_URL: ${browserStackBinaryUrl}`,
