@@ -198,6 +198,18 @@ export default class WdioCucumberTestFramework extends TestFramework {
         return uri ? path.resolve(process.cwd(), uri) : undefined
     }
 
+    /**
+     * The feature path as the bdd meta blob wants it — cwd-relative, matching legacy.
+     *
+     * Not `featurePath()`: the binary re-bases `test_file_path`/`location` itself but never touches
+     * this blob, so an absolute value reaches the dashboard verbatim, home directory and all.
+     * Legacy reads the world's `gherkinDocument.uri`, which is already cwd-relative.
+     */
+    private featureUriForMeta(): string | undefined {
+        const absolute = this.featurePath()
+        return absolute ? path.relative(process.cwd(), absolute) : undefined
+    }
+
     private featureFilePathEntries() {
         const featurePath = this.featurePath()
         return {
@@ -370,7 +382,7 @@ export default class WdioCucumberTestFramework extends TestFramework {
         return {
             feature: {
                 name: feature?.name,
-                path: this.featurePath(),
+                path: this.featureUriForMeta(),
                 description: feature?.description,
             },
             scenario: { name: pickle.name },

@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 
 import WdioCucumberTestFramework from '../../../src/cli/frameworks/wdioCucumberTestFramework.js'
@@ -109,14 +110,19 @@ describe('WdioCucumberTestFramework', () => {
             expect(data[TestFrameworkConstants.KEY_TEST_ID]).toBe('Add to cart')
         })
 
-        it('reports a one-element scopes array, a null test_code and the feature path absolute', async () => {
+        it('reports a one-element scopes array, a null test_code and the meta feature path cwd-relative', async () => {
             framework.onFeatureStart(FEATURE_URI, feature())
             await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { world: world(pickle('Add to cart'), feature()) })
 
             const data = dataOf(liveInstance()) as Record<string, any>
             expect(data[TestFrameworkConstants.KEY_TEST_SCOPES]).toEqual(['Login feature'])
             expect(data[TestFrameworkConstants.KEY_TEST_CODE]).toBeNull()
-            expect(data.bdd_meta_info.feature.path).toBe(FEATURE_URI)
+            // The binary re-bases test_file_path/location but never this blob, so an absolute value
+            // would reach the dashboard verbatim, home directory and all.
+            expect(data.bdd_meta_info.feature.path).toBe(path.relative(process.cwd(), FEATURE_URI))
+            expect(path.isAbsolute(data.bdd_meta_info.feature.path)).toBe(false)
+            // the file-path pair stays absolute — the binary owns re-basing those
+            expect(data[TestFrameworkConstants.KEY_TEST_FILE_PATH]).toBe(FEATURE_URI)
         })
 
         it('sends tags with the leading @, in source order, duplicates kept, without mutating the pickle', async () => {
