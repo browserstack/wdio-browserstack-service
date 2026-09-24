@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
 import { GrpcClient } from '../../src/cli/grpcClient.js'
+import { BStackLogger } from '../../src/cli/cliLogger.js'
 
 vi.mock('../../src/grpc/index.js', () => ({
     StopBinSessionRequestConstructor: { create: (fields: Record<string, unknown>) => ({ ...fields }) }
@@ -11,7 +12,7 @@ vi.mock('../../src/cli/cliUtils.js', () => ({
 }))
 
 vi.mock('../../src/cli/cliLogger.js', () => ({
-    BStackLogger: { debug: vi.fn(), info: vi.fn(), error: vi.fn(), warn: vi.fn() }
+    BStackLogger: { debug: vi.fn(), info: vi.fn(), error: vi.fn(), warn: vi.fn(), logToFile: vi.fn() }
 }))
 
 vi.mock('../../src/instrumentation/performance/performance-tester.js', () => ({
@@ -89,15 +90,36 @@ describe('GrpcClient.stopBinSession customer-visible summary entries', () => {
             { entryType: 'version_nudge', severity: 'error', body: 'deprecated' }
         ] })
         await client.stopBinSession()
-        expect(stderrSpy).toHaveBeenCalledWith('outdated\n')
-        expect(stderrSpy).toHaveBeenCalledWith('deprecated\n')
+        expect(stderrSpy).toHaveBeenCalledWith('\x1b[1;33moutdated\x1b[0m\n')
+        expect(stderrSpy).toHaveBeenCalledWith('\x1b[1;31mdeprecated\x1b[0m\n')
         expect(stdoutSpy).not.toHaveBeenCalled()
     })
 
     it('treats the server\'s "warning" spelling as an error stream', async () => {
         respondWith({ entries: [{ entryType: 'version_nudge', severity: 'warning', body: 'outdated' }] })
         await client.stopBinSession()
-        expect(stderrSpy).toHaveBeenCalledWith('outdated\n')
+        expect(stderrSpy).toHaveBeenCalledWith('\x1b[1;33moutdated\x1b[0m\n')
+    })
+
+    it('tints a warn block yellow and an error block red, line by line', async () => {
+        const body = '────\n  Title\n\n  Detail\n────'
+        respondWith({ entries: [
+            { entryType: 'version_nudge', severity: 'warn', body },
+            { entryType: 'version_nudge', severity: 'error', body }
+        ] })
+        await client.stopBinSession()
+
+        // Borders take the base tint and the first line carrying text is emphasised.
+        // Blank lines are left alone, and every tinted line closes its own reset, so a
+        // truncated write cannot leave the terminal stuck in colour.
+        expect(stderrSpy).toHaveBeenCalledWith(
+            '\x1b[33m────\x1b[0m\n\x1b[1;33m  Title\x1b[0m\n\n'
+            + '\x1b[33m  Detail\x1b[0m\n\x1b[33m────\x1b[0m\n'
+        )
+        expect(stderrSpy).toHaveBeenCalledWith(
+            '\x1b[31m────\x1b[0m\n\x1b[1;31m  Title\x1b[0m\n\n'
+            + '\x1b[31m  Detail\x1b[0m\n\x1b[31m────\x1b[0m\n'
+        )
     })
 
     it('sends an unknown severity to stdout so CI stderr watchers are not tripped', async () => {
@@ -114,6 +136,29 @@ describe('GrpcClient.stopBinSession customer-visible summary entries', () => {
         }
         expect(stdoutSpy).not.toHaveBeenCalled()
         expect(stderrSpy).not.toHaveBeenCalled()
+    })
+
+    it('archives via logToFile only, so the block is never printed twice', async () => {
+        respondWith({ entries: [
+            { entryType: 'version_nudge', severity: 'warning', body: 'outdated' },
+            { entryType: 'version_nudge', severity: 'error', body: 'deprecated' },
+            { entryType: 'version_nudge', severity: 'info', body: 'notice' }
+        ] })
+        await client.stopBinSession()
+
+        // logToFile writes to the log file only. info/warn/error additionally
+        // call @wdio/logger, which writes to the console — using them here
+        // would duplicate the block the stream writes above already emitted.
+        expect(BStackLogger.logToFile).toHaveBeenCalledWith('outdated', 'warn')
+        expect(BStackLogger.logToFile).toHaveBeenCalledWith('deprecated', 'error')
+        expect(BStackLogger.logToFile).toHaveBeenCalledWith('notice', 'info')
+        // The console-writing helpers must never receive a body. (They are still
+        // used for unrelated lines such as "StopBinSession successful".)
+        for (const body of ['outdated', 'deprecated', 'notice']) {
+            expect(BStackLogger.warn).not.toHaveBeenCalledWith(body)
+            expect(BStackLogger.error).not.toHaveBeenCalledWith(body)
+            expect(BStackLogger.info).not.toHaveBeenCalledWith(body)
+        }
     })
 
     it('still returns the response when rendering throws', async () => {
