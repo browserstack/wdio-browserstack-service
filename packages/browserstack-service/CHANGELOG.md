@@ -1,5 +1,15 @@
 # @wdio/browserstack-service
 
+## 8.51.1
+
+### Patch Changes
+
+- 2443f4d: - Fixed accessibility command wrapping aborting on App Automate sessions, which logged `Error in onBeforeExecute` and left the remaining commands unwrapped for auto-scanning. Applies to both the CLI and the non-CLI flow.
+  - Accessibility results and summary failures now report the HTTP status, the response body and the identifiers the query used, instead of an empty result with no explanation.
+- 5dcf7b8: - Fixed test tags not being reported to Test Observability for Mocha and Jasmine. Tags written as `@tag` tokens in suite or test titles are now sent with each test.
+- f03908b: - N/A — CI/workflow-only change; no customer-facing or package impact.
+- 0966598: ci(sdk-pr-review-gate): the `gate` required check now turns green as soon as the SDK PR Review Agent has run on the PR's latest commit (any verdict), not only when it passes — verdict is advisory. Rolls the mandatory-to-run gate change (SDK-7256) onto the v8 line; main already has it via #202.
+
 ## 8.51.0
 
 ### Minor Changes
