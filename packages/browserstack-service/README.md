@@ -249,6 +249,38 @@ Automatically set the BrowserStack Automate session status (passed/failed).
 Type: `Boolean`<br />
 Default: `true`
 
+### percy
+
+Enable Percy visual testing.
+
+Type: `Boolean`<br />
+Default: `false` — except for App Automate runs, where Percy is enabled automatically when `percy` is left unset and `app` is provided.
+
+This service runs Percy in **Percy on Automate** mode: it provisions the Percy project for you and captures screenshots server-side from the Automate session. Use `percyCaptureMode` to control when captures happen — no code changes are needed.
+
+**Percy web projects.** This service provisions a Percy on Automate project; it does not create web-type Percy projects. To use a Percy **web** project with WebdriverIO, leave `percy` unset in the service options and drive Percy yourself:
+
+```bash
+PERCY_TOKEN=<your web project token> npx percy exec -- npx wdio run wdio.conf.js
+```
+
+calling [`@percy/webdriverio`](https://github.com/percy/percy-webdriverio)'s `percySnapshot` in your specs. BrowserStack Automate and Test Observability continue to work through this service alongside it.
+
+### percyCaptureMode
+
+When to capture Percy screenshots automatically.
+
+Type: `String`<br />
+Default: `auto`
+
+* `auto` — capture on clicks, screenshots, actions and input changes
+* `click` — capture on clicks only
+* `screenshot` — capture on screenshot commands only
+* `testcase` — capture once at the end of each test
+* `manual` — never capture automatically
+
+Your Percy project's own capture-mode setting takes precedence over this option when one is configured.
+
 ### buildIdentifier
 
 **buildIdentifier** is a unique id to differentiate every execution that gets appended to buildName. Choose your buildIdentifier format from the available expressions:
