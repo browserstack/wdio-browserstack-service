@@ -1,5 +1,21 @@
 # @wdio/browserstack-service
 
+## 9.37.0
+
+### Minor Changes
+
+- 6844406: - WebdriverIO + CucumberJS now runs on the BrowserStack CLI flow, the same path Mocha already uses. Reporting, accessibility, Percy and session naming behave as before — no config change is needed.
+  - Fixed: sessions were left unmarked pass/fail when setSessionName: false was set. Naming and status are independent options again.
+  - Fixed: the accessibility extension was not applied on non-BrowserStack infrastructure, leaving scans empty on otherwise green runs.
+
+### Patch Changes
+
+- 4bc51b5: - Fixed test tags not being reported to Test Observability for Mocha and Jasmine. Tags written as `@tag` tokens in suite or test titles are now sent with each test.
+- e9cfe6e: - Fixed Percy capture on WebdriverIO. Runs with `percy: true` logged "Unsupported driver for percy" and produced no screenshots, while the tests themselves continued to pass.
+  - Fixed Percy web snapshots, which previously captured nothing on WebdriverIO.
+  - Percy errors are now logged instead of failing the test. Set `PERCY_RAISE_ERROR=true` to fail the build on Percy errors instead.
+  - Added Percy documentation to the README, including how to use a Percy web project alongside this service.
+
 ## 9.36.2
 
 ### Patch Changes
