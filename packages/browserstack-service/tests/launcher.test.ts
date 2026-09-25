@@ -1329,7 +1329,7 @@ describe('_handleBuildIdentifier', () => {
         expect(caps[0]).toMatchObject(updatedcaps[0])
     })
 
-    it('should delete buildIdentifier if BROWSERSTACK_BUILD_NAME is defined as env var', async() => {
+    it('should delete buildIdentifier if buildName is absent from caps even when BROWSERSTACK_BUILD_NAME is set', async() => {
         process.env.BROWSERSTACK_BUILD_NAME = 'browserstack wdio build'
         const caps: any = [{
             'bstack:options': {
@@ -1346,6 +1346,39 @@ describe('_handleBuildIdentifier', () => {
         service._handleBuildIdentifier(caps)
         expect(caps[0]).toMatchObject(updatedcaps[0])
         delete process.env.BROWSERSTACK_BUILD_NAME
+    })
+
+    it('should still resolve buildIdentifier when buildName is in caps and BROWSERSTACK_BUILD_NAME is set', async() => {
+        process.env.BROWSERSTACK_BUILD_NAME = 'browserstack wdio build'
+        const caps: any = [{
+            'bstack:options': {
+                buildName: 'browserstack wdio build',
+                buildIdentifier: '#${BUILD_NUMBER}'
+            }
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        vi.spyOn(utils, 'getCiInfo').mockReturnValueOnce(null)
+        vi.spyOn(service, '_getLocalBuildNumber').mockReturnValueOnce('3')
+        vi.spyOn(service, '_updateLocalBuildCache').mockImplementation(() => {})
+        service._handleBuildIdentifier(caps)
+
+        expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('#3')
+        delete process.env.BROWSERSTACK_BUILD_NAME
+    })
+
+    it('should not retain an unresolved buildIdentifier template when the identifier is skipped', async() => {
+        const caps: any = [{
+            'bstack:options': {
+                buildIdentifier: '#${BUILD_NUMBER}'
+            }
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service._handleBuildIdentifier(caps)
+
+        // onPrepare forwards this to TestHub as build_identifier; the raw template must not leak
+        expect(service._buildIdentifier).toBeUndefined()
     })
 
     it('should not evaluate buildIdentifier if buildIdentifier is not present in the caps', async() => {
