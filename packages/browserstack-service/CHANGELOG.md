@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.39.0
+
+### Minor Changes
+
+- 4d39f2a: - End-of-build messages from BrowserStack — such as a notice that your SDK version is outdated or has a known issue — are now shown at the end of your test run, highlighted in yellow for a warning and red for an error, and written to the SDK log without colour so they stay searchable.
+
 ## 9.38.0
 
 ### Minor Changes
