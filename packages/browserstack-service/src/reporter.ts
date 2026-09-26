@@ -211,6 +211,7 @@ class _TestReporter extends WDIOReporter {
             const cliUuid = this.cliJasmineFramework()?.onReporterTestStart(testStats, this.jasmineSuiteContext())
             if (cliUuid) {
                 _TestReporter.currentTest.uuid = cliUuid
+                _TestReporter.currentTest.name = testStats.title
                 _TestReporter._tests[testStats.fullTitle] = { uuid: cliUuid }
             }
             return

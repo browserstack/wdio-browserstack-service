@@ -111,6 +111,11 @@ describe('reporter jasmine arm', () => {
             expect(TestReporter.getTests()['Nested outer outer passing test']).toEqual({ uuid: 'cli-uuid' })
         })
 
+        it('names the current test for Percy\'s testCase, as legacy getRunData did', async () => {
+            await reporter.onTestStart(testStats() as any)
+            expect((TestReporter as any).currentTest).toMatchObject({ uuid: 'cli-uuid', name: 'outer passing test' })
+        })
+
         it('keeps legacy\'s end stamp and forced hook pass on the WDIO stats objects', async () => {
             const stats = testStats() as Record<string, unknown>
             await reporter.onTestEnd(stats as any)
