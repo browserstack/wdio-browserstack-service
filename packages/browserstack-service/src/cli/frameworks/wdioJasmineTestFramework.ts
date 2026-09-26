@@ -15,6 +15,7 @@ import { BStackLogger as logger } from '../cliLogger.js'
 import { getHookType, getTestTags, removeAnsiColors } from '../../util.js'
 import { shouldProcessEventForTesthub } from '../../testHub/utils.js'
 import { TEST_ANALYTICS_ID } from '../../constants.js'
+import type TestHubModule from '../modules/testHubModule.js'
 
 /** What the reporter knows at each event and the framework cannot see: its suite stack and suite file. */
 export interface JasmineSuiteContext {
@@ -34,9 +35,12 @@ interface FailureFields {
  * Extends the BASE TestFramework, never WdioMochaTestFramework: jasmine's identity (fullName),
  * hook taxonomy and skip/exclude states differ from mocha's.
  *
- * Test and hook states come from the WDIO reporter (`reporter.ts`), the only jasmine source that
- * sees pending, focused-out and beforeAll-failed specs. Reporter hooks are not awaited by WDIO, so
- * every reporter event is applied and dispatched through one ordered queue.
+ * Two event sources, as on the legacy flow:
+ * - the WDIO reporter (`reporter.ts`) feeds Test Observability only — it is the one jasmine source that
+ *   sees pending, focused-out and beforeAll-failed specs. Its hooks are not awaited by WDIO, so its events
+ *   are applied through one ordered queue and sent straight to TestHubModule, never to the other modules;
+ * - the service's awaited beforeTest/afterTest drive the product modules (a11y, Automate, Percy) through
+ *   the observers, for executed specs only, with TestHub skipped.
  */
 export default class WdioJasmineTestFramework extends TestFramework {
     // Same data keys WdioMochaTestFramework uses: TestHubModule's LOG arm reads them through
@@ -56,6 +60,11 @@ export default class WdioJasmineTestFramework extends TestFramework {
     static #pendingEvents = 0
 
     #specInstances = new Map<string, TestFrameworkInstance>()
+    // Open specs by fullName: how the service's hooks find the instance the reporter minted.
+    #specsByFullName = new Map<string, TestFrameworkInstance>()
+    #serviceOnly = new Set<TestFrameworkInstance>()
+    #suiteTitles = new Map<TestFrameworkInstance, unknown>()
+    #testHub: TestHubModule | null = null
     // beforeAll/afterAll never overlap, so a hook's uid (its title) is unique while it is open.
     #hookInstances = new Map<string, TestFrameworkInstance>()
     #openHook: TestFrameworkInstance | null = null
@@ -72,18 +81,47 @@ export default class WdioJasmineTestFramework extends TestFramework {
         return WdioJasmineTestFramework.#pendingEvents === 0
     }
 
+    setTestHubModule(testHub: TestHubModule | null | undefined) {
+        this.#testHub = testHub ?? null
+    }
+
     /**
-     * Service hooks (beforeTest/afterTest and friends) also call this. Their TEST/INIT_TEST/LOG_REPORT
-     * states would duplicate what the reporter already dispatched, so they are absorbed; waiting for the
-     * queue first leaves the tracked instance pointing at the spec the service is running.
+     * The service's hooks call this. INIT_TEST pins the spec's instance and uuid; TEST PRE/POST reach the
+     * product modules. LOG_REPORT carries nothing jasmine needs: the result comes from the reporter.
      */
     async trackEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown> = {}) {
         if (testFrameworkState === TestFrameworkState.LOG) {
             this.onReporterLog(args.logEntry as Record<string, unknown>)
             return
         }
-        await this.#queue
-        logger.debug(`WdioJasmineTestFramework: absorbed service event ${testFrameworkState}/${hookState}`)
+        try {
+            await this.#queue
+            if (testFrameworkState !== TestFrameworkState.INIT_TEST && testFrameworkState !== TestFrameworkState.TEST) {
+                return
+            }
+            const test = (args.test ?? {}) as { fullName?: string, description?: string, file?: string }
+            const instance = this.#serviceInstance(test)
+            TestFramework.setTrackedInstance(instance.getContext(), instance)
+            process.env[TEST_ANALYTICS_ID] = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID)
+            if (testFrameworkState === TestFrameworkState.INIT_TEST) {
+                return
+            }
+
+            const moduleArgs: Record<string, unknown> = { ...args }
+            if (hookState === HookState.PRE) {
+                this.#suiteTitles.set(instance, args.suiteTitle)
+            } else {
+                // afterTest hands over the raw `Jasmine__TopLevel__Suite`; the modules need the describe chain beforeTest derived
+                moduleArgs.suiteTitle = this.#suiteTitles.get(instance) ?? args.suiteTitle
+                this.#suiteTitles.delete(instance)
+                if (this.#serviceOnly.delete(instance) && test.fullName && this.#specsByFullName.get(test.fullName) === instance) {
+                    this.#specsByFullName.delete(test.fullName)
+                }
+            }
+            await this.#toModules(instance, testFrameworkState, hookState, moduleArgs)
+        } catch (error) {
+            logger.error(`WdioJasmineTestFramework: service event ${testFrameworkState}/${hookState} failed: ${util.format(error)}`)
+        }
     }
 
     onReporterTestStart(testStats: TestStats, context: JasmineSuiteContext) {
@@ -106,14 +144,14 @@ export default class WdioJasmineTestFramework extends TestFramework {
                 [WdioJasmineTestFramework.KEY_TEST_RETRIES]: { limit: testStats.retries || 0, attempts: testStats.retries || 0 },
             })
             this.#specInstances.set(testStats.uid, instance)
+            this.#specsByFullName.set(fullTitle, instance)
             // Registered synchronously: the service's beforeTest for this spec may read it before the queue runs.
             TestFramework.setTrackedInstance(instance.getContext(), instance)
 
             const args = { test: this.#specArg(testStats, context), suiteTitle: this.#suiteTitle(testStats) }
             this.#enqueue('TEST/PRE', async () => {
                 this.#lastSpec = instance
-                process.env[TEST_ANALYTICS_ID] = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID)
-                await this.#emit(instance, TestFrameworkState.TEST, HookState.PRE, args)
+                await this.#toTestHub(instance, TestFrameworkState.TEST, HookState.PRE, args)
             })
             return TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) as string
         } catch (error) {
@@ -129,6 +167,9 @@ export default class WdioJasmineTestFramework extends TestFramework {
                 return
             }
             this.#specInstances.delete(testStats.uid)
+            if (this.#specsByFullName.get(testStats.fullTitle) === instance) {
+                this.#specsByFullName.delete(testStats.fullTitle)
+            }
 
             const state = testStats.state
             const error = testStats.error
@@ -162,7 +203,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
             const args = { test: this.#specArg(testStats, context), result: testResult, suiteTitle: this.#suiteTitle(testStats) }
             this.#enqueue('TEST/POST', async () => {
                 instance.updateMultipleEntries(entries)
-                await this.#emit(instance, TestFrameworkState.TEST, HookState.POST, args)
+                await this.#toTestHub(instance, TestFrameworkState.TEST, HookState.POST, args)
             })
         } catch (error) {
             logger.error(`WdioJasmineTestFramework: test end failed: ${util.format(error)}`)
@@ -204,7 +245,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
                 hooksStarted.set(key, [hook])
                 instance.updateData(WdioJasmineTestFramework.KEY_HOOK_LAST_STARTED, key)
                 if (emitHook) {
-                    await this.#emit(instance, hookFrameworkState, HookState.PRE, { hook: hookStats })
+                    await this.#toTestHub(instance, hookFrameworkState, HookState.PRE, { hook: hookStats })
                 }
             })
         } catch (error) {
@@ -258,7 +299,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
                 hooksFinished.set(key, [hook])
                 instance.updateData(WdioJasmineTestFramework.KEY_HOOK_LAST_FINISHED, key)
                 if (emitHook) {
-                    await this.#emit(instance, hookFrameworkState, HookState.POST, { hook: hookStats, result: { passed: result === 'passed', error } })
+                    await this.#toTestHub(instance, hookFrameworkState, HookState.POST, { hook: hookStats, result: { passed: result === 'passed', error } })
                 }
             })
         } catch (error) {
@@ -286,9 +327,11 @@ export default class WdioJasmineTestFramework extends TestFramework {
                 if (instance === this.#openHook) {
                     logRecord[TestFrameworkConstants.KEY_HOOK_ID] = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOK_ID)
                 }
-                const entries = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_LOGS) as unknown[]
-                entries.push(logRecord)
-                await this.#emit(instance, TestFrameworkState.LOG, HookState.POST, { logEntry })
+                // Sent in the instance's own state, not LOG: the binary keys an entry `hook_run_uuid` only when
+                // its state is a hook state, so an open all-hook's logs land on the hook.
+                if (this.#testHub) {
+                    await this.#testHub.sendLogCreatedEvent({ instance, logEntries: [logRecord] })
+                }
             })
         } catch (error) {
             logger.error(`WdioJasmineTestFramework: log failed: ${util.format(error)}`)
@@ -315,11 +358,45 @@ export default class WdioJasmineTestFramework extends TestFramework {
         return instance
     }
 
-    async #emit(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
-        TestFramework.setTrackedInstance(instance.getContext(), instance)
+    async #toTestHub(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
+        const testHub = this.#testHub
+        if (!testHub) {
+            logger.debug(`WdioJasmineTestFramework: TestHub module not loaded; ${testFrameworkState}/${hookState} not reported`)
+            return
+        }
         this.updateInstanceState(instance, testFrameworkState, hookState)
         args.instance = instance
+        if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.PRE) {
+            testHub.onBeforeTest(args)
+        }
+        await testHub.sendTestFrameworkEvent(args)
+    }
+
+    async #toModules(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
+        args.instance = instance
+        args.skipTestHub = true
         await this.runHooks(instance, testFrameworkState, hookState, args)
+    }
+
+    /** The reporter's instance for this spec; minted here only when the reporter is not feeding (TO opted out). */
+    #serviceInstance(test: { fullName?: string, description?: string, file?: string }) {
+        const existing = test.fullName ? this.#specsByFullName.get(test.fullName) : undefined
+        if (existing) {
+            return existing
+        }
+        const instance = this.#createInstance()
+        instance.updateMultipleEntries({
+            [TestFrameworkConstants.KEY_TEST_UUID]: uuidv4(),
+            [TestFrameworkConstants.KEY_TEST_RESULT]: TestFrameworkConstants.DEFAULT_TEST_RESULT,
+            [TestFrameworkConstants.KEY_TEST_ID]: test.fullName,
+            [TestFrameworkConstants.KEY_TEST_NAME]: test.description,
+            ...this.#filePaths(test.file),
+        })
+        this.#serviceOnly.add(instance)
+        if (test.fullName) {
+            this.#specsByFullName.set(test.fullName, instance)
+        }
+        return instance
     }
 
     #enqueue(label: string, step: () => Promise<void>) {

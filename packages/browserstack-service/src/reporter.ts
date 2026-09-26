@@ -7,6 +7,7 @@ import { BrowserstackCLI } from './cli/index.js'
 import { reportSkippedTest, resolveSpecFile } from './cli/skipReporter.js'
 import WdioJasmineTestFramework from './cli/frameworks/wdioJasmineTestFramework.js'
 import type { JasmineSuiteContext } from './cli/frameworks/wdioJasmineTestFramework.js'
+import type TestHubModule from './cli/modules/testHubModule.js'
 import * as url from 'node:url'
 
 import { v4 as uuidv4 } from 'uuid'
@@ -154,8 +155,13 @@ class _TestReporter extends WDIOReporter {
     }
 
     cliJasmineFramework() {
-        const framework = BrowserstackCLI.getInstance().getTestFramework()
-        return framework instanceof WdioJasmineTestFramework ? framework : null
+        const cli = BrowserstackCLI.getInstance()
+        const framework = cli.getTestFramework()
+        if (!(framework instanceof WdioJasmineTestFramework)) {
+            return null
+        }
+        framework.setTestHubModule(cli.modules?.TestHubModule as TestHubModule | undefined)
+        return framework
     }
 
     jasmineSuiteContext(): JasmineSuiteContext {

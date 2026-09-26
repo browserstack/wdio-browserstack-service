@@ -7,6 +7,7 @@ import TestFramework from '../../src/cli/frameworks/testFramework.js'
 import { TestFrameworkState } from '../../src/cli/states/testFrameworkState.js'
 import { HookState } from '../../src/cli/states/hookState.js'
 import type TestFrameworkInstance from '../../src/cli/instances/testFrameworkInstance.js'
+import TestHubModule from '../../src/cli/modules/testHubModule.js'
 
 vi.spyOn(bstackLogger.BStackLogger, 'logToFile').mockImplementation(() => {})
 
@@ -50,16 +51,37 @@ const context = (scopes = ['Nested outer']) => ({ scopes, suiteFile: SUITE_FILE 
 
 describe('WdioJasmineTestFramework', () => {
     let framework: WdioJasmineTestFramework
+    // what reached TestHub (reporter path) and what reached the module observers (service path)
     let dispatches: Dispatch[]
+    let moduleDispatches: Dispatch[]
+    let logSends: Array<{ state: string, entries: Record<string, unknown>[], data: Record<string, unknown> }>
+    let sessionEvents: number
+    let testHub: Record<string, ReturnType<typeof vi.fn>>
 
-    const drain = () => framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, {})
+    const drain = () => framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, {})
 
     beforeEach(() => {
         process.env.BROWSERSTACK_OBSERVABILITY = 'true'
         framework = new WdioJasmineTestFramework(['WebdriverIO-jasmine'], { 'WebdriverIO-jasmine': '9.39.0' }, 'bin-session')
         dispatches = []
+        moduleDispatches = []
+        logSends = []
+        sessionEvents = 0
+        testHub = {
+            onBeforeTest: vi.fn(() => { sessionEvents++ }),
+            sendTestFrameworkEvent: vi.fn(async (args: Record<string, unknown>) => {
+                const instance = args.instance as TestFrameworkInstance
+                dispatches.push({ state: instance.getCurrentTestState(), hook: instance.getCurrentHookState(), data: snapshot(instance), args })
+                return true
+            }),
+            sendLogCreatedEvent: vi.fn(async (args: Record<string, unknown>) => {
+                const instance = args.instance as TestFrameworkInstance
+                logSends.push({ state: instance.getCurrentTestState().toString(), entries: args.logEntries as Record<string, unknown>[], data: snapshot(instance) })
+            }),
+        }
+        framework.setTestHubModule(testHub as unknown as TestHubModule)
         vi.spyOn(framework, 'runHooks').mockImplementation(async (instance, state, hook, args) => {
-            dispatches.push({ state, hook, data: snapshot(instance), args: args as Record<string, unknown> })
+            moduleDispatches.push({ state, hook, data: snapshot(instance), args: args as Record<string, unknown> })
         })
     })
 
@@ -231,24 +253,64 @@ describe('WdioJasmineTestFramework', () => {
             framework.onReporterLog({ level: 'INFO', message: 'hi', timestamp: 't', kind: 'TEST_LOG' })
             await drain()
             expect(dispatches.map(d => d.state)).toEqual([TestFrameworkState.TEST])
+            expect(logSends).toHaveLength(0)
         } finally {
             delete process.env.BROWSERSTACK_ACCESSIBILITY
         }
     })
 
-    it('absorbs service-hook states instead of re-dispatching them, leaving the spec tracked', async () => {
-        framework.onReporterTestStart(testStats() as any, context())
-        await framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test: {} })
-        const tracked = TestFramework.getTrackedInstance()
-        expect(TestFramework.getState(tracked, 'test_uuid')).toBe(dispatches[0].data.test_uuid)
-
-        await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test: {} })
-        await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: {}, result: {} })
-        await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: {}, result: {} })
-        expect(dispatches).toHaveLength(1)
+    it('sends reporter events to TestHub only, never through the module observers', async () => {
+        const stats = testStats()
+        framework.onReporterTestStart(stats as any, context())
+        framework.onReporterTestEnd({ ...stats, state: 'passed', end: new Date() } as any, context())
+        await drain()
+        expect(testHub.sendTestFrameworkEvent).toHaveBeenCalledTimes(2)
+        expect(sessionEvents).toBe(1)
+        expect(moduleDispatches).toHaveLength(0)
     })
 
-    it('attributes logs to an open all-hook, else to the last-started spec', async () => {
+    it('drives the modules from the service hooks on the reporter\'s instance, with TestHub skipped', async () => {
+        const spec = { description: 'outer passing test', fullName: 'Nested outer outer passing test' }
+        framework.onReporterTestStart(testStats() as any, context())
+        await framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test: spec })
+        const uuid = dispatches[0].data.test_uuid
+        expect(TestFramework.getState(TestFramework.getTrackedInstance(), 'test_uuid')).toBe(uuid)
+        expect(process.env.TEST_ANALYTICS_ID).toBe(uuid)
+
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test: spec, suiteTitle: 'Nested outer' })
+        await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: spec, result: {} })
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: spec, result: { passed: true }, suiteTitle: 'Jasmine__TopLevel__Suite' })
+
+        expect(moduleDispatches.map(d => [d.state, d.hook])).toEqual([[TestFrameworkState.TEST, HookState.PRE], [TestFrameworkState.TEST, HookState.POST]])
+        for (const d of moduleDispatches) {
+            expect(d.args.skipTestHub).toBe(true)
+            expect(d.data.test_uuid).toBe(uuid)
+        }
+        expect(moduleDispatches[1].args.suiteTitle).toBe('Nested outer')
+        expect(moduleDispatches[1].args.result).toEqual({ passed: true })
+        expect(testHub.sendTestFrameworkEvent).toHaveBeenCalledTimes(1)
+    })
+
+    it('never shows a spec the reporter saw but the service did not (pending, excluded, beforeAll-failed) to the modules', async () => {
+        framework.onReporterTestStart(testStats({ uid: 'x' }) as any, context())
+        framework.onReporterTestEnd(testStats({ uid: 'x', state: 'skipped', end: new Date() }) as any, context())
+        await drain()
+        expect(dispatches).toHaveLength(2)
+        expect(moduleDispatches).toHaveLength(0)
+    })
+
+    it('still drives the modules when Test Observability is opted out and the reporter feeds nothing', async () => {
+        const spec = { description: 'a', fullName: 'Suite a', file: SUITE_FILE }
+        await framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test: spec })
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test: spec, suiteTitle: 'Suite' })
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: spec, result: { passed: true } })
+        expect(moduleDispatches).toHaveLength(2)
+        expect(moduleDispatches[0].data.test_uuid).toBe(moduleDispatches[1].data.test_uuid)
+        expect(process.env.TEST_ANALYTICS_ID).toBe(moduleDispatches[0].data.test_uuid)
+        expect(testHub.sendTestFrameworkEvent).not.toHaveBeenCalled()
+    })
+
+    it('sends an open all-hook\'s logs in the hook state, else the last-started spec\'s in the test state', async () => {
         framework.onReporterTestStart(testStats() as any, context())
         framework.onReporterLog({ level: 'INFO', message: 'in test', timestamp: 't1', kind: 'TEST_LOG' })
         const after = hookStats('"after all" hook')
@@ -258,22 +320,20 @@ describe('WdioJasmineTestFramework', () => {
         framework.onReporterLog({ level: 'INFO', message: 'after hook', timestamp: 't3', kind: 'TEST_LOG' })
         await drain()
 
-        const logs = dispatches.filter(d => d.state === TestFrameworkState.LOG)
-        expect(logs).toHaveLength(3)
+        expect(logSends.map(l => l.state)).toEqual(['TestFrameworkState.TEST', 'TestFrameworkState.AFTER_ALL', 'TestFrameworkState.TEST'])
         const specUuid = dispatches[0].data.test_uuid
-        expect(logs[0].data.test_uuid).toBe(specUuid)
-        expect((logs[0].data.test_logs as Record<string, unknown>[]).at(-1)).not.toHaveProperty('hook_id')
-        const hookLog = (logs[1].data.test_logs as Record<string, unknown>[]).at(-1)!
-        expect(hookLog.hook_id).toBe((dispatches.find(d => d.state === TestFrameworkState.AFTER_ALL)!.data.test_hooks_started as Record<string, Record<string, unknown>[]>).AFTER_ALL[0].hook_id)
-        expect(logs[2].data.test_uuid).toBe(specUuid)
+        expect(logSends[0].data.test_uuid).toBe(specUuid)
+        expect(logSends[0].entries[0]).not.toHaveProperty('hook_id')
+        const hookId = (dispatches.find(d => d.state === TestFrameworkState.AFTER_ALL)!.data.test_hooks_started as Record<string, Record<string, unknown>[]>).AFTER_ALL[0].hook_id
+        expect(logSends[1].entries[0].hook_id).toBe(hookId)
+        expect(logSends[2].data.test_uuid).toBe(specUuid)
     })
 
     it('keeps a screenshot entry\'s kind on the log path', async () => {
         framework.onReporterTestStart(testStats() as any, context())
         await framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry: { kind: 'TEST_SCREENSHOT', message: 'b64', timestamp: 't', level: 'INFO' } })
         await drain()
-        const log = dispatches.find(d => d.state === TestFrameworkState.LOG)!
-        expect((log.data.test_logs as Record<string, unknown>[])[0].kind).toBe('TEST_SCREENSHOT')
+        expect(logSends[0].entries[0].kind).toBe('TEST_SCREENSHOT')
     })
 
     it('is not idle until queued events are dispatched', async () => {
@@ -284,12 +344,19 @@ describe('WdioJasmineTestFramework', () => {
     })
 
     it('logs and continues when an observer throws', async () => {
-        vi.mocked(framework.runHooks).mockRejectedValueOnce(new Error('observer blew up'))
+        testHub.sendTestFrameworkEvent.mockRejectedValueOnce(new Error('send blew up'))
         const stats = testStats()
         framework.onReporterTestStart(stats as any, context())
         framework.onReporterTestEnd({ ...stats, state: 'passed', end: new Date() } as any, context())
         await drain()
         expect(dispatches.map(d => d.hook)).toEqual([HookState.POST])
         expect(WdioJasmineTestFramework.isIdle()).toBe(true)
+    })
+
+    // The class calls these TestHubModule methods directly; renaming or removing one must fail here.
+    it('relies on TestHubModule handlers that exist', () => {
+        for (const method of ['onBeforeTest', 'sendTestFrameworkEvent', 'sendLogCreatedEvent']) {
+            expect(typeof (TestHubModule.prototype as unknown as Record<string, unknown>)[method]).toBe('function')
+        }
     })
 })
