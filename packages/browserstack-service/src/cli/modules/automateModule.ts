@@ -90,9 +90,10 @@ export default class AutomateModule extends BaseModule {
         }
 
         let name = suiteTitle
-        if (testContextOptions.sessionNameFormat) {
+        const sessionNameFormat = this.sessionNameFormatFor(instace, testContextOptions)
+        if (sessionNameFormat) {
             const caps = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_CAPABILITIES)
-            name = testContextOptions.sessionNameFormat(
+            name = sessionNameFormat(
                 this.browserStackConfig,
                 caps,
                 suiteTitle,
@@ -183,9 +184,10 @@ export default class AutomateModule extends BaseModule {
         }
 
         let name = suiteTitle
-        if (testContextOptions.sessionNameFormat) {
+        const sessionNameFormat = this.sessionNameFormatFor(instace, testContextOptions)
+        if (sessionNameFormat) {
             const caps = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_CAPABILITIES)
-            name = testContextOptions.sessionNameFormat(
+            name = sessionNameFormat(
                 this.browserStackConfig,
                 caps,
                 suiteTitle,
@@ -324,6 +326,22 @@ export default class AutomateModule extends BaseModule {
         } catch (error) {
             this.logger.error(`Exception in automate onBuildLevelHookEnd: ${error}`)
         }
+    }
+
+    /**
+     * The binary's config echo cannot carry a function, so `sessionNameFormat` arrives empty. Jasmine
+     * takes it from the worker's own service options, as legacy did.
+     */
+    private sessionNameFormatFor(instance: TestFrameworkInstance, testContextOptions: TestContextOptions) {
+        if (testContextOptions.sessionNameFormat) {
+            return testContextOptions.sessionNameFormat
+        }
+        const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
+        if (!frameworkName.toLowerCase().includes('jasmine')) {
+            return undefined
+        }
+        const format = (BrowserstackCLI.getInstance().options as { sessionNameFormat?: unknown })?.sessionNameFormat
+        return typeof format === 'function' ? format as TestContextOptions['sessionNameFormat'] : undefined
     }
 
     private isCucumberInstance(instance: TestFrameworkInstance): boolean {

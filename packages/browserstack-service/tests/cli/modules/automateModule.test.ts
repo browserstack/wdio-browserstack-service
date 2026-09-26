@@ -1107,3 +1107,45 @@ describe('AutomateModule — jasmine session verdict', () => {
         expect(putBodies()).toEqual([['live.json', { status: 'failed', reason: 'boom' }]])
     })
 })
+
+describe('AutomateModule — jasmine sessionNameFormat', () => {
+    let automateModule: AutomateModule
+    const format = vi.fn((_config: unknown, _caps: unknown, suiteTitle: string, testTitle?: string) => `fmt[${suiteTitle}][${String(testTitle)}]`)
+    const names = () => vi.mocked(fetch).mock.calls.map(([, opts]) => JSON.parse((opts as { body: string }).body).name)
+
+    const runBeforeTest = (frameworkName: string, test: Record<string, unknown>) => {
+        vi.mocked(TestFramework.getState).mockImplementation((_i, key) => key === TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME ? frameworkName : undefined)
+        return automateModule.onBeforeTest({ instance: {}, test, suiteTitle: 'Nested outer' })
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as any)
+        vi.mocked(AutomationFramework.getDriver).mockReturnValue({ sessionId: 's1' } as any)
+        vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) => key === 'framework_session_id' ? 's1' : {})
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(fetch).mockResolvedValue({ json: async () => ({}) } as any)
+        vi.mocked(BrowserstackCLI.getInstance).mockReturnValue({ options: { sessionNameFormat: format } } as any)
+        automateModule = new AutomateModule({} as Options.Testrunner)
+        automateModule.config = {
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false, sessionNameFormat: '' },
+            userName: 'u',
+            accessKey: 'k'
+        } as any
+    })
+
+    afterEach(() => {
+        vi.mocked(BrowserstackCLI.getInstance).mockReset().mockReturnValue({ options: {} } as any)
+    })
+
+    it('applies the service-option format for jasmine, with no test title (legacy call shape)', async () => {
+        await runBeforeTest('WebdriverIO-jasmine', { description: 'outer passing test', fullName: 'Nested outer outer passing test' })
+        expect(names()).toEqual(['fmt[Nested outer][undefined]'])
+    })
+
+    it('leaves mocha on the binary config (format absent there)', async () => {
+        await runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' })
+        expect(format).not.toHaveBeenCalled()
+        expect(names()).toEqual(['Suite - t'])
+    })
+})
