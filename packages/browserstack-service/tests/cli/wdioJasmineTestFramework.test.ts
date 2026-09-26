@@ -214,7 +214,11 @@ describe('WdioJasmineTestFramework', () => {
         expect(finished).toMatchObject({ hook_result: 'passed', event_ended_at: '2026-09-25T15:34:12.257Z', hook_duration: 4087 })
         expect(finished.hook_id).toBe(started.hook_id)
         expect('hook_failure' in finished).toBe(false)
-        expect('test_uuid' in dispatches[0].data).toBe(false)
+        // the session event is keyed by the hook's own uuid, so the hook run gets its platform and session (#23);
+        // the binary builds the HookRun from hook_id and never links it to a test (#25)
+        expect(dispatches[0].data.test_uuid).toBe(started.hook_id)
+        expect(testHub.onBeforeTest).toHaveBeenCalledTimes(2)
+        expect(testHub.onBeforeTest.mock.calls.map(([args]) => (args as Record<string, unknown>).instance)).toEqual([dispatches[0].args.instance, dispatches[2].args.instance])
 
         const afterStarted = (dispatches[2].data.test_hooks_started as Record<string, Record<string, unknown>[]>).AFTER_ALL[0]
         expect(afterStarted.hook_identifier).toBe('"after all" hook for Nested middle')
@@ -334,6 +338,45 @@ describe('WdioJasmineTestFramework', () => {
         await framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry: { kind: 'TEST_SCREENSHOT', message: 'b64', timestamp: 't', level: 'INFO' } })
         await drain()
         expect(logSends[0].entries[0].kind).toBe('TEST_SCREENSHOT')
+    })
+
+    it('sends an HTTP command log to the spec it names, even inside an all-hook or after the spec ended', async () => {
+        const first = testStats()
+        const uuid = framework.onReporterTestStart(first as any, context())
+        framework.onReporterTestEnd({ ...first, state: 'passed', end: new Date() } as any, context())
+        const after = hookStats('"after all" hook')
+        framework.onReporterHookStart(after as any, context())
+        const message = JSON.stringify({ path: '/session/:sessionId/title', method: 'GET', body: {}, response: { value: 'StackDemo' } })
+        await framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry: { kind: 'HTTP', message, timestamp: 't', test_run_uuid: uuid } })
+        await drain()
+
+        expect(logSends).toHaveLength(1)
+        expect(logSends[0].state).toBe('TestFrameworkState.TEST')
+        expect(logSends[0].data.test_uuid).toBe(uuid)
+        expect(logSends[0].entries[0]).toMatchObject({ kind: 'HTTP', timestamp: 't' })
+        expect(logSends[0].entries[0]).not.toHaveProperty('hook_id')
+        expect(Buffer.from(logSends[0].entries[0].message as Uint8Array).toString()).toBe(message)
+    })
+
+    it('drops a named-spec log whose uuid this worker never minted', async () => {
+        framework.onReporterTestStart(testStats() as any, context())
+        await framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry: { kind: 'HTTP', message: '{}', timestamp: 't', test_run_uuid: 'not-ours' } })
+        await drain()
+        expect(logSends).toHaveLength(0)
+    })
+
+    it('maps the WDIO hookName to the hook-type key, and nothing else', () => {
+        expect(['beforeAll', 'afterAll', 'beforeEach', 'afterEach'].map(n => WdioJasmineTestFramework.hookTypeFromName(n)))
+            .toEqual(['BEFORE_ALL', 'AFTER_ALL', 'BEFORE_EACH', 'AFTER_EACH'])
+        expect(WdioJasmineTestFramework.hookTypeFromName(undefined)).toBe('unknown')
+        expect(WdioJasmineTestFramework.hookTypeFromName('constructor')).toBe('unknown')
+    })
+
+    it('ignores the service\'s hook events: hooks reach TestHub from the reporter only', async () => {
+        await framework.trackEvent(TestFrameworkState.BEFORE_EACH, HookState.PRE, { test: { fullName: 'Nested outer outer passing test' } })
+        await framework.trackEvent(TestFrameworkState.BEFORE_ALL, HookState.POST, { test: {}, result: { passed: false } })
+        expect(dispatches).toHaveLength(0)
+        expect(moduleDispatches).toHaveLength(0)
     })
 
     it('is not idle until queued events are dispatched', async () => {

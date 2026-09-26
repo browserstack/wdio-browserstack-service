@@ -58,10 +58,18 @@ export default class WdioJasmineTestFramework extends TestFramework {
     static KEY_HOOK_FAILURE_REASON = 'hook_failure_reason'
 
     static #pendingEvents = 0
+    static #hookTypes = new Map([
+        ['beforeAll', 'BEFORE_ALL'],
+        ['afterAll', 'AFTER_ALL'],
+        ['beforeEach', 'BEFORE_EACH'],
+        ['afterEach', 'AFTER_EACH'],
+    ])
 
     #specInstances = new Map<string, TestFrameworkInstance>()
     // Open specs by fullName: how the service's hooks find the instance the reporter minted.
     #specsByFullName = new Map<string, TestFrameworkInstance>()
+    // Every spec of this worker by uuid: legacy attaches HTTP logs and screenshots to the last started spec, even after it ended.
+    #specsByUuid = new Map<string, TestFrameworkInstance>()
     #serviceOnly = new Set<TestFrameworkInstance>()
     #suiteTitles = new Map<TestFrameworkInstance, unknown>()
     #testHub: TestHubModule | null = null
@@ -79,6 +87,11 @@ export default class WdioJasmineTestFramework extends TestFramework {
     /** True when no reporter event is still waiting to be dispatched (the reporter's `isSynchronised`). */
     static isIdle() {
         return WdioJasmineTestFramework.#pendingEvents === 0
+    }
+
+    /** The WDIO `hookName` a jasmine hook runs under, as the hook-type key `getHookType` returns for mocha titles. */
+    static hookTypeFromName(hookName: string | undefined) {
+        return WdioJasmineTestFramework.#hookTypes.get(hookName ?? '') ?? 'unknown'
     }
 
     setTestHubModule(testHub: TestHubModule | null | undefined) {
@@ -145,6 +158,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
             })
             this.#specInstances.set(testStats.uid, instance)
             this.#specsByFullName.set(fullTitle, instance)
+            this.#specsByUuid.set(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) as string, instance)
             // Registered synchronously: the service's beforeTest for this spec may read it before the queue runs.
             TestFramework.setTrackedInstance(instance.getContext(), instance)
 
@@ -236,6 +250,8 @@ export default class WdioJasmineTestFramework extends TestFramework {
                 ...this.#filePaths(context.suiteFile),
             }
             instance.updateData(TestFrameworkConstants.KEY_HOOK_ID, hookId)
+            // The session event is keyed by KEY_TEST_UUID: it links the hook run to its Automate session and platform
+            instance.updateData(TestFrameworkConstants.KEY_TEST_UUID, hookId)
             this.#hookInstances.set(hookStats.uid, instance)
 
             const emitHook = shouldProcessEventForTesthub('HookRunStarted')
@@ -307,14 +323,18 @@ export default class WdioJasmineTestFramework extends TestFramework {
         }
     }
 
-    /** Console logs and screenshots: an open beforeAll/afterAll wins, else the last-started spec, even after it ended. */
+    /**
+     * Console logs: an open beforeAll/afterAll wins, else the last-started spec, even after it ended.
+     * HTTP command logs and screenshots name their spec (`test_run_uuid`), as legacy did; unknown uuids are dropped.
+     */
     onReporterLog(logEntry: Record<string, unknown> | undefined) {
         try {
             if (!logEntry || !shouldProcessEventForTesthub('LogCreated')) {
                 return
             }
+            const targetUuid = logEntry.test_run_uuid as string | undefined
             this.#enqueue('LOG/POST', async () => {
-                const instance = this.#openHook ?? this.#lastSpec
+                const instance = targetUuid ? this.#specsByUuid.get(targetUuid) : (this.#openHook ?? this.#lastSpec)
                 if (!instance) {
                     return
                 }
@@ -366,7 +386,8 @@ export default class WdioJasmineTestFramework extends TestFramework {
         }
         this.updateInstanceState(instance, testFrameworkState, hookState)
         args.instance = instance
-        if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.PRE) {
+        // Legacy sent a run's platform and session with its start event, hooks included (parity #19, #23)
+        if (hookState === HookState.PRE) {
             testHub.onBeforeTest(args)
         }
         await testHub.sendTestFrameworkEvent(args)
