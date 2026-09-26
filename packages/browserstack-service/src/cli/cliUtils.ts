@@ -47,7 +47,7 @@ const CLI_DOWNLOAD_TMP_SUFFIX = '.zip'
 export class CLIUtils {
     static automationFrameworkDetail = {}
     static testFrameworkDetail = {}
-    static CLISupportedFrameworks = ['mocha', 'cucumber']
+    static CLISupportedFrameworks = ['mocha', 'cucumber', 'jasmine']
 
     static isDevelopmentEnv() {
         return process.env.BROWSERSTACK_CLI_ENV === 'development'
