@@ -5,6 +5,8 @@ import WDIOReporter from '@wdio/reporter'
 import type { Options, Frameworks } from '@wdio/types'
 import { BrowserstackCLI } from './cli/index.js'
 import { reportSkippedTest, resolveSpecFile } from './cli/skipReporter.js'
+import WdioJasmineTestFramework from './cli/frameworks/wdioJasmineTestFramework.js'
+import type { JasmineSuiteContext } from './cli/frameworks/wdioJasmineTestFramework.js'
 import * as url from 'node:url'
 
 import { v4 as uuidv4 } from 'uuid'
@@ -72,6 +74,10 @@ class _TestReporter extends WDIOReporter {
     }
 
     public async appendTestItemLog(stdLog: StdLog) {
+        if (this.isCliJasmine()) {
+            this.cliJasmineFramework()?.onReporterLog(stdLog as unknown as Record<string, unknown>)
+            return
+        }
         if (this._currentHook.uuid && !this._currentHook.finished) {
             stdLog.hook_run_uuid = this._currentHook.uuid
         } else if (_TestReporter.currentTest.uuid) {
@@ -134,6 +140,29 @@ class _TestReporter extends WDIOReporter {
         this._suites.pop()
     }
 
+    /**
+     * WDIO waits for reporters to synchronise before the worker exits; the CLI jasmine feed dispatches
+     * asynchronously, so hold the worker until it has drained. Always true on every other path.
+     */
+    get isSynchronised() {
+        return WdioJasmineTestFramework.isIdle()
+    }
+
+    /** On the CLI flow jasmine's test/hook/log events feed the framework tracker, never the legacy Listener. */
+    isCliJasmine() {
+        return this._config?.framework === 'jasmine' && BrowserstackCLI.getInstance().isRunning()
+    }
+
+    cliJasmineFramework() {
+        const framework = BrowserstackCLI.getInstance().getTestFramework()
+        return framework instanceof WdioJasmineTestFramework ? framework : null
+    }
+
+    jasmineSuiteContext(): JasmineSuiteContext {
+        const suiteFile = this._suiteName || (this.specs?.length > 0 ? this.specs[this.specs.length - 1]?.replace('file:', '') : undefined)
+        return { scopes: this._suites.map(s => s.title), suiteFile }
+    }
+
     needToSendData(testType?: string, event?: string) {
         if (!this._observability) {return false}
 
@@ -158,6 +187,10 @@ class _TestReporter extends WDIOReporter {
         }
 
         testStats.end ||= new Date()
+        if (this.isCliJasmine()) {
+            this.cliJasmineFramework()?.onReporterTestEnd(testStats, this.jasmineSuiteContext())
+            return
+        }
         this.listener.testFinished(await this.getRunData(testStats, 'TestRunFinished'))
     }
 
@@ -166,6 +199,14 @@ class _TestReporter extends WDIOReporter {
             return
         }
         if (testStats.fullTitle === '<unknown test>') {
+            return
+        }
+        if (this.isCliJasmine()) {
+            const cliUuid = this.cliJasmineFramework()?.onReporterTestStart(testStats, this.jasmineSuiteContext())
+            if (cliUuid) {
+                _TestReporter.currentTest.uuid = cliUuid
+                _TestReporter._tests[testStats.fullTitle] = { uuid: cliUuid }
+            }
             return
         }
         const uuid = uuidv4()
@@ -181,6 +222,10 @@ class _TestReporter extends WDIOReporter {
         if (!this.needToSendData('hook', 'start')) {
             return
         }
+        if (this.isCliJasmine()) {
+            this.cliJasmineFramework()?.onReporterHookStart(hookStats, this.jasmineSuiteContext())
+            return
+        }
 
         const identifier = this.getHookIdentifier(hookStats)
         const hookId = uuidv4()
@@ -194,6 +239,13 @@ class _TestReporter extends WDIOReporter {
 
     async onHookEnd(hookStats: HookStats) {
         if (!this.needToSendData('hook', 'end')) {
+            return
+        }
+        if (this.isCliJasmine()) {
+            if (!hookStats.state && !hookStats.error) {
+                hookStats.state = 'passed'
+            }
+            this.cliJasmineFramework()?.onReporterHookEnd(hookStats)
             return
         }
         const identifier = this.getHookIdentifier(hookStats)
