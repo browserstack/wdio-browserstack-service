@@ -9,6 +9,8 @@ import { TestFrameworkConstants } from '../../../src/cli/frameworks/constants/te
 import { isBrowserstackSession } from '../../../src/util.js'
 import PerformanceTester from '../../../src/instrumentation/performance/performance-tester.js'
 import { _fetch as fetch } from '../../../src/fetchWrapper.js'
+import WdioJasmineTestFramework from '../../../src/cli/frameworks/wdioJasmineTestFramework.js'
+import { BrowserstackCLI } from '../../../src/cli/index.js'
 import type { Options } from '@wdio/types'
 
 // Mock dependencies
@@ -18,6 +20,19 @@ vi.mock('../../../src/cli/frameworks/testFramework.js', () => ({
         setState: vi.fn(),
         getState: vi.fn(),
         getTrackedInstance: vi.fn()
+    }
+}))
+
+vi.mock('../../../src/cli/index.js', () => ({
+    BrowserstackCLI: {
+        getInstance: vi.fn(() => ({ options: {} }))
+    }
+}))
+
+// undefined = this worker is not jasmine on the CLI flow, so the existing aggregation applies
+vi.mock('../../../src/cli/frameworks/wdioJasmineTestFramework.js', () => ({
+    default: {
+        sessionVerdict: vi.fn(() => undefined)
     }
 }))
 
@@ -1003,5 +1018,92 @@ describe('AutomateModule preferScenarioName', () => {
         await mod.onAfterExecute()
 
         expect(namesPUT()).toContain('Can log in')
+    })
+})
+
+describe('AutomateModule — jasmine session verdict', () => {
+    let automateModule: AutomateModule
+    const putBodies = () => vi.mocked(fetch).mock.calls.map(([url, opts]) => [String(url).split('/sessions/')[1], JSON.parse((opts as { body: string }).body)])
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as any)
+        vi.mocked(AutomationFramework.getDriver).mockReturnValue({ sessionId: 'live' } as any)
+        vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) => key === 'framework_session_id' ? 'live' : {})
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(fetch).mockResolvedValue({ json: async () => ({}) } as any)
+        automateModule = new AutomateModule({} as Options.Testrunner)
+        automateModule.config = {
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false },
+            userName: 'u',
+            accessKey: 'k'
+        } as any
+    })
+
+    afterEach(() => {
+        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockReset().mockReturnValue(undefined)
+    })
+
+    it('marks the live session with the framework verdict, the last name and the joined reasons', async () => {
+        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockImplementation((id) => id === 'live'
+            ? { status: 'failed', reason: 'beforeAll hook failure\nafterEach hook failure' }
+            : null)
+        ;(automateModule as any).sessionMap.set('live', { lastTestName: 'Hookfail afterEach suite', appliedName: 'Hookfail afterEach suite', testResults: new Map(), scenariosRan: 0 })
+
+        await automateModule.onAfterExecute()
+
+        expect(putBodies()).toEqual([
+            ['live.json', { status: 'failed', name: 'Hookfail afterEach suite', reason: 'beforeAll hook failure\nafterEach hook failure' }]
+        ])
+    })
+
+    it('marks a live session no spec registered, without a name', async () => {
+        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockReturnValue({ status: 'failed', reason: 'beforeAll hook failure' })
+
+        await automateModule.onAfterExecute()
+
+        expect(putBodies()).toEqual([['live.json', { status: 'failed', reason: 'beforeAll hook failure' }]])
+    })
+
+    it('leaves a reloaded session to its onReload mark, but still names it', async () => {
+        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockImplementation((id) => id === 'live' ? { status: 'passed' } : null)
+        ;(automateModule as any).sessionMap.set('old', { lastTestName: 'Suite A', testResults: new Map(), scenariosRan: 0 })
+
+        await automateModule.onAfterExecute()
+
+        expect(putBodies()).toEqual([
+            ['old.json', { name: 'Suite A' }],
+            ['live.json', { status: 'passed' }],
+        ])
+    })
+
+    it('passes ignoreHooksStatus from the worker\'s service options to the verdict', async () => {
+        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockReturnValue({ status: 'passed' })
+        vi.mocked(BrowserstackCLI.getInstance).mockReturnValueOnce({ options: { testObservabilityOptions: { ignoreHooksStatus: true } } } as any)
+
+        await automateModule.onAfterExecute()
+
+        expect(WdioJasmineTestFramework.sessionVerdict).toHaveBeenCalledWith('live', true)
+    })
+
+    it('honours skipSessionStatus and skipSessionName', async () => {
+        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockReturnValue({ status: 'failed', reason: 'x' })
+        ;(automateModule as any).sessionMap.set('live', { lastTestName: 'Suite', testResults: new Map(), scenariosRan: 0 })
+        ;(automateModule.config as any).testContextOptions = { skipSessionName: true, skipSessionStatus: true }
+
+        await automateModule.onAfterExecute()
+
+        expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('keeps the existing per-test aggregation when the worker is not jasmine', async () => {
+        (automateModule as any).sessionMap.set('live', {
+            lastTestName: 'Suite', appliedName: 'Suite', scenariosRan: 0,
+            testResults: new Map([['t', { testName: 'Suite', status: 'failed', reason: 'boom' }]])
+        })
+
+        await automateModule.onAfterExecute()
+
+        expect(putBodies()).toEqual([['live.json', { status: 'failed', reason: 'boom' }]])
     })
 })

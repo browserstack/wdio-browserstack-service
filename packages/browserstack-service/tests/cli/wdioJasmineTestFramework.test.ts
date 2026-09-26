@@ -8,6 +8,7 @@ import { TestFrameworkState } from '../../src/cli/states/testFrameworkState.js'
 import { HookState } from '../../src/cli/states/hookState.js'
 import type TestFrameworkInstance from '../../src/cli/instances/testFrameworkInstance.js'
 import TestHubModule from '../../src/cli/modules/testHubModule.js'
+import AutomationFramework from '../../src/cli/frameworks/automationFramework.js'
 
 vi.spyOn(bstackLogger.BStackLogger, 'logToFile').mockImplementation(() => {})
 
@@ -394,6 +395,88 @@ describe('WdioJasmineTestFramework', () => {
         await drain()
         expect(dispatches.map(d => d.hook)).toEqual([HookState.POST])
         expect(WdioJasmineTestFramework.isIdle()).toBe(true)
+    })
+
+    describe('session verdict (legacy service.after())', () => {
+        let liveSession = 'live'
+        const spec = (title: string, overrides: Record<string, unknown> = {}) => testStats({ uid: title, title, fullTitle: `Suite ${title}`, ...overrides })
+        const reporterEnd = (stats: ReturnType<typeof testStats>, state: string) =>
+            framework.onReporterTestEnd({ ...stats, state, end: new Date() } as any, context())
+        const serviceTest = (title: string, result: Record<string, unknown>) =>
+            framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: { fullName: `Suite ${title}`, description: title }, result })
+        const serviceHook = (state: State, result: Record<string, unknown>) => framework.trackEvent(state, HookState.POST, { test: {}, result })
+        const fail = (message: string) => ({ passed: false, error: new Error(message) })
+
+        beforeEach(() => {
+            liveSession = 'live'
+            vi.spyOn(AutomationFramework, 'getTrackedInstance').mockReturnValue({} as any)
+            vi.spyOn(AutomationFramework, 'getState').mockImplementation(() => liveSession)
+        })
+
+        it('reproduces the CP0 hookfail verdict: failed, every hook failure in the order it happened', async () => {
+            await serviceHook(TestFrameworkState.BEFORE_ALL, fail('beforeAll hook failure'))
+            for (const title of ['beforeAll child one', 'beforeAll child two', 'beforeEach child one', 'beforeEach child two']) {
+                if (title.startsWith('beforeEach')) {
+                    await serviceHook(TestFrameworkState.BEFORE_EACH, fail('beforeEach hook failure'))
+                }
+                const stats = spec(title)
+                framework.onReporterTestStart(stats as any, context())
+                reporterEnd(stats, 'failed')
+            }
+            for (const title of ['afterEach child one', 'afterEach child two']) {
+                const stats = spec(title)
+                framework.onReporterTestStart(stats as any, context())
+                await serviceTest(title, { passed: true })
+                await serviceHook(TestFrameworkState.AFTER_EACH, fail('afterEach hook failure'))
+                reporterEnd(stats, 'failed')
+            }
+            await drain()
+
+            expect(WdioJasmineTestFramework.sessionVerdict('live', false)).toEqual({
+                status: 'failed',
+                reason: 'beforeAll hook failure\nbeforeEach hook failure\nbeforeEach hook failure\nafterEach hook failure\nafterEach hook failure'
+            })
+        })
+
+        it('fails a session where no spec ran, even with no failure recorded', async () => {
+            expect(WdioJasmineTestFramework.sessionVerdict('live', false)).toEqual({ status: 'failed', reason: undefined })
+        })
+
+        it('passes when specs ran and nothing failed, with no reason', async () => {
+            const stats = spec('ok')
+            framework.onReporterTestStart(stats as any, context())
+            await serviceTest('ok', { passed: true })
+            reporterEnd(stats, 'passed')
+            await drain()
+            expect(WdioJasmineTestFramework.sessionVerdict('live', false)).toEqual({ status: 'passed' })
+        })
+
+        it('does not count a pending() spec as a failure', async () => {
+            await serviceTest('pending', { passed: false, skipped: true })
+            expect(WdioJasmineTestFramework.sessionVerdict('live', false)).toEqual({ status: 'passed' })
+        })
+
+        it('under ignoreHooksStatus passes a run whose only failures are hooks, and keeps test failures', async () => {
+            await serviceTest('ok', { passed: true })
+            await serviceHook(TestFrameworkState.BEFORE_EACH, fail('beforeEach hook failure'))
+            const child = spec('child')
+            framework.onReporterTestStart(child as any, context())
+            reporterEnd(child, 'failed')
+            await drain()
+            expect(WdioJasmineTestFramework.sessionVerdict('live', true)).toEqual({ status: 'passed' })
+            expect(WdioJasmineTestFramework.sessionVerdict('live', false)).toEqual({ status: 'failed', reason: 'beforeEach hook failure' })
+
+            await serviceTest('bad', fail('boom'))
+            expect(WdioJasmineTestFramework.sessionVerdict('live', true)).toEqual({ status: 'failed', reason: 'boom' })
+        })
+
+        it('keeps failures per session and gives no verdict for a session that is no longer live', async () => {
+            await serviceTest('first', fail('before reload'))
+            liveSession = 'reloaded'
+            await serviceTest('second', { passed: true })
+            expect(WdioJasmineTestFramework.sessionVerdict('reloaded', false)).toEqual({ status: 'passed' })
+            expect(WdioJasmineTestFramework.sessionVerdict('live', false)).toBeNull()
+        })
     })
 
     // The class calls these TestHubModule methods directly; renaming or removing one must fail here.
