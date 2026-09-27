@@ -1243,6 +1243,12 @@ describe('_handleBuildIdentifier', () => {
         capabilities: []
     }
 
+    afterEach(() => {
+        delete process.env.BROWSERSTACK_BUILD_NAME
+        delete process.env.BROWSERSTACK_BUILD_IDENTIFIER
+        delete process.env.BROWSERSTACK_BUILD_RUN_IDENTIFIER
+    })
+
     it('should update ${BUILD_NUMBER}', async() => {
         const caps: any = [{
             'bstack:options': {
@@ -1329,7 +1335,43 @@ describe('_handleBuildIdentifier', () => {
         expect(caps[0]).toMatchObject(updatedcaps[0])
     })
 
-    it('should delete buildIdentifier if BROWSERSTACK_BUILD_NAME is defined as env var', async() => {
+    /**
+     * SDK-4748: BROWSERSTACK_BUILD_NAME used to delete an explicitly configured
+     * buildIdentifier outright. It is not a buildName source for this service, so it must
+     * not influence the identifier at all once a buildName is present in the caps.
+     */
+    it('should keep buildIdentifier when BROWSERSTACK_BUILD_NAME is defined as env var and buildName is in caps', async() => {
+        process.env.BROWSERSTACK_BUILD_NAME = 'browserstack wdio build'
+        const caps: any = [{
+            'bstack:options': {
+                buildName: 'browserstack wdio build',
+                buildIdentifier: '#${BUILD_NUMBER}'
+            }
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        vi.spyOn(utils, 'getCiInfo').mockReturnValueOnce(null)
+        vi.spyOn(service, '_getLocalBuildNumber').mockReturnValueOnce('1')
+        vi.spyOn(service, '_updateLocalBuildCache').mockImplementation(() => {})
+        service._handleBuildIdentifier(caps)
+        expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('#1')
+    })
+
+    it('should keep a literal buildIdentifier untouched when BROWSERSTACK_BUILD_NAME is defined as env var', async() => {
+        process.env.BROWSERSTACK_BUILD_NAME = 'browserstack wdio build'
+        const caps: any = [{
+            'bstack:options': {
+                buildName: 'browserstack wdio build',
+                buildIdentifier: '2026-09-27_14-35-36'
+            }
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service._handleBuildIdentifier(caps)
+        expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('2026-09-27_14-35-36')
+    })
+
+    it('should still delete buildIdentifier if buildName is absent and BROWSERSTACK_BUILD_NAME is defined as env var', async() => {
         process.env.BROWSERSTACK_BUILD_NAME = 'browserstack wdio build'
         const caps: any = [{
             'bstack:options': {
@@ -1345,7 +1387,104 @@ describe('_handleBuildIdentifier', () => {
 
         service._handleBuildIdentifier(caps)
         expect(caps[0]).toMatchObject(updatedcaps[0])
-        delete process.env.BROWSERSTACK_BUILD_NAME
+        expect(caps[0]['bstack:options']?.buildIdentifier).toBeUndefined()
+    })
+
+    it('should prefer BROWSERSTACK_BUILD_RUN_IDENTIFIER over the configured buildIdentifier', async() => {
+        process.env.BROWSERSTACK_BUILD_NAME = 'browserstack wdio build'
+        process.env.BROWSERSTACK_BUILD_RUN_IDENTIFIER = 'test_run_20260927_143536'
+        const caps: any = [{
+            'bstack:options': {
+                buildName: 'browserstack wdio build',
+                buildIdentifier: '#${BUILD_NUMBER}'
+            }
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service._handleBuildIdentifier(caps)
+        expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('test_run_20260927_143536')
+    })
+
+    it('should prefer BROWSERSTACK_BUILD_IDENTIFIER over BROWSERSTACK_BUILD_RUN_IDENTIFIER', async() => {
+        process.env.BROWSERSTACK_BUILD_IDENTIFIER = 'explicit-env-identifier'
+        process.env.BROWSERSTACK_BUILD_RUN_IDENTIFIER = 'per-run-identifier'
+        const caps: any = [{
+            'bstack:options': {
+                buildName: 'browserstack wdio build',
+                buildIdentifier: 'from-caps'
+            }
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service._handleBuildIdentifier(caps)
+        expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('explicit-env-identifier')
+    })
+
+    it('should set buildIdentifier from env when none is configured anywhere', async() => {
+        process.env.BROWSERSTACK_BUILD_RUN_IDENTIFIER = 'per-run-identifier'
+        const caps: any = [{
+            'bstack:options': {
+                buildName: 'browserstack wdio build'
+            }
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service._handleBuildIdentifier(caps)
+        expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('per-run-identifier')
+    })
+
+    it('should ignore a blank env buildIdentifier and keep the configured one', async() => {
+        process.env.BROWSERSTACK_BUILD_RUN_IDENTIFIER = '   '
+        const caps: any = [{
+            'bstack:options': {
+                buildName: 'browserstack wdio build',
+                buildIdentifier: 'from-caps'
+            }
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service._handleBuildIdentifier(caps)
+        expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('from-caps')
+    })
+
+    it('should not set buildIdentifier from env when buildName is absent', async() => {
+        process.env.BROWSERSTACK_BUILD_RUN_IDENTIFIER = 'per-run-identifier'
+        const caps: any = [{
+            'bstack:options': {}
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service._handleBuildIdentifier(caps)
+        expect(caps[0]['bstack:options']?.buildIdentifier).toBeUndefined()
+    })
+
+    it('should substitute an arbitrary ${ENV_VAR} placeholder in buildIdentifier', async() => {
+        process.env.CUSTOM_DATE = '2026-09-27_14-35-36'
+        const caps: any = [{
+            'bstack:options': {
+                buildName: 'browserstack wdio build',
+                buildIdentifier: 'run-${CUSTOM_DATE}'
+            }
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service._handleBuildIdentifier(caps)
+        expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('run-2026-09-27_14-35-36')
+        delete process.env.CUSTOM_DATE
+    })
+
+    it('should leave an unset ${ENV_VAR} placeholder literal', async() => {
+        delete process.env.NOT_SET_ANYWHERE
+        const caps: any = [{
+            'bstack:options': {
+                buildName: 'browserstack wdio build',
+                buildIdentifier: 'run-${NOT_SET_ANYWHERE}'
+            }
+        }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service._handleBuildIdentifier(caps)
+        expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('run-${NOT_SET_ANYWHERE}')
     })
 
     it('should not evaluate buildIdentifier if buildIdentifier is not present in the caps', async() => {

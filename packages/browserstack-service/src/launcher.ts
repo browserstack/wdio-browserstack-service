@@ -1150,17 +1150,44 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
     }
 
     _handleBuildIdentifier(capabilities?: Capabilities.TestrunnerCapabilities) {
+        /**
+         * buildIdentifier resolution precedence, per the SDK-wide contract
+         * (CLI args > env vars > config file > script):
+         *   1. BROWSERSTACK_BUILD_IDENTIFIER      - explicit env override
+         *   2. BROWSERSTACK_BUILD_RUN_IDENTIFIER  - per-run signal, typically injected by CI
+         *   3. service options in wdio.conf.js / bstack:options in the capabilities, both of
+         *      which onPrepare has already folded into this._buildIdentifier
+         * wdio exposes no CLI arg for buildIdentifier, so tier 1 of the contract is absent here.
+         * Mirrors browserstack-node-agent computeBuildIdentifier(), browserstack-python-sdk
+         * ENV_CAPS_TO_CONFIG['buildIdentifier'] and browserstack-csharp-sdk GetBuildIdentifier().
+         */
+        const envBuildIdentifier = [
+            process.env.BROWSERSTACK_BUILD_IDENTIFIER,
+            process.env.BROWSERSTACK_BUILD_RUN_IDENTIFIER
+        ].find((value) => value && value.trim())
+        if (envBuildIdentifier) {
+            this._buildIdentifier = envBuildIdentifier.trim()
+        }
+
         if (!this._buildIdentifier) {
             return
         }
 
-        if ((!this._buildName || process.env.BROWSERSTACK_BUILD_NAME) && this._buildIdentifier) {
+        /**
+         * A buildIdentifier is only meaningful next to a buildName - the dashboard appends it
+         * to that name. BROWSERSTACK_BUILD_NAME used to force this branch as well, which
+         * silently discarded every explicitly configured buildIdentifier whenever that env var
+         * happened to be exported (SDK-4748). This service never reads BROWSERSTACK_BUILD_NAME
+         * as a buildName source, and unlike the yml-driven SDKs it has no default identifier to
+         * suppress, so the env var no longer takes part in this decision.
+         */
+        if (!this._buildName) {
             this._updateCaps(capabilities, 'buildIdentifier')
             BStackLogger.warn('Skipping buildIdentifier as buildName is not passed.')
             return
         }
 
-        if (this._buildIdentifier && this._buildIdentifier.includes('${DATE_TIME}')){
+        if (this._buildIdentifier.includes('${DATE_TIME}')) {
             const formattedDate = new Intl.DateTimeFormat('en-GB', {
                 month: 'short',
                 day: '2-digit',
@@ -1170,24 +1197,33 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 .format(new Date())
                 .replace(/ |, /g, '-')
             this._buildIdentifier = this._buildIdentifier.replace('${DATE_TIME}', formattedDate)
-            this._updateCaps(capabilities, 'buildIdentifier', this._buildIdentifier)
         }
 
-        if (!this._buildIdentifier.includes('${BUILD_NUMBER}')) {
-            return
-        }
-
-        const ciInfo = getCiInfo()
-        if (ciInfo !== null && ciInfo.build_number) {
-            this._buildIdentifier = this._buildIdentifier.replace('${BUILD_NUMBER}', 'CI '+ ciInfo.build_number)
-            this._updateCaps(capabilities, 'buildIdentifier', this._buildIdentifier)
-        } else {
-            const localBuildNumber = this._getLocalBuildNumber()
-            if (localBuildNumber) {
-                this._buildIdentifier = this._buildIdentifier.replace('${BUILD_NUMBER}', localBuildNumber)
-                this._updateCaps(capabilities, 'buildIdentifier', this._buildIdentifier)
+        if (this._buildIdentifier.includes('${BUILD_NUMBER}')) {
+            const ciInfo = getCiInfo()
+            if (ciInfo !== null && ciInfo.build_number) {
+                this._buildIdentifier = this._buildIdentifier.replace('${BUILD_NUMBER}', 'CI '+ ciInfo.build_number)
+            } else {
+                const localBuildNumber = this._getLocalBuildNumber()
+                if (localBuildNumber) {
+                    this._buildIdentifier = this._buildIdentifier.replace('${BUILD_NUMBER}', localBuildNumber)
+                }
             }
         }
+
+        /**
+         * Resolve any remaining ${ENV_VAR} placeholder against process.env, so an identifier
+         * such as '${CUSTOM_DATE}' behaves the same whatever source it arrived from. An unset
+         * variable is left as its literal placeholder rather than blanked, so nothing is
+         * silently lost.
+         */
+        this._buildIdentifier = this._buildIdentifier.replace(
+            /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+            (match, varName) => process.env[varName] ?? match
+        )
+
+        this._updateCaps(capabilities, 'buildIdentifier', this._buildIdentifier)
+        this.browserStackConfig.buildIdentifier = this._buildIdentifier
     }
 
     _updateBrowserStackPercyConfig() {
