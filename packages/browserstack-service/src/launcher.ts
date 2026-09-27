@@ -72,6 +72,10 @@ type BrowserstackLocal = BrowserstackLocalLauncher.Local & {
     stop(callback: (err?: Error) => void): void
 }
 
+// Tokens with dedicated resolution inside _handleBuildIdentifier; the generic ${ENV_VAR}
+// sweep must not reprocess them.
+const RESERVED_BUILD_IDENTIFIER_TOKENS = new Set(['DATE_TIME', 'BUILD_NUMBER'])
+
 export default class BrowserstackLauncherService implements Services.ServiceInstance {
     browserstackLocal?: BrowserstackLocal
     private _buildName?: string
@@ -1095,6 +1099,15 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
          */
         if (!this._buildName) {
             this._updateCaps(capabilities, 'buildIdentifier')
+            /**
+             * Clear the in-memory field as well as the capability. launchTestSession reads
+             * this._buildIdentifier for the build-start payload's build_identifier, so leaving a
+             * resolved value here would report an identifier that was never applied anywhere
+             * visible. With the env tier above this is reachable with no user configuration at
+             * all, since CI commonly injects BROWSERSTACK_BUILD_RUN_IDENTIFIER globally.
+             */
+            this._buildIdentifier = undefined
+            this.browserStackConfig.buildIdentifier = undefined
             BStackLogger.warn('Skipping buildIdentifier as buildName is not passed.')
             return
         }
@@ -1125,13 +1138,27 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
         /**
          * Resolve any remaining ${ENV_VAR} placeholder against process.env, so an identifier
-         * such as '${CUSTOM_DATE}' behaves the same whatever source it arrived from. An unset
-         * variable is left as its literal placeholder rather than blanked, so nothing is
-         * silently lost.
+         * such as '${CUSTOM_DATE}' behaves the same whatever source it arrived from.
+         *
+         * DATE_TIME and BUILD_NUMBER are excluded: both are resolved above by dedicated logic,
+         * and BUILD_NUMBER is deliberately left literal when neither getCiInfo() nor
+         * _getLocalBuildNumber() can supply one. Without the exclusion this sweep would pick up
+         * a raw process.env.BUILD_NUMBER on CI vendors getCiInfo() does not recognise, yielding a
+         * value without the 'CI ' prefix every other resolution path applies.
+         *
+         * A variable that is unset, empty or whitespace-only leaves its literal placeholder
+         * rather than blanking that part of the identifier, so nothing is silently lost.
          */
         this._buildIdentifier = this._buildIdentifier.replace(
             /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
-            (match, varName) => process.env[varName] ?? match
+            (match, varName) => {
+                if (RESERVED_BUILD_IDENTIFIER_TOKENS.has(varName)) {
+                    return match
+                }
+                const envValue = process.env[varName]
+
+                return envValue && envValue.trim() ? envValue : match
+            }
         )
 
         this._updateCaps(capabilities, 'buildIdentifier', this._buildIdentifier)
