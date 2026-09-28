@@ -39,7 +39,13 @@ class TestMetadata {
         }
 
         if (testRunUuid) {
-            return TestMetadata.metadataByTestRunUuid[testRunUuid] || {}
+            const scopedMetadata = TestMetadata.metadataByTestRunUuid[testRunUuid]
+            if (scopedMetadata) {
+                return scopedMetadata
+            }
+            if (Object.keys(TestMetadata.metadataByTestRunUuid).length > 0) {
+                return {}
+            }
         }
 
         return TestMetadata.fallbackMetadata || {}
