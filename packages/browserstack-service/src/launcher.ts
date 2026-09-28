@@ -75,6 +75,7 @@ type BrowserstackLocal = BrowserstackLocalLauncher.Local & {
 export default class BrowserstackLauncherService implements Services.ServiceInstance {
     browserstackLocal?: BrowserstackLocal
     private _buildName?: string
+    private _sendStartPromise?: Promise<void>
     private _projectName?: string
     private _buildTag?: string
     private _buildIdentifier?: string
@@ -274,8 +275,13 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         // edge-1 conflict, but browserStackConfig.app was copied earlier in the constructor.
         this.browserStackConfig.app = this._options.app
 
-        // Send Funnel start request
-        await sendStart(this.browserStackConfig)
+        // Send Funnel start request.
+        // SDK-7369: fired without await — this blocking telemetry POST held onPrepare
+        // ~1.8s (measured) for a response nothing reads. The promise is settled in
+        // onComplete so a fast exit cannot cut it mid-flight.
+        this._sendStartPromise = sendStart(this.browserStackConfig).catch((err: unknown) => {
+            BStackLogger.debug(`Funnel start event failed in background: ${format(err)}`)
+        })
 
         // Convert glob patterns in specs to resolved relative paths
         if (config.specs && Array.isArray(config.specs) && isValidEnabledValue(this._options.testOrchestrationOptions?.runSmartSelection?.enabled)) {
@@ -673,15 +679,24 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }
 
             BStackLogger.info(`BrowserStack service run ended for id: ${this.browserStackConfig?.sdkRunID} testhub id: ${TestOpsConfig.getInstance()?.buildHashedId}`)
-            await sendFinish(this.browserStackConfig, isCLIEnabled)
-            try {
-                PerformanceTester.start(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_SEND_LOGS)
-                await this._uploadServiceLogs()
-                PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_SEND_LOGS)
-            } catch (error) {
-                BStackLogger.debug(`Failed to upload BrowserStack WDIO Service logs ${error}`)
-                PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_SEND_LOGS, false, format(error))
+            // SDK-7369: the finish funnel, the (possibly still in-flight) start funnel and
+            // the service-log upload are independent — settle them together instead of
+            // paying each sequentially (~1.8s + upload time measured on the exit path).
+            const uploadLogs = async () => {
+                try {
+                    PerformanceTester.start(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_SEND_LOGS)
+                    await this._uploadServiceLogs()
+                    PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_SEND_LOGS)
+                } catch (error) {
+                    BStackLogger.debug(`Failed to upload BrowserStack WDIO Service logs ${error}`)
+                    PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_SEND_LOGS, false, format(error))
+                }
             }
+            await Promise.allSettled([
+                sendFinish(this.browserStackConfig, isCLIEnabled),
+                this._sendStartPromise,
+                uploadLogs()
+            ])
 
             PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_ON_STOP)
             PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_CLEANUP)
