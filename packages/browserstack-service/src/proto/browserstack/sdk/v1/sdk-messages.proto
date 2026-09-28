@@ -157,6 +157,24 @@ message StopBinSessionResponse {
     optional string error = 2;
     optional string automate_buildlink = 3;
     optional string hashed_id = 4;
+    // End-of-build customer-visible summary entries. Populated on EVERY response
+    // shape — success, error, and clean-build alike (empty when nothing to
+    // surface). Iterate by `severity` + `body`; do not branch on `entry_type`,
+    // so new entry types need no SDK change.
+    repeated CustomerVisibleSummaryEntry entries = 5;
+}
+
+// A single customer-visible summary entry surfaced at end of build via
+// StopBinSessionResponse.entries. The binary owns the prose so all SDKs render
+// consistent text; SDKs choose the output stream from `severity`.
+message CustomerVisibleSummaryEntry {
+    // Stable machine-readable identifier (e.g. "network_restrictions").
+    string entry_type = 1;
+    // One of: "info" | "warn" | "error".
+    string severity = 2;
+    // Pre-formatted block to display verbatim. May contain embedded newlines.
+    string body = 3;
+    optional string doc_link = 4;
 }
 
 message ConnectBinSessionRequest {

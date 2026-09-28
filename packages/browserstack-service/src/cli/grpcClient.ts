@@ -47,6 +47,14 @@ import { BStackLogger } from './cliLogger.js'
 
 const GRPC_MESSAGE_LIMIT = 20 * 1024 * 1024 // 20 MB in bytes
 
+// Explicit \x1b escapes so the ESC byte stays visible in source. Applied to the
+// terminal copy of a summary entry only; the archived copy stays plain.
+const SUMMARY_ANSI = {
+    reset: '\x1b[0m',
+    error: { base: '\x1b[31m', emphasis: '\x1b[1;31m' },
+    warn: { base: '\x1b[33m', emphasis: '\x1b[1;33m' }
+}
+
 /**
  * GrpcClient - Singleton class for managing gRPC client connections
  *
@@ -277,6 +285,7 @@ export class GrpcClient {
             try {
                 const response = await stopBinSessionPromise(request)
                 this.logger.info('StopBinSession successful')
+                this.renderCustomerVisibleSummary(response)
                 PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_CLI_ON_STOP)
                 return response
             } catch (error: unknown) {
@@ -288,6 +297,101 @@ export class GrpcClient {
         } catch (error) {
             PerformanceTester.end(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_CLI_ON_STOP, false, util.format(error))
             this.logger.error(`Error in stopBinSession: ${util.format(error)}`)
+        }
+    }
+
+    /**
+     * Render end-of-build customer-visible summary entries.
+     *
+     * Per the binary proto contract (CustomerVisibleSummaryEntry in
+     * sdk-messages.proto): iterate by `severity` + `body`, write `body` verbatim,
+     * and pick the stream from `severity`. Never branches on `entryType`, so new
+     * entry types need no SDK change.
+     * @private
+     */
+    private renderCustomerVisibleSummary(response: unknown) {
+        try {
+            const entries = (response as { entries?: Array<{ severity?: string, body?: string }> })?.entries
+            if (!entries?.length) {
+                return
+            }
+
+            for (const entry of entries) {
+                // Scoped per entry, not around the loop: a stream that rejects one
+                // entry must not drop the entries after it. The proto allows many
+                // entry types, so this widens as more are added.
+                try {
+                    const body = entry?.body || ''
+                    if (!body) {
+                        continue
+                    }
+
+                    const severity = (entry?.severity || 'info').toLowerCase()
+                    // warn/warning/error -> stderr, everything else (info AND unknown) ->
+                    // stdout, so a malformed severity cannot false-alarm CI tooling
+                    // watching stderr.
+                    const isErrorStream = severity === 'warn' || severity === 'warning' || severity === 'error'
+
+                    // Archived copy is written FIRST — terminal scrollback is lost on
+                    // CI runners that keep only the log directory, so the durable copy
+                    // must not depend on the stream write succeeding.
+                    //
+                    // logToFile, NOT the info/warn/error helpers: those also call
+                    // @wdio/logger, which writes to the console, so the customer
+                    // would see the block twice (once raw below, once prefixed).
+                    this.logger.logToFile(body, severity === 'error' ? 'error' : (isErrorStream ? 'warn' : 'info'))
+
+                    // Written directly rather than through the logger, whose per-line
+                    // prefix would break the binary's box-border alignment. Colour is
+                    // applied here only — the archived copy above stays plain.
+                    ;(isErrorStream ? process.stderr : process.stdout)
+                        .write(`${this.colouriseSummaryBody(body, severity)}\n`)
+                } catch (error: unknown) {
+                    this.logger.debug(`StopBinSession entry forwarding failed: ${util.format(error)}`)
+                }
+            }
+        } catch (error: unknown) {
+            this.logger.debug(`StopBinSession entries forwarding failed: ${util.format(error)}`)
+        }
+    }
+
+    /**
+     * Tint a summary block by severity — yellow for warn (an outdated SDK), red for
+     * error (a deprecated one), untouched otherwise.
+     *
+     * Each line is wrapped and reset on its own rather than the block as a whole, so
+     * a truncated or interleaved write cannot leave the customer's terminal stuck in
+     * colour. The first non-blank, non-border line is emphasised.
+     * @private
+     */
+    private colouriseSummaryBody(body: string, severity: string): string {
+        try {
+            const palette = severity === 'error'
+                ? SUMMARY_ANSI.error
+                : ((severity === 'warn' || severity === 'warning') ? SUMMARY_ANSI.warn : null)
+            if (!palette) {
+                return body
+            }
+
+            let emphasised = false
+            return body.split('\n').map((line) => {
+                const trimmed = line.trim()
+                if (!trimmed) {
+                    return line
+                }
+                // A border is any line carrying no letters or digits, rather than a
+                // check for the binary's current U+2500 divider — so a change to the
+                // glyph cannot silently start emphasising the wrong line.
+                const isBorder = !/[A-Za-z0-9]/.test(trimmed)
+                if (!isBorder && !emphasised) {
+                    emphasised = true
+                    return `${palette.emphasis}${line}${SUMMARY_ANSI.reset}`
+                }
+                return `${palette.base}${line}${SUMMARY_ANSI.reset}`
+            }).join('\n')
+        } catch {
+            // Colour is cosmetic — never let it cost the customer the message.
+            return body
         }
     }
 
@@ -496,6 +600,11 @@ export class GrpcClient {
                     message: log.message,
                     timestamp: log.timestamp,
                     level: log.level,
+                    // Attachment entries carry no message — the binary streams the file
+                    // from filePath when it drains its upload queue.
+                    fileName: log.fileName,
+                    fileSize: log.fileSize,
+                    filePath: log.filePath,
                 })
                 logEntries.push(logEntry)
             }
