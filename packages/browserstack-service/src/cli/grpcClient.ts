@@ -55,6 +55,27 @@ const SUMMARY_ANSI = {
     warn: { base: '\x1b[33m', emphasis: '\x1b[1;33m' }
 }
 
+const TEST_PLAN_ID_ARG = '--browserstack.testManagementOptions.testPlanId'
+
+// The binary parses CLI args as `--key=value` only, so the space form reaches it as `true` and
+// overrides the id getBinConfig already resolved; the id travels in the bin config instead.
+export function stripTestPlanIdArg(args: string[]): string[] {
+    const result: string[] = []
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === TEST_PLAN_ID_ARG) {
+            if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+                i++
+            }
+            continue
+        }
+        if (args[i].startsWith(`${TEST_PLAN_ID_ARG}=`)) {
+            continue
+        }
+        result.push(args[i])
+    }
+    return result
+}
+
 /**
  * GrpcClient - Singleton class for managing gRPC client connections
  *
@@ -180,7 +201,7 @@ export class GrpcClient {
                 sdkVersion: packageVersion,
                 pathProject: process.cwd(),
                 pathConfig: path.resolve(process.cwd(), 'browserstack.yml'),
-                cliArgs: process.argv.slice(2),
+                cliArgs: stripTestPlanIdArg(process.argv.slice(2)),
                 frameworks: [automationFrameworkDetail.name, testFrameworkDetail.name],
                 frameworkVersions,
                 language: CLIUtils.getSdkLanguage(),
