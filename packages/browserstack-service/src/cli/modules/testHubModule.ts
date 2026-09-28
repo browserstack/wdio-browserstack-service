@@ -56,7 +56,13 @@ export default class TestHubModule extends BaseModule {
         return (TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) as string | undefined) || instance.getRef()
     }
 
-    onBeforeTest(args: Record<string, unknown>) {
+    /**
+     * Awaited, not fire-and-forget: sendTestSessionEvent re-throws after logging, and an
+     * un-awaited rejection escapes as an unhandled rejection that no caller can contain — on
+     * cucumber it surfaces inside the user's own Before hook via WDIO's hook domain and fails the
+     * scenario. Awaiting hands the rejection to eventDispatcher's per-observer boundary.
+     */
+    async onBeforeTest(args: Record<string, unknown>) {
         this.logger.debug('onBeforeTest: Called after test hook from cli configured module!!!')
         const instance = args.instance as TestFrameworkInstance
         try {
@@ -69,7 +75,7 @@ export default class TestHubModule extends BaseModule {
         const autoInstace = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
         const instances = [autoInstace]
         args.autoInstance = instances
-        this.sendTestSessionEvent(args)
+        await this.sendTestSessionEvent(args)
     }
 
     onAllTestEvents(args: Record<string, unknown>) {
@@ -264,11 +270,16 @@ export default class TestHubModule extends BaseModule {
                 executionContext
             }
             for (const logEntry of logEntries) {
+                // The uuid below may be a HOOK's, but the state is read at flush time and is
+                // always LOG — and the binary picks hook_run_uuid vs test_run_uuid off exactly
+                // this field (`^(BEFORE_|AFTER_)`), so a hook log would arrive labelled as a
+                // test's. A framework that knows the hook state stamps it on the record.
+                const entryHookState = logEntry[TestFrameworkConstants.KEY_HOOK_STATE] as string | undefined
                 // eslint-disable-next-line camelcase
                 const logData: LogCreatedEventRequest_LogEntry = {
                     testFrameworkName,
                     testFrameworkVersion,
-                    testFrameworkState,
+                    testFrameworkState: entryHookState || testFrameworkState,
                     uuid: logEntry[TestFrameworkConstants.KEY_HOOK_ID] || TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID),
                     kind: logEntry.kind as string,
                     message: logEntry.message as Uint8Array,

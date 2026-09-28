@@ -98,6 +98,12 @@ describe('NOT_ALLOWED_KEYS_IN_CAPS cloud-leak strip', () => {
     it('includes skipAppOverride so it is never forwarded to bstack:options', () => {
         expect(NOT_ALLOWED_KEYS_IN_CAPS).toContain('skipAppOverride')
     })
+
+    it('includes the SDK-only options the binary round-trips into caps on the CLI flow', () => {
+        expect(NOT_ALLOWED_KEYS_IN_CAPS).toContain('preferScenarioName')
+        expect(NOT_ALLOWED_KEYS_IN_CAPS).toContain('sessionNamePrependTopLevelSuiteTitle')
+        expect(NOT_ALLOWED_KEYS_IN_CAPS).toContain('sessionNameOmitTestTitle')
+    })
 })
 
 describe('BrowserStackConfig appAutomate honors skipAppOverride', () => {

@@ -46,6 +46,8 @@ import type AutomationFrameworkInstance from './cli/instances/automationFramewor
 import util from 'node:util'
 import APIUtils from './cli/apiUtils.js'
 import { CLIUtils } from './cli/cliUtils.js'
+import WdioCucumberTestFramework from './cli/frameworks/wdioCucumberTestFramework.js'
+import type TestHubModule from './cli/modules/testHubModule.js'
 
 export default class BrowserstackService implements Services.ServiceInstance {
     private _sessionBaseUrl = `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate/sessions`
@@ -243,6 +245,19 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     BStackLogger.error(`[Accessibility Test Run] Error in service class before function: ${err}`)
                 }
 
+                /**
+                 * The driver, its session id and its capabilities reach the AutomationFramework
+                 * instance ONLY through this state, and every cli/module resolves them from there.
+                 * It used to be raised inside the `shouldProcessEventForTesthub` block, so an
+                 * Automate-only run (every TestHub product off) registered no driver at all:
+                 * automateModule's sessionMap stayed empty and the session was left unmarked,
+                 * where legacy marked it. Session tracking does not depend on TestHub, so the
+                 * raise is gated on the CLI being up and nothing else.
+                 */
+                if (BrowserstackCLI.getInstance().isRunning()) {
+                    await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { browser: this._browser, hubUrl: this._config.hostname })
+                }
+
                 if (shouldProcessEventForTesthub('')) {
                     patchConsoleLogs()
 
@@ -253,7 +268,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         this._options
                     )
                     if (BrowserstackCLI.getInstance().isRunning()) {
-                        await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { browser: this._browser, hubUrl: this._config.hostname })
                         this._insightsHandler.setGitConfigPath()
                         /**
                          * SDK-6277: register the command/result listeners in the CLI/binary flow too,
@@ -385,7 +399,16 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // HookRunStarted/HookRunFinished never reach the dashboard.
         if (BrowserstackCLI.getInstance().isRunning()) {
             const framework = BrowserstackCLI.getInstance().getTestFramework()
-            if (framework) {
+            if (framework instanceof WdioCucumberTestFramework) {
+                // A cucumber hook invocation carries no title and BeforeAll/AfterAll pass no hook
+                // object at all, so getHookType — Mocha quoted-title matching — throws on the
+                // property access here. The framework classifies from its own bookkeeping and
+                // returns null for the step-scoped hooks that are deliberately never reported.
+                const hookFrameworkState = framework.classifyHookState(test as CucumberHook|undefined)
+                if (hookFrameworkState) {
+                    await framework.trackEvent(hookFrameworkState, HookState.PRE, { test })
+                }
+            } else if (framework) {
                 const hookFrameworkState = TestFrameworkState[getHookType((test as Frameworks.Test).title) as keyof typeof TestFrameworkState]
                 if (hookFrameworkState) {
                     await framework.trackEvent(hookFrameworkState, HookState.PRE, { test })
@@ -413,6 +436,30 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // CLI flow: mirror beforeHook — close the hook via the TestFramework tracker (gRPC).
         if (BrowserstackCLI.getInstance().isRunning()) {
             const framework = BrowserstackCLI.getInstance().getTestFramework()
+            if (framework instanceof WdioCucumberTestFramework) {
+                // Cucumber's taxonomy, not Mocha's titles — see beforeHook.
+                const hookFrameworkState = framework.classifyHookState(test as CucumberHook|undefined)
+                if (hookFrameworkState) {
+                    // ignoreHooksStatus travels with the event because automateModule's build-level
+                    // hook observer is the only surviving authority on a hook-only session verdict
+                    // — after()'s own three-way logic is gated off while the binary is up.
+                    await framework.trackEvent(hookFrameworkState, HookState.POST, {
+                        test,
+                        result,
+                        ignoreHooksStatus: this._options.testObservabilityOptions?.ignoreHooksStatus === true,
+                    })
+                }
+                // The cascade fires on BEFORE_ALL only — never BEFORE_EACH or AFTER_EACH — and
+                // not at all when the finish had no recorded start: legacy throws at that point
+                // and loses the cascade along with the hook event. reportSuiteSkipped() is not
+                // reachable from here; it walks a Mocha suite tree and drives a four-event
+                // sequence whose INIT_TEST and LOG_REPORT states cucumber never emits.
+                if (hookFrameworkState === TestFrameworkState.BEFORE_ALL && result && !result.passed
+                    && framework.shouldCascadeSkippedScenarios()) {
+                    await this._reportCucumberScenariosSkipped(framework)
+                }
+                return
+            }
             if (framework) {
                 const hookFrameworkState = TestFrameworkState[getHookType((test as Frameworks.Test).title) as keyof typeof TestFrameworkState]
                 if (hookFrameworkState) {
@@ -499,6 +546,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
             const { preferScenarioName, setSessionName, setSessionStatus } = this._options
             // For Cucumber: Checks scenarios that ran (i.e. not skipped) on the session
             // Only 1 Scenario ran and option enabled => Redefine session name to Scenario's name
+            // CLI flow: automateModule owns this rename — it counts non-skipped scenarios itself
+            // and applies it at EXECUTE/POST, where "exactly one" first becomes knowable. This
+            // branch is the legacy path only.
             if (preferScenarioName && this._scenariosThatRan.length === 1){
                 this._fullTitle = this._scenariosThatRan.pop()
             }
@@ -619,12 +669,121 @@ export default class BrowserstackService implements Services.ServiceInstance {
      * For CucumberJS
      */
 
+    private _cliCucumberFramework(): WdioCucumberTestFramework|null {
+        if (!BrowserstackCLI.getInstance().isRunning()) {
+            return null
+        }
+        const framework = BrowserstackCLI.getInstance().getTestFramework()
+        return framework instanceof WdioCucumberTestFramework ? framework : null
+    }
+
+    /**
+     * A `Frameworks.Test`-shaped view of a scenario, for the cli/modules that read `args.test`.
+     * automateModule.onBeforeTest is the first observer on TEST/PRE and dereferences `test.title`
+     * unguarded, so an absent view takes down every later observer for that key — including the
+     * one that emits the scenario event.
+     *
+     * `title` is left undefined and `fullName` populated deliberately. Legacy calls
+     * `_setSessionName(feature.name)` with NO test argument, so `sessionNameFormat` receives
+     * `undefined` as its fourth argument and the mocha arm (`test && !test.fullName`, which
+     * activates sessionNamePrependTopLevelSuiteTitle / sessionNameOmitTestTitle) is never taken.
+     * Both properties reproduce that.
+     */
+    private _cucumberTestView(world: ITestCaseHookParameter): Frameworks.Test {
+        return {
+            title: undefined,
+            fullName: world.pickle?.name || this._suiteTitle || 'unknown scenario',
+            parent: this._suiteTitle ?? '',
+            file: world.gherkinDocument?.uri,
+        } as unknown as Frameworks.Test
+    }
+
+    /**
+     * A `Frameworks.TestResult`-shaped view of a scenario result, for automateModule's session
+     * marking — which on the CLI flow is the only session-status authority, since `after()`'s
+     * accumulation is gated off while the binary is up.
+     *
+     * Which statuses fail the SESSION is `_failureStatuses`, not the passed/failed collapse the
+     * o11y result applies: UNDEFINED / AMBIGUOUS / UNKNOWN fail the session while reporting to
+     * Observability as `skipped`, and PENDING joins them only under `cucumberOpts.strict`.
+     */
+    private _cucumberTestResult(world: ITestCaseHookParameter): Frameworks.TestResult {
+        const status = world.result?.status?.toLowerCase()
+        const ignoreHooksStatus = this._options.testObservabilityOptions?.ignoreHooksStatus === true
+        const hasStepFailures = this._insightsHandler ? this._insightsHandler.hasTestStepFailures(world) : true
+        const hookOnlyFailure = ignoreHooksStatus && status === 'failed' && !hasStepFailures
+
+        const passed = status === 'passed' || hookOnlyFailure
+        const failed = !passed && status !== undefined && this._failureStatuses.includes(status)
+
+        // A status that fails only via `_failureStatuses` carries no `world.result.message`, so
+        // the reason is synthesised exactly as afterScenario() does for `_failReasons`.
+        let error: Error | undefined
+        if (failed) {
+            error = new Error(world.result?.message || (status === 'pending'
+                ? `Some steps/hooks are pending for scenario "${world.pickle.name}"`
+                : 'Unknown Error'))
+        } else if (world.result?.message) {
+            error = new Error(world.result.message)
+        }
+
+        return {
+            passed,
+            skipped: !passed && !failed,
+            error,
+            duration: 0,
+            retries: { attempts: 0, limit: 0 },
+        } as unknown as Frameworks.TestResult
+    }
+
+    /**
+     * Cucumber abandons the whole feature when a `BeforeAll` fails, so every scenario it never
+     * reached (Rule-nested included) is reported skipped rather than vanishing.
+     *
+     * Sent straight to TestHub rather than through `trackEvent()`: legacy called
+     * `listener.testFinished()` directly, so driving the observers per row would rename the
+     * Automate session, stop the accessibility scan and run a Percy teardown for each one. Both
+     * halves are sent because TestHub's v2 pipeline creates the row from the START event.
+     */
+    private async _reportCucumberScenariosSkipped(framework: WdioCucumberTestFramework) {
+        try {
+            const testHubModule = BrowserstackCLI.getInstance().modules.TestHubModule as TestHubModule | undefined
+            if (!testHubModule) {
+                BStackLogger.debug('BEFORE_ALL cascade: TestHub module not loaded; skipped scenarios will not be reported')
+                return
+            }
+
+            const instances = framework.buildSkippedScenarioInstances()
+            for (const instance of instances) {
+                instance.setCurrentTestState(TestFrameworkState.TEST)
+                instance.setCurrentHookState(HookState.PRE)
+                await testHubModule.sendTestFrameworkEvent({ instance })
+                instance.setCurrentHookState(HookState.POST)
+                await testHubModule.sendTestFrameworkEvent({ instance })
+            }
+            BStackLogger.debug(`BEFORE_ALL cascade: reported ${instances.length} scenario(s) as skipped`)
+        } catch (error) {
+            BStackLogger.debug(`Exception reporting the BEFORE_ALL skip cascade: ${util.format(error)}`)
+        }
+    }
+
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeFeature' })
     async beforeFeature(uri: string, feature: Feature) {
         this._suiteTitle = feature.name
+        // Ordered ahead of the two awaits deliberately: onFeatureStart is local bookkeeping that
+        // raises no wire event, but _setSessionName issues a session-update REST call. Sequenced
+        // behind it, any rejection (a turboscale 401, or any 4xx/5xx) aborts the rest of the hook
+        // and Observability silently loses the feature path for that feature.
+        this._cliCucumberFramework()?.onFeatureStart(uri, feature)
         await this._setSessionName(feature.name)
         await this._setAnnotation(`Feature: ${feature.name}`)
-        await this._insightsHandler?.beforeFeature(uri, feature)
+        // The legacy InsightsHandler -> Listener -> api/v1/batch transport is gated only on
+        // TESTOPS_BUILD_COMPLETED and BROWSERSTACK_TESTHUB_JWT, both of which the CLI flow itself
+        // sets. Left unguarded it keeps POSTing scenario events under the binary-issued JWT on top
+        // of whatever the tracker emits, reporting every scenario twice under two different uuids.
+        if (!BrowserstackCLI.getInstance().isRunning()) {
+            await this._insightsHandler?.beforeFeature(uri, feature)
+        }
     }
 
     /**
@@ -634,9 +793,41 @@ export default class BrowserstackService implements Services.ServiceInstance {
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeScenario' })
     async beforeScenario (world: ITestCaseHookParameter) {
         this._currentTest = world
+        const scenarioName = world.pickle.name || 'unknown scenario'
+
+        // The scenario IS the unit of work, so it raises TEST/PRE — the state every cli/modules
+        // observer subscribes to. WDIO never calls beforeTest for cucumber, so there is no other
+        // moment at which the modules could be driven.
+        const cliFramework = this._cliCucumberFramework()
+        if (cliFramework) {
+            // accessibilityModule now owns the per-scenario scan on this flow (it observes the
+            // TEST/PRE raised just below). Leaving the legacy handler live too would run
+            // sendTestStopEvent twice per scenario against the same TEST_ANALYTICS_ID, and the
+            // handler is half-initialised here anyway — service.before() skips its before(), so
+            // its _sessionId is unset and its browser patching never happened.
+            await cliFramework.trackEvent(TestFrameworkState.TEST, HookState.PRE, {
+                world,
+                test: this._cucumberTestView(world),
+                suiteTitle: this._suiteTitle,
+            })
+            // Read AFTER the event: loadScenarioData mints this scenario's uuid on TEST/PRE, so
+            // reading earlier would seed the previous scenario's. Mirrors what beforeTest does for
+            // mocha off INIT_TEST, and is what lets browserCommand forward a screenshot (SDK-4177).
+            // getState dereferences the instance, so an absent tracked instance would throw out of
+            // the customer's hook rather than just losing the screenshot attribution.
+            const trackedInstance = TestFramework.getTrackedInstance()
+            const scenarioUuid = trackedInstance
+                ? TestFramework.getState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID)
+                : undefined
+            if (scenarioUuid) {
+                this._insightsHandler?.setTestData(world, scenarioUuid as string)
+            }
+            await this._setAnnotation(`Scenario: ${scenarioName}`)
+            return
+        }
+
         await this._accessibilityHandler?.beforeScenario(world)
         await this._insightsHandler?.beforeScenario(world)
-        const scenarioName = world.pickle.name || 'unknown scenario'
         await this._setAnnotation(`Scenario: ${scenarioName}`)
     }
 
@@ -675,22 +866,48 @@ export default class BrowserstackService implements Services.ServiceInstance {
             }
         }
 
+        const cliFramework = this._cliCucumberFramework()
+        if (cliFramework) {
+            // hasStepFailures is read from the same step store this method's own
+            // ignoreHooksStatus branch consults, so the o11y result and the session status cannot
+            // disagree. percyModule.onAfterTest and accessibilityModule.onAfterTest observe the
+            // TEST/POST raised here, which is why the legacy handlers are not also called.
+            await cliFramework.trackEvent(TestFrameworkState.TEST, HookState.POST, {
+                world,
+                test: this._cucumberTestView(world),
+                suiteTitle: this._suiteTitle,
+                result: this._cucumberTestResult(world),
+                ignoreHooksStatus: this._options.testObservabilityOptions?.ignoreHooksStatus === true,
+                hasStepFailures: this._insightsHandler ? this._insightsHandler.hasTestStepFailures(world) : true,
+                preferScenarioName: this._options.preferScenarioName === true,
+            })
+            return
+        }
+
+        // cliFramework being null subsumes the old !isRunning() guard on the Percy call: the CLI
+        // branch returns above, so percyModule.onAfterTest and this teardown never both run. The
+        // guard also skipped Percy when the binary ran but resolved a non-cucumber framework, which
+        // raises no TEST/POST either — so the teardown was lost rather than duplicated.
         await this._accessibilityHandler?.afterScenario(world)
         await this._insightsHandler?.afterScenario(world)
-        if (!BrowserstackCLI.getInstance().isRunning()) {
-            await this._percyHandler?.afterScenario()
-        }
+        await this._percyHandler?.afterScenario()
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeStep' })
     async beforeStep (step: Frameworks.PickleStep, scenario: Pickle) {
+        // NOT CLI-guarded, unlike the scenario hooks: beforeStep/afterStep emit nothing, they only
+        // build the step list that afterScenario reads back via hasTestStepFailures() to separate
+        // step failures from hook failures. That read is not CLI-gated and feeds the process exit
+        // code, so guarding these would make every step failure invisible under ignoreHooksStatus.
         await this._insightsHandler?.beforeStep(step, scenario)
+        this._cliCucumberFramework()?.onStepStart(step)
         await this._setAnnotation(`Step: ${step.keyword}${step.text}`)
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'afterStep' })
     async afterStep (step: Frameworks.PickleStep, scenario: Pickle, result: Frameworks.PickleResult) {
         await this._insightsHandler?.afterStep(step, scenario, result)
+        this._cliCucumberFramework()?.onStepEnd(step, result)
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'onReload' })
