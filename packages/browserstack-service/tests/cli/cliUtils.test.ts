@@ -226,6 +226,56 @@ describe('CLIUtils', () => {
                 testPlanId: 'tm-plan-456'
             })
         })
+
+        describe('test plan id from env and CLI args', () => {
+            const CLI_ARG = '--browserstack.testManagementOptions.testPlanId'
+            const capabilities = [{ browserName: 'chrome' }]
+            let originalArgv: string[]
+
+            beforeEach(() => {
+                originalArgv = process.argv
+                delete process.env.BROWSERSTACK_TEST_PLAN_ID
+            })
+
+            afterEach(() => {
+                process.argv = originalArgv
+                delete process.env.BROWSERSTACK_TEST_PLAN_ID
+            })
+
+            const planOf = (options = createBrowserstackOptions()) =>
+                JSON.parse(CLIUtils.getBinConfig(mockConfig, capabilities, options)).testManagementOptions
+
+            it('reads BROWSERSTACK_TEST_PLAN_ID', () => {
+                process.env.BROWSERSTACK_TEST_PLAN_ID = 'env-plan-1'
+                expect(planOf()).toEqual({ testPlanId: 'env-plan-1' })
+            })
+
+            it('reads the CLI arg followed by its value', () => {
+                process.argv = ['node', 'wdio', 'run', 'wdio.conf.js', CLI_ARG, 'TP-123']
+                expect(planOf()).toEqual({ testPlanId: 'TP-123' })
+            })
+
+            it('reads the CLI arg in --key=value form', () => {
+                process.argv = ['node', 'wdio', 'run', 'wdio.conf.js', `${CLI_ARG}=12345`]
+                expect(planOf()).toEqual({ testPlanId: '12345' })
+            })
+
+            it('prefers the CLI arg over the service option', () => {
+                process.argv = ['node', 'wdio', 'run', 'wdio.conf.js', CLI_ARG, 'cli-plan']
+                expect(planOf(createBrowserstackOptions({ testManagementOptions: { testPlanId: 'option-plan' } })))
+                    .toEqual({ testPlanId: 'cli-plan' })
+            })
+
+            it('omits testManagementOptions when no source sets an id', () => {
+                process.argv = ['node', 'wdio', 'run', 'wdio.conf.js']
+                expect(planOf()).toBeUndefined()
+            })
+
+            it('omits testManagementOptions when the env id is blank', () => {
+                process.env.BROWSERSTACK_TEST_PLAN_ID = '   '
+                expect(planOf()).toBeUndefined()
+            })
+        })
     })
 
     describe('getSdkVersion', () => {
