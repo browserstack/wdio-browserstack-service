@@ -33,6 +33,7 @@ import AutomationFramework from '../../../src/cli/frameworks/automationFramework
 import WdioMochaTestFramework from '../../../src/cli/frameworks/wdioMochaTestFramework.js'
 import { TestFrameworkConstants } from '../../../src/cli/frameworks/constants/testFrameworkConstants.js'
 import { UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS } from '../../../src/constants.js'
+import { BStackLogger } from '../../../src/cli/cliLogger.js'
 
 const TEST_UUID = 'test-uuid-1'
 const HOOK_UUID = 'hook-uuid-1'
@@ -156,6 +157,17 @@ describe('UploadAttachmentModule', () => {
         expect(logCreatedEvent).not.toHaveBeenCalled()
     })
 
+    it('ignores a path that exists but is not a regular file', async () => {
+        vi.spyOn(fs, 'statSync').mockReturnValue({
+            isFile: () => false,
+            size: 0
+        } as never)
+
+        await register()
+        await (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+        expect(logCreatedEvent).not.toHaveBeenCalled()
+    })
+
     it('ignores a file above the 100 MB limit', async () => {
         vi.spyOn(fs, 'statSync').mockReturnValue({
             isFile: () => true,
@@ -178,8 +190,9 @@ describe('UploadAttachmentModule', () => {
         ).resolves.toBeUndefined()
         expect(logCreatedEvent).toHaveBeenCalledTimes(1)
 
-        // Drain the ack budget so the pending timer does not leak into the next test.
+        const warn = vi.spyOn(BStackLogger, 'warn')
         await vi.advanceTimersByTimeAsync(UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`did not ack within ${UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS}ms`))
     })
 
     it('does not throw when the ack rejects', async () => {

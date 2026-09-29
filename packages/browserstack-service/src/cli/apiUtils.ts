@@ -1,3 +1,5 @@
+import { BStackLogger } from './cliLogger.js'
+
 export default class APIUtils {
     static FUNNEL_INSTRUMENTATION_URL = 'https://api.browserstack.com/sdk/v1/event'
     static BROWSERSTACK_AUTOMATE_API_URL = 'https://api.browserstack.com'
@@ -18,7 +20,18 @@ export default class APIUtils {
      */
     static updateURLSForGRR(apis?: GRRUrls) {
         if (!apis) {
+            BStackLogger.debug('updateURLSForGRR: no apis in the bin-session config; keeping default endpoints')
             return
+        }
+        const missing = [
+            ['automate.api', apis.automate?.api], ['automate.upload', apis.automate?.upload],
+            ['appAutomate.api', apis.appAutomate?.api], ['appAutomate.upload', apis.appAutomate?.upload],
+            ['percy.api', apis.percy?.api], ['appAccessibility.api', apis.appAccessibility?.api],
+            ['observability.api', apis.observability?.api], ['observability.upload', apis.observability?.upload],
+            ['edsInstrumentation.api', apis.edsInstrumentation?.api]
+        ].filter(([, value]) => !value).map(([name]) => name)
+        if (missing.length) {
+            BStackLogger.debug(`updateURLSForGRR: keeping default endpoints for ${missing.join(', ')}`)
         }
         if (apis.automate?.api) {
             this.FUNNEL_INSTRUMENTATION_URL = `${apis.automate.api}/sdk/v1/event`
