@@ -1161,9 +1161,8 @@ describe('_handleBuildIdentifier', () => {
         delete process.env.BROWSERSTACK_BUILD_NAME
         delete process.env.BROWSERSTACK_BUILD_IDENTIFIER
         delete process.env.BROWSERSTACK_BUILD_RUN_IDENTIFIER
-        // BUILD_NUMBER is not a BrowserStack variable, but the ${BUILD_NUMBER} token is
-        // resolved from it. Leaving it set would make the "stays literal" assertions depend
-        // on the ambient environment rather than on the code.
+        // ${BUILD_NUMBER} resolves from it, so leaving it set makes the
+        // "stays literal" assertions depend on the ambient environment.
         delete process.env.BUILD_NUMBER
     })
 
@@ -1374,17 +1373,14 @@ describe('_handleBuildIdentifier', () => {
 
         service._handleBuildIdentifier(caps)
         expect(caps[0]['bstack:options']?.buildIdentifier).toBeUndefined()
-        // Also assert the in-memory field: launchTestSession forwards it as the build-start
-        // payload's build_identifier, so a stale value here would report an identifier that
-        // was never applied to any capability.
+        // launchTestSession forwards this field as build_identifier, so a stale
+        // value would report an identifier never applied to any capability.
         expect((service as any)._buildIdentifier).toBeUndefined()
     })
 
     it('should leave ${BUILD_NUMBER} literal rather than reading a raw BUILD_NUMBER env var', async() => {
-        // getCiInfo() recognises a fixed vendor list; on CI it does not know (GitHub Actions,
-        // TeamCity) a bare BUILD_NUMBER may still be exported. The generic ${ENV_VAR} sweep must
-        // not pick that up, or the identifier renders without the 'CI ' prefix every other
-        // resolution path applies.
+        // getCiInfo() knows a fixed vendor list; GitHub Actions / TeamCity still export a bare
+        // BUILD_NUMBER. The sweep must not pick it up, or the 'CI ' prefix is lost.
         process.env.BUILD_NUMBER = '394'
         vi.spyOn(utils, 'getCiInfo').mockReturnValue(null as any)
         const caps: any = [{
@@ -1401,8 +1397,7 @@ describe('_handleBuildIdentifier', () => {
     })
 
     it('should leave a placeholder literal when its env var is set but empty', async() => {
-        // `?? match` would only guard nullish, so an exported-but-empty variable would blank
-        // that part of the identifier instead of leaving the placeholder visible.
+        // `?? match` guards only nullish, so an exported-but-empty var would blank the identifier.
         process.env.CUSTOM_DATE = '   '
         const caps: any = [{
             'bstack:options': {

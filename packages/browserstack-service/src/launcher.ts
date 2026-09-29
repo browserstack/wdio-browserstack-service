@@ -72,8 +72,7 @@ type BrowserstackLocal = BrowserstackLocalLauncher.Local & {
     stop(callback: (err?: Error) => void): void
 }
 
-// Tokens with dedicated resolution inside _handleBuildIdentifier; the generic ${ENV_VAR}
-// sweep must not reprocess them.
+// Resolved by dedicated logic in _handleBuildIdentifier; the generic ${ENV_VAR} sweep skips them.
 const RESERVED_BUILD_IDENTIFIER_TOKENS = new Set(['DATE_TIME', 'BUILD_NUMBER'])
 
 export default class BrowserstackLauncherService implements Services.ServiceInstance {
@@ -1067,15 +1066,9 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
     _handleBuildIdentifier(capabilities?: Capabilities.RemoteCapabilities) {
         /**
-         * buildIdentifier resolution precedence, per the SDK-wide contract
-         * (CLI args > env vars > config file > script):
-         *   1. BROWSERSTACK_BUILD_IDENTIFIER      - explicit env override
-         *   2. BROWSERSTACK_BUILD_RUN_IDENTIFIER  - per-run signal, typically injected by CI
-         *   3. service options in wdio.conf.js / bstack:options in the capabilities, both of
-         *      which onPrepare has already folded into this._buildIdentifier
-         * wdio exposes no CLI arg for buildIdentifier, so tier 1 of the contract is absent here.
-         * Mirrors browserstack-node-agent computeBuildIdentifier(), browserstack-python-sdk
-         * ENV_CAPS_TO_CONFIG['buildIdentifier'] and browserstack-csharp-sdk GetBuildIdentifier().
+         * Precedence per the SDK-wide contract (env > config file): BROWSERSTACK_BUILD_IDENTIFIER,
+         * then BROWSERSTACK_BUILD_RUN_IDENTIFIER, then the service options / caps value already
+         * folded into this._buildIdentifier. wdio has no CLI arg, so that tier is absent here.
          */
         const envBuildIdentifier = [
             process.env.BROWSERSTACK_BUILD_IDENTIFIER,
@@ -1090,22 +1083,14 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         }
 
         /**
-         * A buildIdentifier is only meaningful next to a buildName - the dashboard appends it
-         * to that name. BROWSERSTACK_BUILD_NAME used to force this branch as well, which
-         * silently discarded every explicitly configured buildIdentifier whenever that env var
-         * happened to be exported (SDK-4748). This service never reads BROWSERSTACK_BUILD_NAME
-         * as a buildName source, and unlike the yml-driven SDKs it has no default identifier to
-         * suppress, so the env var no longer takes part in this decision.
+         * The dashboard appends the identifier to the buildName, so it needs one. SDK-4748:
+         * BROWSERSTACK_BUILD_NAME used to force this branch too, discarding any configured
+         * identifier; this service never reads that var as a buildName source, so it no longer does.
          */
         if (!this._buildName) {
             this._updateCaps(capabilities, 'buildIdentifier')
-            /**
-             * Clear the in-memory field as well as the capability. launchTestSession reads
-             * this._buildIdentifier for the build-start payload's build_identifier, so leaving a
-             * resolved value here would report an identifier that was never applied anywhere
-             * visible. With the env tier above this is reachable with no user configuration at
-             * all, since CI commonly injects BROWSERSTACK_BUILD_RUN_IDENTIFIER globally.
-             */
+            // Clear the field too, not just the cap: launchTestSession sends it as the
+            // build-start build_identifier, which would otherwise report a value never applied.
             this._buildIdentifier = undefined
             this.browserStackConfig.buildIdentifier = undefined
             BStackLogger.warn('Skipping buildIdentifier as buildName is not passed.')
@@ -1137,17 +1122,9 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         }
 
         /**
-         * Resolve any remaining ${ENV_VAR} placeholder against process.env, so an identifier
-         * such as '${CUSTOM_DATE}' behaves the same whatever source it arrived from.
-         *
-         * DATE_TIME and BUILD_NUMBER are excluded: both are resolved above by dedicated logic,
-         * and BUILD_NUMBER is deliberately left literal when neither getCiInfo() nor
-         * _getLocalBuildNumber() can supply one. Without the exclusion this sweep would pick up
-         * a raw process.env.BUILD_NUMBER on CI vendors getCiInfo() does not recognise, yielding a
-         * value without the 'CI ' prefix every other resolution path applies.
-         *
-         * A variable that is unset, empty or whitespace-only leaves its literal placeholder
-         * rather than blanking that part of the identifier, so nothing is silently lost.
+         * Resolve remaining ${ENV_VAR} placeholders (e.g. ${CUSTOM_DATE}) against process.env.
+         * Reserved tokens are skipped - BUILD_NUMBER is deliberately left literal when unresolvable,
+         * and picking up a raw one here would drop the 'CI ' prefix. Unset/blank stays literal.
          */
         this._buildIdentifier = this._buildIdentifier.replace(
             /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
