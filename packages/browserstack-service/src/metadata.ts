@@ -14,6 +14,7 @@ class TestMetadata {
 
     static set(metadata: Metadata = {}) {
         if (!getCentralUser().app_lcnc) {
+            BStackLogger.warn(`setTestMetadata: ignored, BROWSERSTACK_CENTRAL_USER=${process.env.BROWSERSTACK_CENTRAL_USER}`)
             return
         }
 
@@ -31,6 +32,7 @@ class TestMetadata {
         if (TestMetadata.currentTestRunUuid) {
             TestMetadata.metadataByTestRunUuid[TestMetadata.currentTestRunUuid] = metadata
         }
+        BStackLogger.debug(`setTestMetadata: identifier=${testRunIdentifier} storedUnderUuid=${TestMetadata.currentTestRunUuid} store=[${Object.keys(TestMetadata.metadataByTestRunUuid)}]`)
     }
 
     static get(testRunUuid?: string): Metadata {
@@ -39,7 +41,9 @@ class TestMetadata {
         }
 
         if (testRunUuid) {
-            return TestMetadata.metadataByTestRunUuid[testRunUuid] || {}
+            const metadata = TestMetadata.metadataByTestRunUuid[testRunUuid] || TestMetadata.fallbackMetadata || {}
+            BStackLogger.debug(`TestMetadata.get: uuid=${testRunUuid} identifier=${metadata.identifier} store=[${Object.keys(TestMetadata.metadataByTestRunUuid)}]`)
+            return metadata
         }
 
         return TestMetadata.fallbackMetadata || {}
