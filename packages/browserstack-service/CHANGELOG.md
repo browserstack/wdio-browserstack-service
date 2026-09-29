@@ -1,5 +1,17 @@
 # @wdio/browserstack-service
 
+## 8.53.0
+
+### Minor Changes
+
+- 7e631ec: - Cucumber tests on WebdriverIO now report through the BrowserStack CLI, matching the behaviour of Mocha.
+  - Fixed `sessionNameFormat` being ignored, so custom session names now apply on the CLI flow.
+  - Fixed Observability losing a feature's file path when a session-name update failed.
+
+### Patch Changes
+
+- 6736a40: - Fixed Percy visual testing on WebdriverIO: screenshots (Percy on Automate) and web snapshots are captured again. No config or code changes needed.
+
 ## 8.52.0
 
 ### Minor Changes
