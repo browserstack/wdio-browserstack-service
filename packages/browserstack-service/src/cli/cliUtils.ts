@@ -39,7 +39,7 @@ import APIUtils from './apiUtils.js'
 export class CLIUtils {
     static automationFrameworkDetail = {}
     static testFrameworkDetail = {}
-    static CLISupportedFrameworks = ['mocha']
+    static CLISupportedFrameworks = ['mocha', 'cucumber']
 
     static isDevelopmentEnv() {
         return process.env.BROWSERSTACK_CLI_ENV === 'development'

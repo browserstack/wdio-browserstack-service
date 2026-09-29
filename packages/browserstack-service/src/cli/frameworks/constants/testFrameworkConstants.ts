@@ -29,6 +29,7 @@ export const TestFrameworkConstants = {
     KEY_EVENT_STARTED_AT : 'event_started_at',
     KEY_EVENT_ENDED_AT : 'event_ended_at',
     KEY_HOOK_ID : 'hook_id',
+    KEY_HOOK_STATE : 'hook_state',
     KEY_HOOK_RESULT : 'hook_result',
     KEY_HOOK_LOGS : 'hook_logs',
     KEY_HOOK_NAME : 'hook_name',

@@ -1,3 +1,7 @@
+import util from 'node:util'
+
+import { BStackLogger } from './cliLogger.js'
+
 /**
  * EventDispatcher - Singleton class for event handling
  */
@@ -42,7 +46,14 @@ class EventDispatcher {
     async notifyObserver(event: string, args: unknown) {
         if (this.observers[event]) {
             for (const callback of this.observers[event]) {
-                await callback(args)
+                // Per-observer boundary. Without it one product module's failure aborts the loop,
+                // so every module registered after it silently stops receiving that state, and the
+                // exception escapes into whatever framework hook raised it.
+                try {
+                    await callback(args)
+                } catch (error) {
+                    BStackLogger.error(`notifyObserver: observer failed for ${event}, continuing: ${util.format(error)}`)
+                }
             }
             return
         }
