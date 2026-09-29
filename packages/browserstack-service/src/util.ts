@@ -1450,6 +1450,38 @@ export function getBrowserStackKey(config: Options.Testrunner) {
     return config.key
 }
 
+// Sessions authenticate with config.user, but the CLI / Test Reporting build prefers the
+// env credentials, then testObservabilityOptions.user — a mismatch splits one run across two accounts.
+export function getCredentialMismatchWarning(options: BrowserstackConfig & Options.Testrunner, config: Options.Testrunner): string | undefined {
+    const hubUser = config.user
+    if (typeof hubUser !== 'string' || hubUser.length === 0) {
+        return undefined
+    }
+
+    let source: string | undefined
+    let reportingUser: string | undefined
+    for (const envVar of ['BROWSERSTACK_USERNAME', 'BROWSERSTACK_USER_NAME']) {
+        if (process.env[envVar]) {
+            source = `the ${envVar} environment variable`
+            reportingUser = process.env[envVar]
+            break
+        }
+    }
+    if (!source && options.testObservabilityOptions?.user) {
+        source = 'testObservabilityOptions.user'
+        reportingUser = options.testObservabilityOptions.user
+    }
+
+    if (!source || reportingUser === hubUser) {
+        return undefined
+    }
+
+    return `BrowserStack credential mismatch: the \`user\` in your WebdriverIO config and ${source} point to different BrowserStack accounts. ` +
+        `Test sessions are created with the config \`user\`, but Test Reporting & Analytics builds are created with ${source}, ` +
+        'so this run\'s test results will not appear under the same account as its sessions. ' +
+        `Use the same BrowserStack credentials in both places (or remove ${source}) to see them together.`
+}
+
 export function isUndefined(value: unknown) {
     let res = (value === undefined || value === null)
     if (typeof value === 'string') {

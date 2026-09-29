@@ -91,6 +91,33 @@ describe('onPrepare', () => {
         vi.spyOn(thUtils, 'getProductMap').mockImplementation(() => productMap)
     })
 
+    it('warns when BROWSERSTACK_USERNAME points to a different account than config.user', async () => {
+        const warnSpy = vi.spyOn(bstackLogger.BStackLogger, 'warn')
+        process.env.BROWSERSTACK_USERNAME = 'another-account'
+        try {
+            const service = new BrowserstackLauncher({ testObservability: false } as any, caps, config)
+            await service.onPrepare(config, caps)
+        } finally {
+            delete process.env.BROWSERSTACK_USERNAME
+        }
+
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('BrowserStack credential mismatch'))
+    })
+
+    it('does not warn about a credential mismatch when not running on BrowserStack', async () => {
+        const warnSpy = vi.spyOn(bstackLogger.BStackLogger, 'warn')
+        process.env.BROWSERSTACK_USERNAME = 'another-account'
+        const nonBstackConfig = { ...config, hostname: 'localhost' }
+        try {
+            const service = new BrowserstackLauncher({ testObservability: false } as any, caps, nonBstackConfig)
+            await service.onPrepare(nonBstackConfig, caps)
+        } finally {
+            delete process.env.BROWSERSTACK_USERNAME
+        }
+
+        expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('BrowserStack credential mismatch'))
+    })
+
     it('should not try to upload app is app is undefined', async () => {
         const service = new BrowserstackLauncher({ testObservability: false } as any, caps, config)
         await service.onPrepare(config, caps)

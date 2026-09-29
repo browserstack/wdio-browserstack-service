@@ -1,5 +1,12 @@
 # @wdio/browserstack-service
 
+## 9.39.1
+
+### Patch Changes
+
+- 1a103aa: - Restored Percy visual snapshots on WebdriverIO by picking up the fixed `@percy/webdriverio@3.3.4`.
+- a0d9e37: - Added a warning when `BROWSERSTACK_USERNAME`/`BROWSERSTACK_ACCESS_KEY` or `testObservabilityOptions.user` point to a different BrowserStack account than the WebdriverIO `user`/`key`. Such runs send test results to a different account than their sessions.
+
 ## 9.39.0
 
 ### Minor Changes
