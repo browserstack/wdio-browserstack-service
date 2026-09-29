@@ -43,6 +43,7 @@ import {
     isTrue,
     uploadLogs,
     getObservabilityProduct,
+    getCredentialMismatchWarning,
     isUndefined,
     processTestObservabilityResponse,
     processAccessibilityResponse,
@@ -1144,6 +1145,50 @@ describe('getObservabilityUser', () => {
     it('get undefined', () => {
         delete process.env.BROWSERSTACK_USERNAME
         expect(getObservabilityUser({}, {})).toEqual(undefined)
+    })
+})
+
+describe('getCredentialMismatchWarning', () => {
+    const envVars = ['BROWSERSTACK_USERNAME', 'BROWSERSTACK_USER_NAME']
+    beforeEach(() => envVars.forEach((v) => delete process.env[v]))
+    afterEach(() => envVars.forEach((v) => delete process.env[v]))
+
+    it('warns when BROWSERSTACK_USERNAME differs from config.user', () => {
+        process.env.BROWSERSTACK_USERNAME = 'other-account'
+        const warning = getCredentialMismatchWarning({} as any, { user: 'hub-account' })
+        expect(warning).toContain('BROWSERSTACK_USERNAME environment variable')
+        expect(warning).not.toContain('hub-account')
+        expect(warning).not.toContain('other-account')
+    })
+
+    it('warns when BROWSERSTACK_USER_NAME differs from config.user', () => {
+        process.env.BROWSERSTACK_USER_NAME = 'other-account'
+        expect(getCredentialMismatchWarning({} as any, { user: 'hub-account' })).toContain('BROWSERSTACK_USER_NAME environment variable')
+    })
+
+    it('warns when testObservabilityOptions.user differs from config.user', () => {
+        const warning = getCredentialMismatchWarning({ testObservabilityOptions: { user: 'other-account' } } as any, { user: 'hub-account' })
+        expect(warning).toContain('testObservabilityOptions.user')
+    })
+
+    it('names the env var when it takes precedence over testObservabilityOptions.user', () => {
+        process.env.BROWSERSTACK_USERNAME = 'other-account'
+        const warning = getCredentialMismatchWarning({ testObservabilityOptions: { user: 'hub-account' } } as any, { user: 'hub-account' })
+        expect(warning).toContain('BROWSERSTACK_USERNAME environment variable')
+    })
+
+    it('does not warn when the env var matches config.user', () => {
+        process.env.BROWSERSTACK_USERNAME = 'hub-account'
+        expect(getCredentialMismatchWarning({ testObservabilityOptions: { user: 'other-account' } } as any, { user: 'hub-account' })).toBeUndefined()
+    })
+
+    it('does not warn when no alternative credential source is set', () => {
+        expect(getCredentialMismatchWarning({} as any, { user: 'hub-account' })).toBeUndefined()
+    })
+
+    it('does not warn when config.user is not set', () => {
+        process.env.BROWSERSTACK_USERNAME = 'other-account'
+        expect(getCredentialMismatchWarning({} as any, {})).toBeUndefined()
     })
 })
 

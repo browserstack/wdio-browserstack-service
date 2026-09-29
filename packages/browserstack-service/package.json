@@ -58,7 +58,7 @@
     "@grpc/grpc-js": "~1.13.5",
     "@percy/appium-app": "^2.0.9",
     "@percy/selenium-webdriver": "^2.2.2",
-    "@percy/webdriverio": ">=3.3.0 <3.3.3",
+    "@percy/webdriverio": "^3.3.4",
     "@types/gitconfiglocal": "^2.0.1",
     "@wdio/logger": "^9.0.0",
     "@wdio/reporter": "^9.0.0",
