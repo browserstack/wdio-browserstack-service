@@ -152,6 +152,15 @@ describe('TestHubModule', () => {
                 autoInstance: [mockAutomationInstance]
             })
         })
+
+        it('should skip events marked skipTestHub', async () => {
+            const sendTestSessionEventSpy = vi.spyOn(testHubModule, 'sendTestSessionEvent').mockResolvedValue()
+
+            await testHubModule.onBeforeTest({ test: { title: 'Test' } as Frameworks.Test, skipTestHub: true })
+
+            expect(AutomationFramework.getTrackedInstance).not.toHaveBeenCalled()
+            expect(sendTestSessionEventSpy).not.toHaveBeenCalled()
+        })
     })
 
     describe('onAllTestEvents', () => {
@@ -220,6 +229,32 @@ describe('TestHubModule', () => {
                 instance: mockInstance,
                 test: { title: 'Test' } as Frameworks.Test
             }
+
+            await testHubModule.onAllTestEvents(mockArgs)
+
+            expect(sendTestFrameworkEventSpy).toHaveBeenCalledWith(mockArgs)
+        })
+
+        it('should skip events marked skipTestHub', async () => {
+            const mockInstance = {
+                getCurrentTestState: vi.fn(() => TestFrameworkState.TEST),
+                getCurrentHookState: vi.fn(() => HookState.POST)
+            }
+            const sendTestFrameworkEventSpy = vi.spyOn(testHubModule, 'sendTestFrameworkEvent').mockResolvedValue()
+
+            await testHubModule.onAllTestEvents({ instance: mockInstance, skipTestHub: true })
+
+            expect(mockInstance.getCurrentTestState).not.toHaveBeenCalled()
+            expect(sendTestFrameworkEventSpy).not.toHaveBeenCalled()
+        })
+
+        it('should only treat a literal true skipTestHub as the marker', async () => {
+            const mockInstance = {
+                getCurrentTestState: vi.fn(() => TestFrameworkState.TEST),
+                getCurrentHookState: vi.fn(() => HookState.PRE)
+            }
+            const sendTestFrameworkEventSpy = vi.spyOn(testHubModule, 'sendTestFrameworkEvent').mockResolvedValue()
+            const mockArgs = { instance: mockInstance, skipTestHub: 'true' }
 
             await testHubModule.onAllTestEvents(mockArgs)
 
