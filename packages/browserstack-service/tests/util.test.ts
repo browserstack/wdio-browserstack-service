@@ -43,6 +43,7 @@ import {
     isTrue,
     uploadLogs,
     getObservabilityProduct,
+    getCredentialMismatchWarning,
     isUndefined,
     processTestObservabilityResponse,
     processAccessibilityResponse,
@@ -1147,6 +1148,50 @@ describe('getObservabilityUser', () => {
     })
 })
 
+describe('getCredentialMismatchWarning', () => {
+    const envVars = ['BROWSERSTACK_USERNAME', 'BROWSERSTACK_USER_NAME']
+    beforeEach(() => envVars.forEach((v) => delete process.env[v]))
+    afterEach(() => envVars.forEach((v) => delete process.env[v]))
+
+    it('warns when BROWSERSTACK_USERNAME differs from config.user', () => {
+        process.env.BROWSERSTACK_USERNAME = 'other-account'
+        const warning = getCredentialMismatchWarning({} as any, { user: 'hub-account' })
+        expect(warning).toContain('BROWSERSTACK_USERNAME environment variable')
+        expect(warning).not.toContain('hub-account')
+        expect(warning).not.toContain('other-account')
+    })
+
+    it('warns when BROWSERSTACK_USER_NAME differs from config.user', () => {
+        process.env.BROWSERSTACK_USER_NAME = 'other-account'
+        expect(getCredentialMismatchWarning({} as any, { user: 'hub-account' })).toContain('BROWSERSTACK_USER_NAME environment variable')
+    })
+
+    it('warns when testObservabilityOptions.user differs from config.user', () => {
+        const warning = getCredentialMismatchWarning({ testObservabilityOptions: { user: 'other-account' } } as any, { user: 'hub-account' })
+        expect(warning).toContain('testObservabilityOptions.user')
+    })
+
+    it('names the env var when it takes precedence over testObservabilityOptions.user', () => {
+        process.env.BROWSERSTACK_USERNAME = 'other-account'
+        const warning = getCredentialMismatchWarning({ testObservabilityOptions: { user: 'hub-account' } } as any, { user: 'hub-account' })
+        expect(warning).toContain('BROWSERSTACK_USERNAME environment variable')
+    })
+
+    it('does not warn when the env var matches config.user', () => {
+        process.env.BROWSERSTACK_USERNAME = 'hub-account'
+        expect(getCredentialMismatchWarning({ testObservabilityOptions: { user: 'other-account' } } as any, { user: 'hub-account' })).toBeUndefined()
+    })
+
+    it('does not warn when no alternative credential source is set', () => {
+        expect(getCredentialMismatchWarning({} as any, { user: 'hub-account' })).toBeUndefined()
+    })
+
+    it('does not warn when config.user is not set', () => {
+        process.env.BROWSERSTACK_USERNAME = 'other-account'
+        expect(getCredentialMismatchWarning({} as any, {})).toBeUndefined()
+    })
+})
+
 describe('getObservabilityKey', () => {
     it('get env var', () => {
         process.env.BROWSERSTACK_ACCESS_KEY = 'try'
@@ -2156,6 +2201,19 @@ describe('_getParamsForAppAccessibility', () => {
         })
     })
 
+    it('omits the test run uuid for a global-hook scan, keeping the hook uuid', () => {
+        const result = _getParamsForAppAccessibility('click', undefined, 'hook-uuid-1', true)
+
+        expect(result.thTestRunUuid).toBeUndefined()
+        expect(result.thHookRunUuid).toBe('hook-uuid-1')
+        expect(result.thBuildUuid).toBe('build-456')
+    })
+
+    it('sends the test run uuid when the scan is not from a global hook', () => {
+        expect(_getParamsForAppAccessibility('click', undefined, null, false).thTestRunUuid).toBe('test-123')
+        expect(_getParamsForAppAccessibility('click').thTestRunUuid).toBe('test-123')
+    })
+
     it('should handle missing environment variables', () => {
         process.env = {}
 
@@ -2415,5 +2473,58 @@ describe('coerceStringBooleans (SDK-3737)', () => {
     })
     it('is safe with empty input', () => {
         expect(utils.coerceStringBooleans({})).toEqual({})
+    })
+})
+
+describe('getTestTags', () => {
+    const tagsFor = (title: string, scopes: string[] = []) =>
+        utils.getTestTags({ title } as any, scopes)
+
+    it('picks up a tag in the test title', () => {
+        expect(tagsFor('logs in @smoke')).toEqual(['@smoke'])
+    })
+
+    it('picks up a tag from the describe scope', () => {
+        expect(tagsFor('logs in', ['auth @regression'])).toEqual(['@regression'])
+    })
+
+    it('merges scope and title tags, deduped', () => {
+        expect(tagsFor('logs in @smoke', ['auth @smoke', 'nested @regression']))
+            .toEqual(['@smoke', '@regression'])
+    })
+
+    it('returns an empty array when nothing is tagged', () => {
+        expect(tagsFor('logs in', ['auth'])).toEqual([])
+    })
+
+    it('picks up multiple tags from one title', () => {
+        expect(tagsFor('logs in @smoke @p1')).toEqual(['@smoke', '@p1'])
+    })
+
+    it('keeps hyphens in a tag', () => {
+        expect(tagsFor('logs in @smoke-test')).toEqual(['@smoke-test'])
+    })
+
+    it('falls back to the Jasmine description when there is no title', () => {
+        expect(utils.getTestTags({ description: 'logs in @jasmine' } as any, [])).toEqual(['@jasmine'])
+    })
+
+    it('ignores an @ embedded in a larger token', () => {
+        expect(tagsFor('sends the invite to user@example.com')).toEqual([])
+        expect(tagsFor('installs pkg@1.2.3')).toEqual([])
+    })
+
+    it('derives scopes from the mocha hierarchy when none are supplied', () => {
+        const test = {
+            title: 'logs in @smoke',
+            ctx: { test: {} },
+            parent: { title: 'auth @regression', parent: { title: '' } }
+        }
+        expect(utils.getTestTags(test as any)).toEqual(['@regression', '@smoke'])
+    })
+
+    it('derives scopes from the jasmine hierarchy when none are supplied', () => {
+        const test = { description: 'logs in @smoke', fullName: 'auth @regression logs in @smoke' }
+        expect(utils.getTestTags(test as any)).toEqual(['@regression', '@smoke'])
     })
 })

@@ -88,4 +88,8 @@ describe('NOT_ALLOWED_KEYS_IN_CAPS cloud-leak strip', () => {
     it('includes skipAppOverride so it is never forwarded to bstack:options', () => {
         expect(NOT_ALLOWED_KEYS_IN_CAPS).toContain('skipAppOverride')
     })
+
+    it('includes preferScenarioName so it is never forwarded to bstack:options', () => {
+        expect(NOT_ALLOWED_KEYS_IN_CAPS).toContain('preferScenarioName')
+    })
 })

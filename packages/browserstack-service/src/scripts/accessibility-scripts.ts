@@ -1,6 +1,7 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
+import { BStackLogger } from '../bstackLogger.js'
 
 interface Scripts {
     scan: string
@@ -12,6 +13,37 @@ interface Scripts {
 interface Command {
     name: string
     class: string
+}
+
+/**
+ * The binary types AccessibilityCapability.value as a proto string, so goog:chromeOptions
+ * arrives JSON-encoded over gRPC where the HTTP launch response delivers a plain object.
+ * Accept both. Anything that does not resolve to an object is dropped rather than written
+ * into a W3C capability, which the hub rejects outright.
+ */
+function toChromeOptions(value: unknown): { [key: string]: unknown } | null {
+    // An absent field is the common case and not a drop — update() runs on every launch response
+    // and every readFromExistingFile(), so reporting it would bury the drop this logs for.
+    if (value === undefined || value === null) {
+        return null
+    }
+
+    let parsed = value
+    if (typeof parsed === 'string') {
+        try {
+            parsed = JSON.parse(parsed)
+        } catch (err) {
+            // Dropping this leaves the extension uninjected and the a11y report empty, with the
+            // run still green — so the drop has to be findable in the log.
+            BStackLogger.debug(`toChromeOptions: goog:chromeOptions is not valid JSON, dropping it: ${err}`)
+            return null
+        }
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as { [key: string]: unknown }
+    }
+    BStackLogger.debug(`toChromeOptions: goog:chromeOptions resolved to ${parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : typeof parsed}, not an object; dropping it`)
+    return null
 }
 
 class AccessibilityScripts {
@@ -88,8 +120,9 @@ class AccessibilityScripts {
         if (data.commands && data.commands.length) {
             this.commandsToWrap = data.commands
         }
-        if (data.nonBStackInfraA11yChromeOptions){
-            this.ChromeExtension = data.nonBStackInfraA11yChromeOptions
+        const chromeOptions = toChromeOptions(data.nonBStackInfraA11yChromeOptions)
+        if (chromeOptions){
+            this.ChromeExtension = chromeOptions
         }
 
     }

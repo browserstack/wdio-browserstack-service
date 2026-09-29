@@ -1,5 +1,70 @@
 # @wdio/browserstack-service
 
+## 9.39.1
+
+### Patch Changes
+
+- 1a103aa: - Restored Percy visual snapshots on WebdriverIO by picking up the fixed `@percy/webdriverio@3.3.4`.
+- a0d9e37: - Added a warning when `BROWSERSTACK_USERNAME`/`BROWSERSTACK_ACCESS_KEY` or `testObservabilityOptions.user` point to a different BrowserStack account than the WebdriverIO `user`/`key`. Such runs send test results to a different account than their sessions.
+
+## 9.39.0
+
+### Minor Changes
+
+- 4d39f2a: - End-of-build messages from BrowserStack — such as a notice that your SDK version is outdated or has a known issue — are now shown at the end of your test run, highlighted in yellow for a warning and red for an error, and written to the SDK log without colour so they stay searchable.
+
+## 9.38.0
+
+### Minor Changes
+
+- 6844406: - WebdriverIO + CucumberJS now runs on the BrowserStack CLI flow, the same path Mocha already uses. Reporting, accessibility, Percy and session naming behave as before — no config change is needed.
+  - Fixed: sessions were left unmarked pass/fail when setSessionName: false was set. Naming and status are independent options again.
+  - Fixed: the accessibility extension was not applied on non-BrowserStack infrastructure, leaving scans empty on otherwise green runs.
+
+### Patch Changes
+
+- e016e7d: - Fixed Percy capture on WebdriverIO. Runs with `percy: true` logged "Unsupported driver for percy" and produced no screenshots, while the tests themselves continued to pass.
+  - Fixed Percy web snapshots, which previously captured nothing on WebdriverIO.
+  - Percy errors are now logged instead of failing the test. Set `PERCY_RAISE_ERROR=true` to fail the build on Percy errors instead.
+  - Added Percy documentation to the README, including how to use a Percy web project alongside this service.
+- 4bc51b5: - Fixed test tags not being reported to Test Observability for Mocha and Jasmine. Tags written as `@tag` tokens in suite or test titles are now sent with each test.
+
+## 9.37.0
+
+### Minor Changes
+
+- 6844406: - WebdriverIO + CucumberJS now runs on the BrowserStack CLI flow, the same path Mocha already uses. Reporting, accessibility, Percy and session naming behave as before — no config change is needed.
+  - Fixed: sessions were left unmarked pass/fail when setSessionName: false was set. Naming and status are independent options again.
+  - Fixed: the accessibility extension was not applied on non-BrowserStack infrastructure, leaving scans empty on otherwise green runs.
+
+### Patch Changes
+
+- 4bc51b5: - Fixed test tags not being reported to Test Observability for Mocha and Jasmine. Tags written as `@tag` tokens in suite or test titles are now sent with each test.
+- e9cfe6e: - Fixed Percy capture on WebdriverIO. Runs with `percy: true` logged "Unsupported driver for percy" and produced no screenshots, while the tests themselves continued to pass.
+  - Fixed Percy web snapshots, which previously captured nothing on WebdriverIO.
+  - Percy errors are now logged instead of failing the test. Set `PERCY_RAISE_ERROR=true` to fail the build on Percy errors instead.
+  - Added Percy documentation to the README, including how to use a Percy web project alongside this service.
+
+## 9.36.2
+
+### Patch Changes
+
+- 93cde24: - Fixed screenshots taken during a Mocha test not appearing in Test Reporting's consolidated logs.
+- 13b5f31: - N/A — CI/workflow-only change; no customer-facing or package impact.
+
+## 9.36.1
+
+### Patch Changes
+
+- 8923993: - Fixed a skipped test staying stuck on "In Progress" in Test Hub when it sits between two running tests — for example a `it.skip()` in the middle of a spec. Completes the fix shipped in 9.35.3, which only covered skips at the end of a spec. Skipped tests are now reported when the run finishes, so they appear grouped at the end of the build rather than in source order.
+
+## 9.36.0
+
+### Minor Changes
+
+- 2ab9eb0: - Accessibility scans now run for driver commands issued from your WDIO config's hooks — `before()` and `beforeSuite` before the run starts, and `afterSuite`/`after` during teardown — so screens visited outside your tests are covered.
+  - `browser.performScan()` called from a config hook is no longer attributed to a test that has not started.
+
 ## 9.35.3
 
 ### Patch Changes

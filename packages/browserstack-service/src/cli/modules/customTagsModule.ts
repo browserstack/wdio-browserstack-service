@@ -11,6 +11,7 @@ import { TestFrameworkState } from '../states/testFrameworkState.js'
 import { TestFrameworkConstants } from '../frameworks/constants/testFrameworkConstants.js'
 import { CLIUtils } from '../cliUtils.js'
 import WdioMochaTestFramework from '../frameworks/wdioMochaTestFramework.js'
+import { BrowserstackCLI } from '../index.js'
 import { mergeIntoTags, parseCommaSeparatedValues, getCurrentMochaHookWindow } from '../../customTags.js'
 import type { CustomMetadata } from '../../customTags.js'
 
@@ -54,6 +55,10 @@ export default class CustomTagsModule extends BaseModule {
         return CustomTagsModule.MODULE_NAME
     }
 
+    private isMochaFramework(): boolean {
+        return BrowserstackCLI.getInstance().getTestFramework() instanceof WdioMochaTestFramework
+    }
+
     async onBeforeExecute() {
         try {
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
@@ -70,6 +75,16 @@ export default class CustomTagsModule extends BaseModule {
 
             (browser as WebdriverIO.Browser).setCustomTags = async (key: string, value: string): Promise<void> => {
                 try {
+                    // Mocha-only, matching the legacy handler (custom-tags-handler, which warns
+                    // and no-ops for any framework other than mocha). The method is still
+                    // registered so the call resolves and the warning reaches the user, exactly
+                    // as on the legacy flow. Without this gate the CLI path silently STARTS
+                    // supporting custom tags for other frameworks — a widening, but an
+                    // unrequested behaviour change all the same.
+                    if (!this.isMochaFramework()) {
+                        this.logger.warn('setCustomTags is only supported for the mocha framework; ignoring call')
+                        return
+                    }
                     if (!key || !value) {
                         this.logger.warn('setCustomTags: key and value are required; ignoring call')
                         return

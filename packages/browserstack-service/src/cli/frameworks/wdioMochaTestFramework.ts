@@ -10,7 +10,7 @@ import TrackedInstance from '../instances/trackedInstance.js'
 import { TestFrameworkConstants } from './constants/testFrameworkConstants.js'
 import { BStackLogger as logger } from '../cliLogger.js'
 import type { Frameworks } from '@wdio/types'
-import { getMochaTestHierarchy, getUniqueIdentifier, isUndefined, removeAnsiColors } from '../../util.js'
+import { getMochaTestHierarchy, getTestTags, getUniqueIdentifier, isUndefined, removeAnsiColors } from '../../util.js'
 import { TEST_ANALYTICS_ID } from '../../constants.js'
 
 /**
@@ -216,6 +216,7 @@ export default class WdioMochaTestFramework extends TestFramework {
         const framework = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME)
         const fullTitle = getUniqueIdentifier(test, framework)
         const filename = test.file // || this._suiteFile
+        const scopes = getMochaTestHierarchy(test)
 
         const testData: Record<string, unknown> = {
             [TestFrameworkConstants.KEY_TEST_ID]: getUniqueIdentifier(test, framework),
@@ -223,7 +224,8 @@ export default class WdioMochaTestFramework extends TestFramework {
             [TestFrameworkConstants.KEY_TEST_CODE]: test.body || '',
             ...resolveTestFilePaths(filename),
             [TestFrameworkConstants.KEY_TEST_SCOPE]: fullTitle,
-            [TestFrameworkConstants.KEY_TEST_SCOPES]: getMochaTestHierarchy(test),
+            [TestFrameworkConstants.KEY_TEST_SCOPES]: scopes,
+            [TestFrameworkConstants.KEY_TEST_TAGS]: getTestTags(test, scopes),
         }
 
         return testData
@@ -266,12 +268,14 @@ export default class WdioMochaTestFramework extends TestFramework {
      */
     loadLogEntries(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, logEntry: Record<string, unknown>) {
         const logRecord: Record<string, unknown> = {}
-        const { level, message, timestamp } = logEntry
+        const { level, message, timestamp, kind } = logEntry
 
         if (CLIUtils.matchHookRegex(instance.getCurrentTestState().toString().split('.')[1])) {
             logRecord[TestFrameworkConstants.KEY_HOOK_ID] = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOK_ID)
         }
-        logRecord.kind = TestFrameworkConstants.KIND_LOG
+        // Console logs carry no kind and stay KIND_LOG; a producer that sets one (a screenshot,
+        // say) keeps it, or the entry would reach Observability labelled as a console log.
+        logRecord.kind = kind ?? TestFrameworkConstants.KIND_LOG
         logRecord.message = Buffer.from(message as string)
         logRecord.level = level
         logRecord.timestamp = timestamp

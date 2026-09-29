@@ -39,6 +39,8 @@ import {
     isTrue,
     getBrowserStackUser,
     getBrowserStackKey,
+    getCredentialMismatchWarning,
+    isBrowserstackInfra,
     uploadLogs,
     ObjectsAreEqual, getBasicAuthHeader,
     isValidCapsForHealing,
@@ -273,6 +275,13 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         // Keep the config singleton consistent: validateSkipAppOverride clears this._options.app on the
         // edge-1 conflict, but browserStackConfig.app was copied earlier in the constructor.
         this.browserStackConfig.app = this._options.app
+
+        if (isBrowserstackInfra(config as BrowserstackConfig & Options.Testrunner, capabilities as Capabilities.BrowserStackCapabilities)) {
+            const credentialMismatchWarning = getCredentialMismatchWarning(this._options, config)
+            if (credentialMismatchWarning) {
+                BStackLogger.warn(credentialMismatchWarning)
+            }
+        }
 
         // Send Funnel start request
         await sendStart(this.browserStackConfig)

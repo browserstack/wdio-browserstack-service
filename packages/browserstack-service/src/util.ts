@@ -595,9 +595,12 @@ export const formatString = (template: (string | null), ...values: (string | nul
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const _getParamsForAppAccessibility = ( commandName?: string, testName?: string, hookRunUuid?: string | null ): { thTestRunUuid: any, thHookRunUuid: any, thBuildUuid: any, thJwtToken: any, authHeader: any, scanTimestamp: number, method: string | undefined, testName: string | undefined  } => {
+export const _getParamsForAppAccessibility = ( commandName?: string, testName?: string, hookRunUuid?: string | null, isGlobalHook?: boolean ): { thTestRunUuid: any, thHookRunUuid: any, thBuildUuid: any, thJwtToken: any, authHeader: any, scanTimestamp: number, method: string | undefined, testName: string | undefined  } => {
     return {
-        'thTestRunUuid': process.env.TEST_ANALYTICS_ID,
+        // A scan from a WDIO config-level hook belongs to no test. TEST_ANALYTICS_ID in that
+        // window holds a uuid the framework minted at instance creation — a test that has not
+        // started — so sending it would attribute the scan to a test it did not come from.
+        'thTestRunUuid': isGlobalHook ? undefined : process.env.TEST_ANALYTICS_ID,
         // Present only when the scan fires inside a hook (dropped by JSON.stringify when undefined,
         // so in-test scans are unchanged). SeleniumHub appAllyHandler relays this as `hook_run_uuid`.
         'thHookRunUuid': hookRunUuid || undefined,
@@ -611,7 +614,7 @@ export const _getParamsForAppAccessibility = ( commandName?: string, testName?: 
 }
 
 /* eslint-disable  @typescript-eslint/no-explicit-any */
-export const performA11yScan = async (isAppAutomate: boolean, browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, isBrowserStackSession?: boolean, isAccessibility?: boolean | string,  commandName?: string, testName?: string, hookRunUuid?: string | null,) : Promise<{ [key: string]: any; } | undefined> => {
+export const performA11yScan = async (isAppAutomate: boolean, browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, isBrowserStackSession?: boolean, isAccessibility?: boolean | string,  commandName?: string, testName?: string, hookRunUuid?: string | null, isGlobalHook?: boolean,) : Promise<{ [key: string]: any; } | undefined> => {
 
     if (!isAccessibilityAutomationSession(isAccessibility)) {
         BStackLogger.warn('Not an Accessibility Automation session, cannot perform Accessibility scan.')
@@ -620,7 +623,7 @@ export const performA11yScan = async (isAppAutomate: boolean, browser: Webdriver
 
     try {
         if (isAppAccessibilityAutomationSession(isAccessibility, isAppAutomate)) {
-            const results: unknown = await (browser as WebdriverIO.Browser).execute(formatString(AccessibilityScripts.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName, hookRunUuid))) as string, {})
+            const results: unknown = await (browser as WebdriverIO.Browser).execute(formatString(AccessibilityScripts.performScan, JSON.stringify(_getParamsForAppAccessibility(commandName, testName, hookRunUuid, isGlobalHook))) as string, {})
             BStackLogger.debug(util.format(results as string))
             return ( results as { [key: string]: any; } | undefined )
         }
@@ -1445,6 +1448,38 @@ export function getBrowserStackKey(config: Options.Testrunner) {
         return process.env.BROWSERSTACK_ACCESS_KEY
     }
     return config.key
+}
+
+// Sessions authenticate with config.user, but the CLI / Test Reporting build prefers the
+// env credentials, then testObservabilityOptions.user — a mismatch splits one run across two accounts.
+export function getCredentialMismatchWarning(options: BrowserstackConfig & Options.Testrunner, config: Options.Testrunner): string | undefined {
+    const hubUser = config.user
+    if (typeof hubUser !== 'string' || hubUser.length === 0) {
+        return undefined
+    }
+
+    let source: string | undefined
+    let reportingUser: string | undefined
+    for (const envVar of ['BROWSERSTACK_USERNAME', 'BROWSERSTACK_USER_NAME']) {
+        if (process.env[envVar]) {
+            source = `the ${envVar} environment variable`
+            reportingUser = process.env[envVar]
+            break
+        }
+    }
+    if (!source && options.testObservabilityOptions?.user) {
+        source = 'testObservabilityOptions.user'
+        reportingUser = options.testObservabilityOptions.user
+    }
+
+    if (!source || reportingUser === hubUser) {
+        return undefined
+    }
+
+    return `BrowserStack credential mismatch: the \`user\` in your WebdriverIO config and ${source} point to different BrowserStack accounts. ` +
+        `Test sessions are created with the config \`user\`, but Test Reporting & Analytics builds are created with ${source}, ` +
+        'so this run\'s test results will not appear under the same account as its sessions. ' +
+        `Use the same BrowserStack credentials in both places (or remove ${source}) to see them together.`
 }
 
 export function isUndefined(value: unknown) {
@@ -2289,6 +2324,29 @@ export function getMochaTestHierarchy(test: Frameworks.Test) {
         value.push(test.fullName.endsWith(descSuffix) ? test.fullName.slice(0, -descSuffix.length) : test.fullName)
     }
     return value.reverse()
+}
+
+// The lookbehind is load-bearing: without it every `@` starts a match, so an address
+// like `user@example.com` in a title yields a bogus `@example` tag.
+const TEST_TAG_PATTERN = /(?<![\w-])@[\w-]+/g
+
+/**
+ * Mocha and Jasmine have no tag construct, so `@tag` tokens written into the suite and
+ * test titles are the tag source. The leading `@` is kept so these match the pickle tags
+ * the Cucumber path in this service already forwards; note the node SDK strips it for
+ * Jest/Playwright, so the two SDKs emit different shapes for the same logical tag.
+ */
+export function getTestTags(test: Frameworks.Test, scopes?: string[]): string[] {
+    const titles = [...(scopes ?? getMochaTestHierarchy(test)), test.title || test.description || '']
+    const tags: string[] = []
+    for (const title of titles) {
+        for (const tag of title.match(TEST_TAG_PATTERN) || []) {
+            if (!tags.includes(tag)) {
+                tags.push(tag)
+            }
+        }
+    }
+    return tags
 }
 
 /**

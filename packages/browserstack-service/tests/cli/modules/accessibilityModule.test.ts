@@ -77,6 +77,8 @@ describe('AccessibilityModule', () => {
         }
 
         mockBrowser = {
+            // a live session: the wrapper skips scanning when the driver has no sessionId
+            sessionId: 'session-w',
             executeAsync: vi.fn().mockResolvedValue([]),
             execute: vi.fn().mockResolvedValue({}),
             overwriteCommand: vi.fn()
@@ -159,6 +161,118 @@ describe('AccessibilityModule', () => {
         it('should return the correct module name', () => {
             expect(accessibilityModule.getModuleName()).toBe('BaseModule') // AccessibilityModule doesn't override getModuleName
             expect(AccessibilityModule.MODULE_NAME).toBe('AccessibilityModule')
+        })
+    })
+
+    describe('scan gate ahead of the first test', () => {
+        // afterEach's vi.resetAllMocks() drops the factory's mockReturnValue, so the caps
+        // validators return undefined and onBeforeExecute bails before the gate. Re-arm them.
+        const withA11yCaps = () => {
+            vi.mocked(validateCapsWithA11y).mockReturnValue(true)
+            vi.mocked(validateCapsWithAppA11y).mockReturnValue(true)
+            return vi.mocked(AutomationFramework.getState).mockImplementation((instance, key) => {
+                if (key.includes('INPUT_CAPABILITIES')) {
+                    return {}
+                }
+                if (key.includes('CAPABILITIES')) {
+                    return { browserName: 'chrome' }
+                }
+                return 'session-w'
+            })
+        }
+
+        const fireWrappedCommand = async () => {
+            const orig = vi.fn().mockResolvedValue('ok')
+            await (accessibilityModule as any).commandWrapper({ name: 'click', class: 'Element' }, orig, 'arg')
+        }
+
+        it('opens the scan gate at driver creation, before any test exists', async () => {
+            withA11yCaps()
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
+        })
+
+        it('respects autoScanning — the one validation the window still owns', async () => {
+            withA11yCaps()
+            accessibilityModule.autoScanning = false
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBeUndefined()
+        })
+
+        // The rule is stateless: a scan is parentless only when no framework hook run and no test
+        // can own it. These drive the REAL call site (commandWrapper), so they pin the wiring.
+        it('sends no test run uuid for a scan with no hook run and no test', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+
+            await fireWrappedCommand()
+
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, null, true)
+        })
+
+        it('keeps the test run uuid once a framework hook is running', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            vi.mocked(TestFramework.getState).mockReturnValue('hook-uuid-1')
+            await accessibilityModule.onHookStart({ instance: mockTestInstance })
+
+            await fireWrappedCommand()
+
+            const call = vi.mocked(_getParamsForAppAccessibility).mock.calls.at(-1)
+            expect(call?.[2]).toBe('hook-uuid-1')
+            expect(call?.[3]).toBe(false)
+        })
+
+        it('skips the scan once the session is gone, instead of logging a failure', async () => {
+            withA11yCaps()
+            await accessibilityModule.onBeforeExecute()
+            const orig = vi.fn().mockResolvedValue('ok')
+            mockBrowser.sessionId = undefined
+
+            await (accessibilityModule as any).commandWrapper({ name: 'click', class: 'Element' }, orig, 'arg')
+
+            // the command still runs; only the scan is skipped
+            expect(orig).toHaveBeenCalled()
+            expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
+        })
+
+        it('leaves the gate open after a test, so afterSuite/after still scan', async () => {
+            withA11yCaps()
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            await accessibilityModule.onBeforeExecute()
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'suite', test: { title: 'a test' } })
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
+
+            // drive onAfterTest all the way to the end: its guards, and then the stop-event
+            // internals, which throw against these mocks and would swallow the line under test
+            vi.mocked(mockTestInstance.getData).mockReturnValue({
+                accessibilityScanStarted: true,
+                scanTestForAccessibility: true
+            })
+            vi.spyOn(accessibilityModule as any, 'getDriverExecuteParams').mockResolvedValue({})
+            vi.spyOn(accessibilityModule as any, 'sendTestStopEvent').mockResolvedValue(undefined)
+            await accessibilityModule.onAfterTest()
+
+            // deleting it here used to silence every scan between tests and after the last one
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
+        })
+
+        it('keeps the test run uuid once a test is running', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'suite', test: { title: 'a test' } })
+
+            await fireWrappedCommand()
+
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', 'a test', null, false)
         })
     })
 
@@ -277,6 +391,27 @@ describe('AccessibilityModule', () => {
             await accessibilityModule.onBeforeTest(mockArgs)
 
             expect(TestFramework.setState).toHaveBeenCalled()
+        })
+
+        // The 6-arg form is what lets cucumber filter scans by gherkin tag. `args.world` is the
+        // only discriminator, so these pin that mocha/jasmine keep the exact 3-arg behaviour —
+        // if `world` ever started arriving on those paths, the tag branch would silently engage.
+        it('passes the world through so cucumber can filter scans by tag', async () => {
+            const world = { pickle: { tags: [{ name: '@a11y' }] } }
+
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'Feature', test: { title: 'Scenario' }, world })
+
+            expect(shouldScanTestForAccessibility).toHaveBeenCalledWith(
+                'Feature', 'Scenario', expect.anything(), world, true
+            )
+        })
+
+        it('leaves the tag branch untaken when no world is supplied', async () => {
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'Suite', test: { title: 'Test' } })
+
+            expect(shouldScanTestForAccessibility).toHaveBeenCalledWith(
+                'Suite', 'Test', expect.anything(), undefined, false
+            )
         })
 
         it('should handle missing test arguments gracefully', async () => {
@@ -534,10 +669,17 @@ describe('AccessibilityModule', () => {
             }
         })
 
-        it('captures the hook run uuid and opens the scan gate at hook start', async () => {
-            vi.mocked(TestFramework.getState).mockReturnValue('hook-uuid-123')
+        // The gate write is Mocha-only, exactly as legacy gates it. Keyed rather than blanket
+        // mock: the handler now reads the framework name off the instance too.
+        const mockInstanceState = (frameworkName: string) => {
+            vi.mocked(TestFramework.getState).mockImplementation((_i: any, key: string) =>
+                (key === 'test_framework_name' ? frameworkName : 'hook-uuid-123') as any)
             vi.mocked(AutomationFramework.getState).mockImplementation((instance: any, key: string) =>
                 (key.includes('session_id') ? 12345 : {}) as any)
+        }
+
+        it('captures the hook run uuid and opens the scan gate at hook start', async () => {
+            mockInstanceState('WebdriverIO-mocha')
 
             await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
 
@@ -545,9 +687,40 @@ describe('AccessibilityModule', () => {
             expect(accessibilityModule.accessibilityMap.get(12345)).toBe(true)
         })
 
+        // 8-C. Discriminating: identical call, opposite answers. Mocha's beforeEach precedes
+        // beforeTest so the re-open is harmless; cucumber's scenario boundary precedes its Before
+        // hooks, so the same write would permanently force the gate open and defeat the
+        // includeTagsInTestingScope / excludeTagsInTestingScope filtering.
+        it('does NOT re-open the scan gate for cucumber — the per-test gate stands', async () => {
+            mockInstanceState('WebdriverIO-cucumber')
+            accessibilityModule.accessibilityMap.set(12345, false)
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
+
+            expect(accessibilityModule.currentHookRunUuid).toBe('hook-uuid-123')
+            expect(accessibilityModule.accessibilityMap.get(12345)).toBe(false)
+        })
+
+        it('re-opens a closed gate for mocha — the opposite answer on the same input', async () => {
+            mockInstanceState('WebdriverIO-mocha')
+            accessibilityModule.accessibilityMap.set(12345, false)
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
+
+            expect(accessibilityModule.accessibilityMap.get(12345)).toBe(true)
+        })
+
+        it('still captures the hook run uuid for cucumber (app-a11y hook-scan stamping)', async () => {
+            mockInstanceState('WebdriverIO-cucumber')
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
+
+            expect(accessibilityModule.currentHookRunUuid).toBe('hook-uuid-123')
+        })
+
         it('does not open the scan gate when accessibility is disabled', async () => {
             accessibilityModule.accessibility = false
-            vi.mocked(TestFramework.getState).mockReturnValue('hook-uuid-123')
+            mockInstanceState('WebdriverIO-mocha')
 
             await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
 
@@ -570,7 +743,7 @@ describe('AccessibilityModule', () => {
 
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click', 'hook-uuid-99')
 
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99')
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, 'hook-uuid-99', undefined)
         })
 
         it('passes no hook uuid for an ordinary (non-hook) app scan', async () => {
@@ -580,7 +753,7 @@ describe('AccessibilityModule', () => {
 
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click')
 
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined)
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, undefined, undefined)
         })
     })
 })
