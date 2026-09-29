@@ -34,6 +34,7 @@ import WdioMochaTestFramework from '../../../src/cli/frameworks/wdioMochaTestFra
 import { TestFrameworkConstants } from '../../../src/cli/frameworks/constants/testFrameworkConstants.js'
 import { UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS } from '../../../src/constants.js'
 import { BStackLogger } from '../../../src/cli/cliLogger.js'
+import { CLIUtils } from '../../../src/cli/cliUtils.js'
 
 const TEST_UUID = 'test-uuid-1'
 const HOOK_UUID = 'hook-uuid-1'
@@ -58,6 +59,8 @@ function makeInstance(testState: string) {
 describe('UploadAttachmentModule', () => {
     let attachmentPath: string
     let tmpDir: string
+    let writableDir: string
+    const snapshotOf = (level: string, name = 'media.txt') => path.join(writableDir, 'UploadedAttachments-0', level, name)
     let browser: Record<string, unknown>
 
     beforeEach(() => {
@@ -68,6 +71,8 @@ describe('UploadAttachmentModule', () => {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bstack-attachment-test-'))
         attachmentPath = path.join(tmpDir, 'media.txt')
         fs.writeFileSync(attachmentPath, 'hello')
+        writableDir = path.join(tmpDir, 'writable')
+        vi.spyOn(CLIUtils, 'getWritableDir').mockReturnValue(writableDir)
 
         browser = {}
         vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as never)
@@ -109,7 +114,7 @@ describe('UploadAttachmentModule', () => {
             uuid: TEST_UUID,
             fileName: 'media.txt',
             fileSize: 5,
-            filePath: attachmentPath
+            filePath: snapshotOf('TestLevel')
         })
     })
 
@@ -143,7 +148,65 @@ describe('UploadAttachmentModule', () => {
         await (browser.uploadAttachment as (p: string) => Promise<void>)(relative)
 
         const [log] = logCreatedEvent.mock.calls[0][0].logs
-        expect(log.filePath).toBe(attachmentPath)
+        expect(log.filePath).toBe(snapshotOf('TestLevel'))
+        expect(fs.readFileSync(log.filePath, 'utf8')).toBe('hello')
+    })
+
+    it('uploads a snapshot, so overwriting the source afterwards does not change the attachment', async () => {
+        await register()
+        await (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+        fs.writeFileSync(attachmentPath, 'changed')
+
+        const [log] = logCreatedEvent.mock.calls[0][0].logs
+        expect(log.filePath).not.toBe(attachmentPath)
+        expect(fs.readFileSync(log.filePath, 'utf8')).toBe('hello')
+    })
+
+    it('keeps an earlier snapshot of the same file name', async () => {
+        await register()
+        await (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+        fs.writeFileSync(attachmentPath, 'second')
+        await (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+
+        expect(logCreatedEvent.mock.calls[1][0].logs[0].filePath).toBe(snapshotOf('TestLevel', 'media1.txt'))
+        expect(fs.readFileSync(snapshotOf('TestLevel'), 'utf8')).toBe('hello')
+        expect(fs.readFileSync(snapshotOf('TestLevel', 'media1.txt'), 'utf8')).toBe('second')
+    })
+
+    it('installNoopFallback makes uploadAttachment/uploadMedia callable without Test Reporting', async () => {
+        const bare: Record<string, unknown> = {}
+        UploadAttachmentModule.installNoopFallback(bare as never)
+
+        expect(typeof bare.uploadAttachment).toBe('function')
+        expect(bare.uploadMedia).toBe(bare.uploadAttachment)
+        await expect((bare.uploadMedia as (p: string) => Promise<void>)(attachmentPath)).resolves.toBeUndefined()
+        expect(logCreatedEvent).not.toHaveBeenCalled()
+    })
+
+    it('installNoopFallback leaves an implementation the module already registered', async () => {
+        await register()
+        const registered = browser.uploadAttachment
+        UploadAttachmentModule.installNoopFallback(browser as never)
+        expect(browser.uploadAttachment).toBe(registered)
+    })
+
+    it('onBeforeExecute replaces the no-op fallback with the real implementation', async () => {
+        UploadAttachmentModule.installNoopFallback(browser as never)
+        const fallback = browser.uploadAttachment
+        await register()
+        expect(browser.uploadAttachment).not.toBe(fallback)
+        await (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+        expect(logCreatedEvent).toHaveBeenCalledTimes(1)
+    })
+
+    it('cleanupUploadedAttachments removes only the UploadedAttachments-<n> folders', () => {
+        fs.mkdirSync(path.join(writableDir, 'UploadedAttachments-0', 'TestLevel'), { recursive: true })
+        fs.mkdirSync(path.join(writableDir, 'UploadedAttachments-3'), { recursive: true })
+        fs.mkdirSync(path.join(writableDir, 'cli'), { recursive: true })
+
+        UploadAttachmentModule.cleanupUploadedAttachments()
+
+        expect(fs.readdirSync(writableDir).sort()).toEqual(['cli'])
     })
 
     it.each([

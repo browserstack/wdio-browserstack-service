@@ -64,6 +64,7 @@ import { sendFinish, sendStart } from './instrumentation/funnelInstrumentation.j
 import AiHandler from './ai-handler.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
+import UploadAttachmentModule from './cli/modules/uploadAttachmentModule.js'
 import { BrowserstackCLI } from './cli/index.js'
 import { CLIUtils } from './cli/cliUtils.js'
 import accessibilityScripts from './scripts/accessibility-scripts.js'
@@ -661,6 +662,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 BStackLogger.error(`Error while stopping CLI ${err}`)
                 PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.STOP, false, format(err))
             }
+            UploadAttachmentModule.cleanupUploadedAttachments()
             if (process.env[BROWSERSTACK_OBSERVABILITY] && process.env[BROWSERSTACK_TESTHUB_UUID]) {
                 console.log(`\nVisit https://automation.browserstack.com/builds/${process.env[BROWSERSTACK_TESTHUB_UUID]} to view build report, insights, and many more debugging information all at one place!\n`)
             }

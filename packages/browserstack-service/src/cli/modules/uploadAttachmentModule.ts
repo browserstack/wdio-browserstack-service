@@ -18,6 +18,7 @@ import type { AttachmentLevel, AttachmentOptions } from '../../types.js'
 
 /** Parity with the Java / Python / Node SDKs, which all reject above 100 MB. */
 const MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
+const UPLOADED_ATTACHMENTS_PREFIX = 'UploadedAttachments-'
 
 /**
  * UploadAttachmentModule — CLI/gRPC path registration for `browser.uploadAttachment`
@@ -27,10 +28,12 @@ const MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
  * (observer-bound to AutomationFrameworkState.CREATE / HookState.POST), instantiated
  * from BrowserstackCLI.loadModules() whenever the binary is up.
  *
- * The file itself is NOT copied. The binary streams it from `filePath` when it drains
- * its upload queue, which can be after this process has moved on — so the entry carries
- * the caller's own absolute path, and the binary reads it in place. `level` is what the
- * binary switches on to pick test_run_uuid / hook_run_uuid / build_run_uuid.
+ * The binary streams the file from `filePath` only when it drains its upload queue, so the
+ * file is snapshotted into `UploadedAttachments-<platformIndex>/<level>/` under the writable
+ * dir first (as the Python and Java SDKs do): a caller that overwrites or deletes its file
+ * right after the call would otherwise attach the wrong content or nothing. The launcher
+ * removes these folders in onComplete. `level` is what the binary switches on to pick
+ * test_run_uuid / hook_run_uuid / build_run_uuid.
  */
 export default class UploadAttachmentModule extends BaseModule {
 
@@ -116,7 +119,72 @@ export default class UploadAttachmentModule extends BaseModule {
             return
         }
 
-        this.sendAttachmentEvent(instance, resolvedPath, stats.size, target)
+        const platformIndex = UploadAttachmentModule.platformIndex()
+        const snapshotPath = UploadAttachmentModule.snapshot(resolvedPath, platformIndex, target.level)
+        if (!snapshotPath) {
+            this.logger.warn(`uploadAttachment: could not snapshot ${resolvedPath}; ignoring call`)
+            return
+        }
+
+        this.sendAttachmentEvent(instance, snapshotPath, stats.size, target, platformIndex)
+    }
+
+    private static platformIndex() {
+        return process.env.WDIO_WORKER_ID ? parseInt(process.env.WDIO_WORKER_ID.split('-')[0]) : 0
+    }
+
+    private static snapshot(sourcePath: string, platformIndex: number, level: AttachmentLevel): string | null {
+        try {
+            const root = CLIUtils.getWritableDir()
+            if (!root) {
+                return null
+            }
+            const targetDir = path.join(root, `${UPLOADED_ATTACHMENTS_PREFIX}${platformIndex}`, level)
+            fs.mkdirSync(targetDir, { recursive: true })
+            const ext = path.extname(sourcePath)
+            const base = path.basename(sourcePath, ext)
+            let targetPath = path.join(targetDir, `${base}${ext}`)
+            for (let counter = 1; fs.existsSync(targetPath); counter++) {
+                targetPath = path.join(targetDir, `${base}${counter}${ext}`)
+            }
+            fs.copyFileSync(sourcePath, targetPath)
+            return targetPath
+        } catch (error) {
+            BStackLogger.debug(`uploadAttachment: snapshot of ${sourcePath} failed: ${error}`)
+            return null
+        }
+    }
+
+    /**
+     * Keeps uploadAttachment/uploadMedia callable when Test Reporting is inactive (no testhub,
+     * classic path, CLI down), as the other SDKs do. onBeforeExecute replaces it when the
+     * binary is up, and an already-registered implementation is left alone.
+     */
+    static installNoopFallback(browser?: WebdriverIO.Browser) {
+        if (!browser || typeof browser.uploadAttachment === 'function') {
+            return
+        }
+        const noopUploadAttachment = async (filePath: string) => {
+            BStackLogger.debug(`uploadAttachment: Test Reporting is not active; ${filePath} was not uploaded`)
+        }
+        browser.uploadAttachment = noopUploadAttachment
+        browser.uploadMedia = noopUploadAttachment
+    }
+
+    static cleanupUploadedAttachments() {
+        try {
+            const root = CLIUtils.getWritableDir()
+            if (!root || !fs.existsSync(root)) {
+                return
+            }
+            for (const entry of fs.readdirSync(root)) {
+                if (new RegExp(`^${UPLOADED_ATTACHMENTS_PREFIX}\\d+$`).test(entry)) {
+                    fs.rmSync(path.join(root, entry), { recursive: true, force: true })
+                }
+            }
+        } catch (error) {
+            BStackLogger.debug(`uploadAttachment: cleanup of attachment snapshots failed: ${error}`)
+        }
     }
 
     /**
@@ -160,11 +228,11 @@ export default class UploadAttachmentModule extends BaseModule {
         instance: TestFrameworkInstance,
         filePath: string,
         fileSize: number,
-        target: { level: AttachmentLevel, uuid: string, testFrameworkState: string }
+        target: { level: AttachmentLevel, uuid: string, testFrameworkState: string },
+        platformIndex: number
     ) {
         const testData = instance.getAllData()
         const trackedContext = instance.getContext()
-        const platformIndex = process.env.WDIO_WORKER_ID ? parseInt(process.env.WDIO_WORKER_ID.split('-')[0]) : 0
 
         const ack = GrpcClient.getInstance().logCreatedEvent({
             platformIndex,
@@ -193,6 +261,7 @@ export default class UploadAttachmentModule extends BaseModule {
             ack.then(() => 'ok', (error) => `failed: ${error}`),
             new Promise<string>((resolve) => {
                 timer = setTimeout(() => resolve('unacked'), UPLOAD_ATTACHMENT_ACK_TIMEOUT_MS)
+                timer.unref()
             })
         ]).then((outcome) => {
             clearTimeout(timer)
