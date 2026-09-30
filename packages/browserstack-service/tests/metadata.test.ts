@@ -68,11 +68,14 @@ describe('TestMetadata', () => {
     })
 
     describe('fallback vs per-uuid storage', () => {
-        it('stores as fallback for the no-uuid (current-run) lookup, but not for unknown uuids', () => {
+        it('stores as fallback for the no-uuid (current-run) lookup', () => {
             TestMetadata.set({ identifier: 'run-1' })
             expect(TestMetadata.get()).toEqual({ identifier: 'run-1' })
-            // A per-uuid lookup must not leak the current-run fallback.
-            expect(TestMetadata.get('unknown-uuid')).toEqual({})
+        })
+
+        it('serves the fallback to a uuid lookup when the uuid was learned after set()', () => {
+            TestMetadata.set({ identifier: 'run-1' })
+            expect(TestMetadata.get('uuid-assigned-later')).toEqual({ identifier: 'run-1' })
         })
 
         it('stores per-uuid when a current test-run uuid is set', () => {
@@ -81,9 +84,17 @@ describe('TestMetadata', () => {
             expect(TestMetadata.get('uuid-1')).toEqual({ identifier: 'run-1' })
         })
 
-        it('returns {} for an unknown uuid instead of leaking another run\'s metadata', () => {
+        it('falls back to the current-run metadata for an unrecognised uuid', () => {
             TestMetadata.setCurrentTestRunUuid('uuid-1')
             TestMetadata.set({ identifier: 'run-1' })
+            expect(TestMetadata.get('uuid-2')).toEqual({ identifier: 'run-1' })
+        })
+
+        it('does not carry a previous run\'s metadata once reset() has run between tests', () => {
+            TestMetadata.setCurrentTestRunUuid('uuid-1')
+            TestMetadata.set({ identifier: 'run-1' })
+            TestMetadata.reset()
+            TestMetadata.setCurrentTestRunUuid('uuid-2')
             expect(TestMetadata.get('uuid-2')).toEqual({})
         })
 
