@@ -256,6 +256,12 @@ export const STOP_BUILD_ATTEMPT_TIMEOUT_MS = 10000
 export const STOP_BUILD_TOTAL_BUDGET_MS = 30000
 export const STOP_BUILD_BACKOFF_BASE_MS = 1000
 
+// SDK-7518: finalizeOrphanedRuns posts synthetic TestRunFinished events during shutdown,
+// immediately before the build-stop call. Bound that POST so a hung connection cannot stall
+// shutdown before the build is stopped (which leaves the build "running" until the server-side
+// inactivity timeout). Sibling to STOP_BUILD_ATTEMPT_TIMEOUT_MS on the same shutdown path.
+export const ORPHAN_FINALIZE_POST_TIMEOUT_MS = 10000
+
 // API Endpoint constants
 export const UPDATED_CLI_ENDPOINT = 'sdk/v1/update_cli'
 
