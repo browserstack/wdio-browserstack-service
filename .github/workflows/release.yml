@@ -97,6 +97,7 @@ jobs:
       # Merge the "Version Packages" PR first: this publishes only when there are no pending
       # changesets. If any remain, the action safely opens/updates the Version PR instead.
       - name: Publish to npm
+        id: publish
         if: github.event_name == 'workflow_dispatch' && inputs.publish
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
         with:
@@ -106,6 +107,56 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No NPM_TOKEN: auth is OIDC via id-token: write above.
           NPM_CONFIG_PROVENANCE: 'true'
+
+      # railsApp derives a version's tier from the sdk_version_releases catalog; without this
+      # callback the catalog only advances when someone re-runs the registry backfill.
+      # Gated on steps.publish.outputs.published because the action opens the Version PR and
+      # publishes nothing when changesets are still pending. Serves both release lines — this
+      # workflow runs on main (v9) and on v8 — so no branch special-casing.
+      - name: Record release in the SDK version catalog
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.publish
+          && steps.publish.outputs.published == 'true'
+        continue-on-error: true
+        env:
+          SDK_RELEASE_SERVICE_CREDS: ${{ secrets.SDK_RELEASE_SERVICE_CREDS }}
+          PUBLISHED_PACKAGES: ${{ steps.publish.outputs.publishedPackages }}
+        run: |
+          set -uo pipefail
+
+          if [ -z "${SDK_RELEASE_SERVICE_CREDS:-}" ]; then
+            echo "::warning::sdk-release-service credential not configured; skipping catalog write"
+            exit 0
+          fi
+
+          VERSION="$(printf '%s' "$PUBLISHED_PACKAGES" \
+            | jq -r '.[] | select(.name == "@wdio/browserstack-service") | .version' \
+            | head -n1)"
+
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*$'; then
+            echo "::warning::'$VERSION' is not a release version; skipping catalog write"
+            exit 0
+          fi
+
+          printf '{"language":"ecmascript","version":"%s","release_date":"%s"}' \
+            "$VERSION" "$(date -u +%F)" > /tmp/sdkrel_payload.json
+
+          HTTP_CODE=$(curl -s -o /tmp/sdkrel_body.json -w '%{http_code}' \
+            --max-time 20 --retry 2 --retry-delay 3 \
+            -X POST "https://api.browserstack.com/sdk/v1/admin/releases" \
+            -u "$SDK_RELEASE_SERVICE_CREDS" \
+            -H 'Content-Type: application/json' \
+            -d @/tmp/sdkrel_payload.json)
+
+          echo "SDK release catalog responded $HTTP_CODE for ecmascript $VERSION"
+          cat /tmp/sdkrel_body.json 2>/dev/null || true
+          rm -f /tmp/sdkrel_payload.json /tmp/sdkrel_body.json
+
+          case "$HTTP_CODE" in
+            200|201) ;;
+            409) echo "::warning::ecmascript $VERSION is already recorded with a DIFFERENT release_date. Investigate; do not force." ;;
+            *)   echo "::warning::could not record ecmascript $VERSION (HTTP $HTTP_CODE). The publish succeeded; the catalog stays stale for this version until the next backfill." ;;
+          esac
 
       # Canary (manual, workflow_dispatch with canary=true): snapshot-version the pending
       # changesets and publish a prerelease to the `canary` dist-tag via the SAME OIDC trusted
