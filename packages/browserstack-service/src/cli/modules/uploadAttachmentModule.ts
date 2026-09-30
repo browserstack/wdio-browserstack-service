@@ -18,7 +18,7 @@ import type { AttachmentLevel, AttachmentOptions } from '../../types.js'
 
 /** Parity with the Java / Python / Node SDKs, which all reject above 100 MB. */
 const MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
-const UPLOADED_ATTACHMENTS_PREFIX = 'UploadedAttachments-'
+const UPLOADED_ATTACHMENTS_PREFIX = 'UploadedAttachments-wdio-'
 
 /**
  * UploadAttachmentModule — CLI/gRPC path registration for `browser.uploadAttachment`
@@ -29,11 +29,13 @@ const UPLOADED_ATTACHMENTS_PREFIX = 'UploadedAttachments-'
  * from BrowserstackCLI.loadModules() whenever the binary is up.
  *
  * The binary streams the file from `filePath` only when it drains its upload queue, so the
- * file is snapshotted into `UploadedAttachments-<platformIndex>/<level>/` under the writable
- * dir first (as the Python and Java SDKs do): a caller that overwrites or deletes its file
- * right after the call would otherwise attach the wrong content or nothing. The launcher
- * removes these folders in onComplete. `level` is what the binary switches on to pick
- * test_run_uuid / hook_run_uuid / build_run_uuid.
+ * file is snapshotted first: a caller that overwrites or deletes its file right after the call
+ * would otherwise attach the wrong content or nothing. Snapshots go to
+ * `UploadedAttachments-wdio-<bin session id>/<worker pid>/<level>/` under the writable dir:
+ * per worker, so parallel workers never pick the same name, and per wdio run, so the Python
+ * and Java SDKs (`UploadedAttachments-<n>/`) and other runs on the host never read or delete
+ * them. The launcher removes this run's folder in onComplete. `level` is what the binary
+ * switches on to pick test_run_uuid / hook_run_uuid / build_run_uuid.
  */
 export default class UploadAttachmentModule extends BaseModule {
 
@@ -119,36 +121,46 @@ export default class UploadAttachmentModule extends BaseModule {
             return
         }
 
-        const platformIndex = UploadAttachmentModule.platformIndex()
-        const snapshotPath = UploadAttachmentModule.snapshot(resolvedPath, platformIndex, target.level)
+        const snapshotPath = UploadAttachmentModule.snapshot(resolvedPath, target.level)
         if (!snapshotPath) {
             this.logger.warn(`uploadAttachment: could not snapshot ${resolvedPath}; ignoring call`)
             return
         }
 
-        this.sendAttachmentEvent(instance, snapshotPath, stats.size, target, platformIndex)
+        this.sendAttachmentEvent(instance, snapshotPath, stats.size, target, UploadAttachmentModule.platformIndex())
     }
 
     private static platformIndex() {
         return process.env.WDIO_WORKER_ID ? parseInt(process.env.WDIO_WORKER_ID.split('-')[0]) : 0
     }
 
-    private static snapshot(sourcePath: string, platformIndex: number, level: AttachmentLevel): string | null {
+    private static runAttachmentsDir(): string | null {
+        const root = CLIUtils.getWritableDir()
+        const runId = process.env.BROWSERSTACK_CLI_BIN_SESSION_ID
+        return root && runId ? path.join(root, `${UPLOADED_ATTACHMENTS_PREFIX}${runId}`) : null
+    }
+
+    private static snapshot(sourcePath: string, level: AttachmentLevel): string | null {
         try {
-            const root = CLIUtils.getWritableDir()
-            if (!root) {
+            const runDir = UploadAttachmentModule.runAttachmentsDir()
+            if (!runDir) {
                 return null
             }
-            const targetDir = path.join(root, `${UPLOADED_ATTACHMENTS_PREFIX}${platformIndex}`, level)
+            const targetDir = path.join(runDir, String(process.pid), level)
             fs.mkdirSync(targetDir, { recursive: true })
             const ext = path.extname(sourcePath)
             const base = path.basename(sourcePath, ext)
-            let targetPath = path.join(targetDir, `${base}${ext}`)
-            for (let counter = 1; fs.existsSync(targetPath); counter++) {
-                targetPath = path.join(targetDir, `${base}${counter}${ext}`)
+            for (let counter = 0; ; counter++) {
+                const targetPath = path.join(targetDir, counter ? `${base}${counter}${ext}` : `${base}${ext}`)
+                try {
+                    fs.copyFileSync(sourcePath, targetPath, fs.constants.COPYFILE_EXCL)
+                    return targetPath
+                } catch (error) {
+                    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+                        throw error
+                    }
+                }
             }
-            fs.copyFileSync(sourcePath, targetPath)
-            return targetPath
         } catch (error) {
             BStackLogger.debug(`uploadAttachment: snapshot of ${sourcePath} failed: ${error}`)
             return null
@@ -173,14 +185,9 @@ export default class UploadAttachmentModule extends BaseModule {
 
     static cleanupUploadedAttachments() {
         try {
-            const root = CLIUtils.getWritableDir()
-            if (!root || !fs.existsSync(root)) {
-                return
-            }
-            for (const entry of fs.readdirSync(root)) {
-                if (new RegExp(`^${UPLOADED_ATTACHMENTS_PREFIX}\\d+$`).test(entry)) {
-                    fs.rmSync(path.join(root, entry), { recursive: true, force: true })
-                }
+            const runDir = UploadAttachmentModule.runAttachmentsDir()
+            if (runDir) {
+                fs.rmSync(runDir, { recursive: true, force: true })
             }
         } catch (error) {
             BStackLogger.debug(`uploadAttachment: cleanup of attachment snapshots failed: ${error}`)

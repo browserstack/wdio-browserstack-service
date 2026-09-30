@@ -60,8 +60,11 @@ describe('UploadAttachmentModule', () => {
     let attachmentPath: string
     let tmpDir: string
     let writableDir: string
-    const snapshotOf = (level: string, name = 'media.txt') => path.join(writableDir, 'UploadedAttachments-0', level, name)
+    const BIN_SESSION_ID = 'bin-session-1'
+    const runDirOf = (runId = BIN_SESSION_ID) => path.join(writableDir, `UploadedAttachments-wdio-${runId}`)
+    const snapshotOf = (level: string, name = 'media.txt', pid = process.pid) => path.join(runDirOf(), String(pid), level, name)
     let browser: Record<string, unknown>
+    let previousBinSessionId: string | undefined
 
     beforeEach(() => {
         vi.clearAllMocks()
@@ -73,6 +76,8 @@ describe('UploadAttachmentModule', () => {
         fs.writeFileSync(attachmentPath, 'hello')
         writableDir = path.join(tmpDir, 'writable')
         vi.spyOn(CLIUtils, 'getWritableDir').mockReturnValue(writableDir)
+        previousBinSessionId = process.env.BROWSERSTACK_CLI_BIN_SESSION_ID
+        process.env.BROWSERSTACK_CLI_BIN_SESSION_ID = BIN_SESSION_ID
 
         browser = {}
         vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as never)
@@ -86,6 +91,11 @@ describe('UploadAttachmentModule', () => {
         // next test passes for the wrong reason.
         vi.restoreAllMocks()
         vi.useRealTimers()
+        if (previousBinSessionId === undefined) {
+            delete process.env.BROWSERSTACK_CLI_BIN_SESSION_ID
+        } else {
+            process.env.BROWSERSTACK_CLI_BIN_SESSION_ID = previousBinSessionId
+        }
         fs.rmSync(tmpDir, { recursive: true, force: true })
     })
 
@@ -173,6 +183,47 @@ describe('UploadAttachmentModule', () => {
         expect(fs.readFileSync(snapshotOf('TestLevel', 'media1.txt'), 'utf8')).toBe('second')
     })
 
+    it('snapshots into its own worker folder, apart from a parallel worker with the same file name', async () => {
+        const otherWorker = snapshotOf('TestLevel', 'media.txt', process.pid + 1)
+        fs.mkdirSync(path.dirname(otherWorker), { recursive: true })
+        fs.writeFileSync(otherWorker, 'other worker')
+
+        await register()
+        await (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+
+        expect(logCreatedEvent.mock.calls[0][0].logs[0].filePath).toBe(snapshotOf('TestLevel'))
+        expect(fs.readFileSync(snapshotOf('TestLevel'), 'utf8')).toBe('hello')
+        expect(fs.readFileSync(otherWorker, 'utf8')).toBe('other worker')
+    })
+
+    it('takes the next name when another writer claims it between the pick and the copy', async () => {
+        const realCopy = fs.copyFileSync
+        let raced = false
+        vi.spyOn(fs, 'copyFileSync').mockImplementation((src, dest, mode) => {
+            if (!raced) {
+                raced = true
+                fs.writeFileSync(dest, 'racer')
+            }
+            return realCopy(src, dest, mode)
+        })
+
+        await register()
+        await (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+
+        expect(logCreatedEvent.mock.calls[0][0].logs[0].filePath).toBe(snapshotOf('TestLevel', 'media1.txt'))
+        expect(fs.readFileSync(snapshotOf('TestLevel'), 'utf8')).toBe('racer')
+        expect(fs.readFileSync(snapshotOf('TestLevel', 'media1.txt'), 'utf8')).toBe('hello')
+    })
+
+    it('does not send without a CLI bin session to key the snapshot folder on', async () => {
+        delete process.env.BROWSERSTACK_CLI_BIN_SESSION_ID
+        await register()
+        await (browser.uploadAttachment as (p: string) => Promise<void>)(attachmentPath)
+
+        expect(logCreatedEvent).not.toHaveBeenCalled()
+        expect(fs.existsSync(writableDir)).toBe(false)
+    })
+
     it('installNoopFallback makes uploadAttachment/uploadMedia callable without Test Reporting', async () => {
         const bare: Record<string, unknown> = {}
         UploadAttachmentModule.installNoopFallback(bare as never)
@@ -199,14 +250,15 @@ describe('UploadAttachmentModule', () => {
         expect(logCreatedEvent).toHaveBeenCalledTimes(1)
     })
 
-    it('cleanupUploadedAttachments removes only the UploadedAttachments-<n> folders', () => {
-        fs.mkdirSync(path.join(writableDir, 'UploadedAttachments-0', 'TestLevel'), { recursive: true })
-        fs.mkdirSync(path.join(writableDir, 'UploadedAttachments-3'), { recursive: true })
+    it('cleanupUploadedAttachments removes only this run\'s folder', () => {
+        fs.mkdirSync(path.join(runDirOf(), String(process.pid), 'TestLevel'), { recursive: true })
+        fs.mkdirSync(path.join(runDirOf('other-run'), '123', 'TestLevel'), { recursive: true })
+        fs.mkdirSync(path.join(writableDir, 'UploadedAttachments-0', 'HookLevel'), { recursive: true })
         fs.mkdirSync(path.join(writableDir, 'cli'), { recursive: true })
 
         UploadAttachmentModule.cleanupUploadedAttachments()
 
-        expect(fs.readdirSync(writableDir).sort()).toEqual(['cli'])
+        expect(fs.readdirSync(writableDir).sort()).toEqual(['UploadedAttachments-0', 'UploadedAttachments-wdio-other-run', 'cli'])
     })
 
     it.each([
