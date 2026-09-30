@@ -23,6 +23,7 @@ import AccessibilityHandler from './accessibility-handler.js'
 import CustomTagsHandler from './custom-tags-handler.js'
 import { classifyMochaHookTitle, setCurrentMochaHookWindow } from './customTags.js'
 import type TestHubModule from './cli/modules/testHubModule.js'
+import UploadAttachmentModule from './cli/modules/uploadAttachmentModule.js'
 import { BStackLogger } from './bstackLogger.js'
 import PercyHandler from './Percy/Percy-Handler.js'
 import Listener from './testOps/listener.js'
@@ -229,6 +230,8 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // added to maintain backward compatibility with webdriverIO v5
         this._browser = browser ? browser : globalThis.browser
         PerformanceTester.browser = this._browser
+
+        UploadAttachmentModule.installNoopFallback(this._browser)
 
         // Healing Support:
         if (!isBrowserstackSession(this._browser)) {

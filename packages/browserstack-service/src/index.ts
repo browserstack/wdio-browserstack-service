@@ -27,7 +27,9 @@ declare global {
             performScan: () => Promise<Record<string, unknown> | undefined>,
             startA11yScanning: () => Promise<void>,
             stopA11yScanning: () => Promise<void>,
-            setCustomTags: (key: string, value: string) => Promise<void>
+            setCustomTags: (key: string, value: string) => Promise<void>,
+            uploadAttachment: (filePath: string, options?: { buildAttachment?: boolean }) => Promise<void>,
+            uploadMedia: (filePath: string, options?: { buildAttachment?: boolean }) => Promise<void>
         }
     }
     interface State {
