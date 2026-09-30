@@ -1,5 +1,13 @@
 # @wdio/browserstack-service
 
+## 9.39.2
+
+### Patch Changes
+
+- b3ed8ef: - Fixed a configured `buildIdentifier` being dropped from the build name when `BROWSERSTACK_BUILD_NAME` was set via environment variable.
+  - `BROWSERSTACK_BUILD_RUN_IDENTIFIER` and `BROWSERSTACK_BUILD_IDENTIFIER` are now honoured as build-identifier overrides.
+  - Placeholders such as `${CUSTOM_DATE}` in `buildIdentifier` are now substituted from the environment.
+
 ## 9.39.1
 
 ### Patch Changes
