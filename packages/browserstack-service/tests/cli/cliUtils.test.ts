@@ -699,4 +699,14 @@ describe('CLIUtils', () => {
             expect(CLIUtils.getCliDir()).toBe('')
         })
     })
+
+    describe('checkCLISupportedFrameworks', () => {
+        it.each(['mocha', 'cucumber', 'jasmine'])('routes %s to the CLI flow', (framework) => {
+            expect(CLIUtils.checkCLISupportedFrameworks(framework)).toBe(true)
+        })
+
+        it.each([undefined, 'WebdriverIO-jasmine', 'Jasmine', 'unknown'])('keeps %s on the legacy flow', (framework) => {
+            expect(CLIUtils.checkCLISupportedFrameworks(framework)).toBe(false)
+        })
+    })
 })

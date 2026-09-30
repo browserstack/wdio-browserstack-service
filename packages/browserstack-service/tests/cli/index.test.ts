@@ -3,6 +3,11 @@ import * as bstackLogger from '../../src/bstackLogger.js'
 import { BStackLogger } from '../../src/cli/cliLogger.js'
 
 import { BrowserstackCLI } from '../../src/cli/index.js'
+import { CLIUtils } from '../../src/cli/cliUtils.js'
+import TestFramework from '../../src/cli/frameworks/testFramework.js'
+import WdioMochaTestFramework from '../../src/cli/frameworks/wdioMochaTestFramework.js'
+import WdioCucumberTestFramework from '../../src/cli/frameworks/wdioCucumberTestFramework.js'
+import WdioJasmineTestFramework from '../../src/cli/frameworks/wdioJasmineTestFramework.js'
 
 const bstackLoggerSpy = vi.spyOn(bstackLogger.BStackLogger, 'logToFile')
 bstackLoggerSpy.mockImplementation(() => {})
@@ -117,6 +122,39 @@ describe('BrowserstackCLI bootstrap error surfacing', () => {
         it('keeps the flat apis when no bucket is present (old binary)', () => {
             setConfigWith({ apis: { automate: { api: 'https://flat-only.example' } } })
             expect(instance.config.apis).toEqual({ automate: { api: 'https://flat-only.example' } })
+        })
+    })
+
+    describe('setupTestFramework', () => {
+        afterEach(() => {
+            instance.testFramework = null
+        })
+
+        const setup = (name: string) => {
+            vi.spyOn(CLIUtils, 'getTestFrameworkDetail').mockReturnValue({ name, version: { [name]: '9.0.0' } })
+            instance.setupTestFramework()
+            return instance.getTestFramework()
+        }
+
+        it('constructs the jasmine framework for WebdriverIO-jasmine', () => {
+            const framework = setup('WebdriverIO-jasmine')
+            expect(framework).toBeInstanceOf(WdioJasmineTestFramework)
+            expect(framework).not.toBeInstanceOf(WdioMochaTestFramework)
+            expect(framework).toBeInstanceOf(TestFramework)
+            expect(framework!.getTestFrameworks()).toEqual(['WebdriverIO-jasmine'])
+            expect(framework!.getTestFrameworksVersions()).toEqual({ 'WebdriverIO-jasmine': '9.0.0' })
+        })
+
+        it('still constructs the mocha framework for WebdriverIO-mocha', () => {
+            expect(setup('WebdriverIO-mocha')).toBeInstanceOf(WdioMochaTestFramework)
+        })
+
+        it('still constructs the cucumber framework for WebdriverIO-cucumber', () => {
+            expect(setup('WebdriverIO-cucumber')).toBeInstanceOf(WdioCucumberTestFramework)
+        })
+
+        it('leaves an unknown name unregistered', () => {
+            expect(setup('WebdriverIO-unknown')).toBeNull()
         })
     })
 })
