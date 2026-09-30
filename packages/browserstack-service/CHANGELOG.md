@@ -1,5 +1,15 @@
 # @wdio/browserstack-service
 
+## 8.53.1
+
+### Patch Changes
+
+- 3cb779e: - Fixed custom test metadata set via `BrowserStackSDK.setTestMetadata()` being dropped when the metadata is set before the test-run UUID is assigned. A per-UUID lookup now falls back to the current-run metadata again, restoring the behaviour that shipped before 8.51.0.
+- 4a49c07: - Fixed a configured `buildIdentifier` being dropped from the build name when `BROWSERSTACK_BUILD_NAME` was set via environment variable.
+  - `BROWSERSTACK_BUILD_RUN_IDENTIFIER` and `BROWSERSTACK_BUILD_IDENTIFIER` are now honoured as build-identifier overrides.
+  - Placeholders such as `${CUSTOM_DATE}` in `buildIdentifier` are now substituted from the environment.
+- 9fc22b2: - Fixed custom test metadata set via `BrowserStackSDK.setTestMetadata()` before the test-run UUID is assigned being dropped for App Low-Code runs.
+
 ## 8.53.0
 
 ### Minor Changes
