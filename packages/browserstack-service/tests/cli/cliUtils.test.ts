@@ -441,6 +441,41 @@ describe('CLIUtils', () => {
                 mockConfig
             )
         })
+
+        it('falls back to BROWSERSTACK_BINARY_URL when update_cli fails (SDK-6948)', async () => {
+            const saved = process.env.BROWSERSTACK_BINARY_URL
+            process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
+            try {
+                const fallbackPath = '/mock/cli/dir/binary-fallback'
+                vi.spyOn(CLIUtils, 'runShellCommand').mockResolvedValue('1.0.0')
+                // update_cli fails (e.g. staging creds against the prod api host -> 401)
+                vi.spyOn(CLIUtils, 'requestToUpdateCLI').mockRejectedValue({ response: { statusCode: 401 } })
+                vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue(fallbackPath)
+
+                const result = await CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, mockConfig)
+
+                expect(result).toBe(fallbackPath)
+                expect(CLIUtils.downloadLatestBinary).toHaveBeenCalledWith('https://example.com/staging-binary.zip', mockCliDir)
+            } finally {
+                if (saved === undefined) { delete process.env.BROWSERSTACK_BINARY_URL } else { process.env.BROWSERSTACK_BINARY_URL = saved }
+            }
+        })
+
+        it('re-throws when update_cli fails and no BROWSERSTACK_BINARY_URL is set (unchanged behaviour)', async () => {
+            const saved = process.env.BROWSERSTACK_BINARY_URL
+            delete process.env.BROWSERSTACK_BINARY_URL
+            try {
+                const err = new Error('Unauthorized')
+                vi.spyOn(CLIUtils, 'runShellCommand').mockResolvedValue('1.0.0')
+                vi.spyOn(CLIUtils, 'requestToUpdateCLI').mockRejectedValue(err)
+                const downloadSpy = vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue('/should/not/be/used')
+
+                await expect(CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, mockConfig)).rejects.toBe(err)
+                expect(downloadSpy).not.toHaveBeenCalled()
+            } finally {
+                if (saved !== undefined) { process.env.BROWSERSTACK_BINARY_URL = saved }
+            }
+        })
     })
 
     describe('setupCliPath', () => {
