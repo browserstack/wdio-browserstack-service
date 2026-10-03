@@ -49,6 +49,7 @@
     "build": "rimraf ./build src/grpc/generated && buf generate && node ./scripts/build.mjs && tsc -p tsconfig.prod.json",
     "build:watch": "node ./scripts/build.mjs --watch",
     "test": "vitest --run",
+    "test:types": "tsc -p tests/types/tsconfig.json",
     "test:watch": "vitest",
     "prepack": "npm run build"
   },
