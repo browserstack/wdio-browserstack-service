@@ -812,7 +812,8 @@ class _InsightsHandler {
                     logEntry: {
                         kind: TestFrameworkConstants.KIND_SCREENSHOT,
                         message: result.value,
-                        timestamp: new Date().toISOString()
+                        timestamp: new Date().toISOString(),
+                        ...(this._framework === 'jasmine' ? { test_run_uuid: testMeta.uuid } : {})
                     }
                 })
                 : this.listener.onScreenshot([{
@@ -829,16 +830,29 @@ class _InsightsHandler {
         }
 
         // log http request
+        const httpResponse = {
+            path: requestData.endpoint,
+            method: requestData.method,
+            body,
+            response: result
+        }
+        // Only jasmine registers `command` on the CLI flow, and the legacy listener is inert there
+        if (BrowserstackCLI.getInstance().isRunning()) {
+            await BrowserstackCLI.getInstance().getTestFramework()?.trackEvent(TestFrameworkState.LOG, HookState.POST, {
+                logEntry: {
+                    kind: 'HTTP',
+                    message: JSON.stringify(httpResponse),
+                    timestamp: new Date().toISOString(),
+                    test_run_uuid: testMeta.uuid
+                }
+            })
+            return
+        }
         this.listener.logCreated([{
             test_run_uuid: testMeta.uuid,
             timestamp: new Date().toISOString(),
             kind: 'HTTP',
-            http_response: {
-                path: requestData.endpoint,
-                method: requestData.method,
-                body,
-                response: result
-            }
+            http_response: httpResponse
         }]
         )
     }

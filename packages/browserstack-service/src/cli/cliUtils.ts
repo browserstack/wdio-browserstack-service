@@ -23,6 +23,7 @@ import {
     isFalse,
     isTurboScale,
     shouldAddServiceVersion,
+    getTestPlanId,
 } from '../util.js'
 import PerformanceTester from '../instrumentation/performance/performance-tester.js'
 import { EVENTS as PerformanceEvents } from '../instrumentation/performance/constants.js'
@@ -32,7 +33,6 @@ import type { Options, Capabilities } from '@wdio/types'
 import type {
     BrowserstackConfig,
     BrowserstackOptions,
-    TestManagementOptions,
     TestObservabilityOptions,
 } from '../types.js'
 import { TestFrameworkConstants } from './frameworks/constants/testFrameworkConstants.js'
@@ -47,7 +47,7 @@ const CLI_DOWNLOAD_TMP_SUFFIX = '.zip'
 export class CLIUtils {
     static automationFrameworkDetail = {}
     static testFrameworkDetail = {}
-    static CLISupportedFrameworks = ['mocha', 'cucumber']
+    static CLISupportedFrameworks = ['mocha', 'cucumber', 'jasmine']
 
     static isDevelopmentEnv() {
         return process.env.BROWSERSTACK_CLI_ENV === 'development'
@@ -116,11 +116,7 @@ export class CLIUtils {
             )
         const observabilityOptions: TestObservabilityOptions =
             options.testObservabilityOptions || {}
-        const testManagementOptions: TestManagementOptions =
-            options.testManagementOptions || {}
-        const testPlanId = typeof testManagementOptions.testPlanId === 'string'
-            ? testManagementOptions.testPlanId.trim()
-            : ''
+        const testPlanId = (getTestPlanId(options as BrowserstackConfig & Options.Testrunner) || '').trim()
         const binconfig: Record<string, unknown> = {
             userName: observabilityOptions.user || config.user,
             accessKey: observabilityOptions.key || config.key,

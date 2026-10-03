@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
-import { GrpcClient } from '../../src/cli/grpcClient.js'
+import { GrpcClient, stripTestPlanIdArg } from '../../src/cli/grpcClient.js'
 import { BStackLogger } from '../../src/cli/cliLogger.js'
 
 vi.mock('../../src/grpc/index.js', () => ({
@@ -239,5 +239,33 @@ describe('GrpcClient.logCreatedEvent', () => {
             fileSize: 2048,
             filePath: '/tmp/screenshot.png'
         })
+    })
+})
+
+describe('stripTestPlanIdArg', () => {
+    const ARG = '--browserstack.testManagementOptions.testPlanId'
+
+    it('drops the arg and its value in the space form', () => {
+        expect(stripTestPlanIdArg(['run', 'wdio.conf.js', ARG, 'TP-123', '--spec', 'a.js']))
+            .toEqual(['run', 'wdio.conf.js', '--spec', 'a.js'])
+    })
+
+    it('drops the arg in the = form', () => {
+        expect(stripTestPlanIdArg(['run', `${ARG}=TP-123`, 'wdio.conf.js']))
+            .toEqual(['run', 'wdio.conf.js'])
+    })
+
+    it('leaves args untouched and in order when the arg is absent', () => {
+        const args = ['run', 'wdio.conf.js', '--browserstack.buildName', 'b1', '--logLevel=info']
+        expect(stripTestPlanIdArg(args)).toEqual(args)
+    })
+
+    it('keeps a following flag when the arg has no value', () => {
+        expect(stripTestPlanIdArg(['run', ARG, '--spec', 'a.js']))
+            .toEqual(['run', '--spec', 'a.js'])
+    })
+
+    it('handles the arg as the last token', () => {
+        expect(stripTestPlanIdArg(['run', 'wdio.conf.js', ARG])).toEqual(['run', 'wdio.conf.js'])
     })
 })

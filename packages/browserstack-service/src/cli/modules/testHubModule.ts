@@ -82,6 +82,10 @@ export default class TestHubModule extends BaseModule {
     }
 
     onBeforeTest(args: Record<string, unknown>) {
+        // Jasmine reports to TestHub from its reporter feed; its module-only dispatches carry this marker
+        if (args.skipTestHub === true) {
+            return
+        }
         this.logger.debug('onBeforeTest: Called after test hook from cli configured module!!!')
         const autoInstance = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
         const instances = [autoInstance]
@@ -90,6 +94,9 @@ export default class TestHubModule extends BaseModule {
     }
 
     onAllTestEvents(args: Record<string, unknown>) {
+        if (args.skipTestHub === true) {
+            return
+        }
         this.logger.debug('onAllTestEvents: Called after all test events from cli configured module!!!')
         const instance = args.instance as TestFrameworkInstance
         const testState = instance.getCurrentTestState()

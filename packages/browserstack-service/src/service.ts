@@ -46,6 +46,7 @@ import { HookState } from './cli/states/hookState.js'
 import { AutomationFrameworkConstants } from './cli/frameworks/constants/automationFrameworkConstants.js'
 import TestFramework from './cli/frameworks/testFramework.js'
 import WdioCucumberTestFramework from './cli/frameworks/wdioCucumberTestFramework.js'
+import WdioJasmineTestFramework from './cli/frameworks/wdioJasmineTestFramework.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
 import AccessibilityModule from './cli/modules/accessibilityModule.js'
@@ -333,12 +334,22 @@ export default class BrowserstackService implements Services.ServiceInstance {
                          * `browserCommand` is the only producer of TEST_SCREENSHOT logs — the binary
                          * has no screenshot producer of its own — so the result event has to be
                          * registered on this path too, or a screenshot taken mid-test never reaches
-                         * Observability (SDK-4177). The `command` (beforeCommand) event is
-                         * deliberately NOT registered: it only fills the map that browserCommand's
-                         * HTTP-log half reads, and that half emits on the JS listener pipeline the
-                         * binary owns here. Leaving it unregistered keeps the screenshot upload —
-                         * which rides its own JWT-authenticated endpoint — as the single effect.
+                         * Observability (SDK-4177). The `command` (beforeCommand) event only fills
+                         * the map browserCommand's HTTP-log half reads, so it is registered for
+                         * jasmine alone, whose HTTP command logs go over gRPC; mocha and cucumber
+                         * never reported them on this path.
                          */
+                        if (this._config.framework === 'jasmine') {
+                            this._browser.on('command', (command) => {
+                                if (shouldProcessEventForTesthub('')) {
+                                    this._insightsHandler?.browserCommand(
+                                        'client:beforeCommand',
+                                        Object.assign(command, { sessionId }),
+                                        this._currentTest
+                                    )
+                                }
+                            })
+                        }
                         this._browser.on('result', (result) => {
                             if (shouldProcessEventForTesthub('')) {
                                 this._insightsHandler?.browserCommand(
@@ -453,7 +464,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeHook' })
-    async beforeHook (test: Frameworks.Test|CucumberHook, context: unknown) {
+    async beforeHook (test: Frameworks.Test|CucumberHook, context: unknown, hookName?: string) {
         if (this._config.framework !== 'cucumber') {
             this._currentTest = test as Frameworks.Test // not update currentTest when this is called for cucumber step
         }
@@ -484,7 +495,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     await framework.trackEvent(hookFrameworkState, HookState.PRE, { test })
                 }
             } else if (framework) {
-                const hookFrameworkState = TestFrameworkState[getHookType((test as Frameworks.Test).title) as keyof typeof TestFrameworkState]
+                const hookFrameworkState = TestFrameworkState[this._cliHookType(test as Frameworks.Test, hookName) as keyof typeof TestFrameworkState]
                 if (hookFrameworkState) {
                     await framework.trackEvent(hookFrameworkState, HookState.PRE, { test })
                 }
@@ -499,7 +510,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'afterHook' })
-    async afterHook(test: Frameworks.Test | CucumberHook, context: unknown, result: Frameworks.TestResult) {
+    async afterHook(test: Frameworks.Test | CucumberHook, context: unknown, result: Frameworks.TestResult, hookName?: string) {
         // The Mocha hook window is closed — clear the tracker (see beforeHook).
         if (this._config.framework === 'mocha') {
             setCurrentMochaHookWindow(null)
@@ -538,16 +549,16 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 return
             }
             if (framework) {
-                const hookFrameworkState = TestFrameworkState[getHookType((test as Frameworks.Test).title) as keyof typeof TestFrameworkState]
+                const hookType = this._cliHookType(test as Frameworks.Test, hookName)
+                const hookFrameworkState = TestFrameworkState[hookType as keyof typeof TestFrameworkState]
                 if (hookFrameworkState) {
                     await framework.trackEvent(hookFrameworkState, HookState.POST, { test, result })
                 }
                 // a failed (or skipping) before/each hook silently drops the suite's remaining
                 // tests in mocha — report them as skipped so they surface on the dashboard and
                 // attribute their Automate session (port of the legacy insights-handler cascade)
-                const hookType = getHookType((test as Frameworks.Test).title)
                 const suite = (test as Frameworks.Test).ctx?.test?.parent
-                if (result && !result.passed && ['BEFORE_ALL', 'BEFORE_EACH', 'AFTER_EACH'].includes(hookType) && suite) {
+                if (this._config.framework === 'mocha' && result && !result.passed && ['BEFORE_ALL', 'BEFORE_EACH', 'AFTER_EACH'].includes(hookType) && suite) {
                     await reportSuiteSkipped(framework, suite)
                 }
             }
@@ -556,6 +567,16 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
         await this._insightsHandler?.afterHook(test, result)
         await this._accessibilityHandler?.afterHook()
+    }
+
+    /**
+     * Jasmine's hook argument is a copy of the last started spec, never the hook itself, so only
+     * the `hookName` WDIO passes says which hook is running.
+     */
+    private _cliHookType(test: Frameworks.Test, hookName?: string) {
+        return this._config.framework === 'jasmine'
+            ? WdioJasmineTestFramework.hookTypeFromName(hookName)
+            : getHookType(test.title)
     }
 
     /**
@@ -626,6 +647,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // skip reporter must never re-report it from onTestSkip
             markTestStarted(getUniqueIdentifier(test, this._config.framework))
             this._insightsHandler?.setTestData(test, uuid)
+            if (this._config.framework === 'jasmine') {
+                await this._setAnnotation(`Test: ${test.fullName ?? test.title}`)
+            }
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
             return
         }

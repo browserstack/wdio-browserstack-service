@@ -10,6 +10,8 @@ import * as utils from '../src/util.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import { TESTOPS_SCREENSHOT_ENV } from '../src/constants.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
+import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
+import { HookState } from '../src/cli/states/hookState.js'
 
 const log = logger('test')
 let insightsHandler: InsightsHandler
@@ -735,6 +737,101 @@ describe('browserCommand', () => {
         insightsHandler['_commands'] = { 'command not here': {} }
         insightsHandler.browserCommand('client:afterCommand', { sessionId: 's', method: 'm', endpoint: 'e', result: { value: 'random' } }, {})
         expect(uploadEventDataSpy).toBeCalledTimes(0)
+    })
+
+    describe('on the CLI flow', () => {
+        const cliBrowser = { on: vi.fn(), sessionId: 's', capabilities: {}, config: {}, execute: vi.fn() } as any
+        const command = { sessionId: 's', method: 'GET', endpoint: '/session/:sessionId/title', body: {} }
+        const result = { ...command, result: { value: 'StackDemo' } }
+        const lastSpec = { description: 'outer passing test', fullName: 'Nested outer outer passing test', file: '/p/nested.spec.js' } as any
+        let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
+
+        const cliWith = (framework: unknown) => {
+            getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                getTestFramework: () => framework,
+                getAutomationFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) })
+            } as any)
+        }
+
+        const handlerFor = (framework: string) => {
+            const handler = new InsightsHandler(cliBrowser, framework)
+            handler['getIdentifier'] = vi.fn().mockReturnValue('Nested outer outer passing test')
+            handler['_tests'] = { 'Nested outer outer passing test': { uuid: 'spec-uuid' } }
+            return handler
+        }
+
+        beforeEach(() => {
+            delete process.env[TESTOPS_SCREENSHOT_ENV]
+            commandSpy.mockRestore()
+        })
+
+        afterEach(() => {
+            getInstanceSpy?.mockRestore()
+            getInstanceSpy = undefined
+        })
+
+        it('sends the HTTP log over gRPC to the named spec, never to the legacy listener', async () => {
+            const trackEvent = vi.fn().mockResolvedValue(undefined)
+            cliWith({ trackEvent })
+            const handler = handlerFor('jasmine')
+            const logCreated = vi.spyOn(handler['listener'], 'logCreated').mockImplementation(() => {})
+
+            await handler.browserCommand('client:beforeCommand', { ...command } as any, lastSpec)
+            await handler.browserCommand('client:afterCommand', { ...result } as any, lastSpec)
+
+            expect(logCreated).not.toHaveBeenCalled()
+            expect(trackEvent).toHaveBeenCalledTimes(1)
+            const [state, hook, { logEntry }] = trackEvent.mock.calls[0]
+            expect([state, hook]).toEqual([TestFrameworkState.LOG, HookState.POST])
+            expect(logEntry.kind).toBe('HTTP')
+            expect(logEntry.test_run_uuid).toBe('spec-uuid')
+            expect(JSON.parse(logEntry.message)).toEqual({ path: '/session/:sessionId/title', method: 'GET', body: {}, response: { value: 'StackDemo' } })
+        })
+
+        it('keeps the legacy HTTP log shape on the listener when the CLI is not running', async () => {
+            const handler = handlerFor('jasmine')
+            const logCreated = vi.spyOn(handler['listener'], 'logCreated').mockImplementation(() => {})
+
+            await handler.browserCommand('client:beforeCommand', { ...command } as any, lastSpec)
+            await handler.browserCommand('client:afterCommand', { ...result } as any, lastSpec)
+
+            expect(logCreated).toHaveBeenCalledWith([{
+                test_run_uuid: 'spec-uuid',
+                timestamp: expect.any(String),
+                kind: 'HTTP',
+                http_response: { path: '/session/:sessionId/title', method: 'GET', body: {}, response: { value: 'StackDemo' } }
+            }])
+        })
+
+        it('names the spec on a jasmine screenshot, and leaves the mocha screenshot entry unchanged', async () => {
+            process.env[TESTOPS_SCREENSHOT_ENV] = 'true'
+            const screenshot = { sessionId: 's', method: 'GET', endpoint: '/session/:sessionId/screenshot', result: { value: 'b64' } }
+
+            const jasmineTrack = vi.fn().mockResolvedValue(undefined)
+            cliWith({ trackEvent: jasmineTrack })
+            await handlerFor('jasmine').browserCommand('client:afterCommand', { ...screenshot } as any, lastSpec)
+            getInstanceSpy!.mockRestore()
+
+            const mochaTrack = vi.fn().mockResolvedValue(undefined)
+            cliWith({ trackEvent: mochaTrack })
+            await handlerFor('mocha').browserCommand('client:afterCommand', { ...screenshot } as any, { title: 't' } as any)
+
+            expect(jasmineTrack.mock.calls[0][2].logEntry).toEqual({ kind: 'TEST_SCREENSHOT', message: 'b64', timestamp: expect.any(String), test_run_uuid: 'spec-uuid' })
+            expect(Object.keys(mochaTrack.mock.calls[0][2].logEntry)).toEqual(['kind', 'message', 'timestamp'])
+        })
+
+        it('drops commands with no spec yet, as legacy did before the first spec', async () => {
+            const trackEvent = vi.fn().mockResolvedValue(undefined)
+            cliWith({ trackEvent })
+            const handler = handlerFor('jasmine')
+            handler['getIdentifier'] = vi.fn().mockReturnValue(undefined)
+
+            await handler.browserCommand('client:beforeCommand', { ...command } as any, {} as any)
+            await handler.browserCommand('client:afterCommand', { ...result } as any, {} as any)
+
+            expect(trackEvent).not.toHaveBeenCalled()
+        })
     })
 })
 
