@@ -14,6 +14,15 @@ npm install @wdio/browserstack-service --save-dev
 
 Instructions on how to install `WebdriverIO` can be found [here.](https://webdriver.io/docs/gettingstarted)
 
+### Compatibility
+
+| WebdriverIO | Node.js |
+|-------------|---------|
+| 10 | 22.19.0 or later |
+| 9 | 18.20.0 or later |
+
+WebdriverIO 10 supports Appium 3 only. BrowserStack App Automate uses Appium 1.22.0 when you do not set a version. On WebdriverIO 10, the service sets `appiumVersion` in `bstack:options` to `'3.3.0'` for App Automate sessions that do not set a version. Version 3.3.0 supports Android 8 or later and iOS 15 or later. To use a different 3.x version (for example `'3.5.2'`, which needs iOS 16 or later), set `appiumVersion` in `bstack:options`. See [Select Appium version](https://www.browserstack.com/docs/app-automate/appium/set-up-tests/set-appium-version). Percy web snapshots (`@percy/webdriverio`) on WebdriverIO 10 need a `@percy/webdriverio` release that supports WebdriverIO 10.
+
 
 ## Configuration
 

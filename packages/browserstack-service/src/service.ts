@@ -6,6 +6,7 @@ import {
     isBrowserstackCapability,
     getParentSuiteName,
     isBrowserstackSession,
+    isMultiRemoteBrowser,
     patchConsoleLogs,
     isTrue,
     isFalse,
@@ -144,7 +145,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     _updateCaps (fn: (caps: WebdriverIO.Capabilities) => void) {
-        const multiRemoteCap = this._caps as Capabilities.RequestedMultiremoteCapabilities
+        const multiRemoteCap = this._caps as Capabilities.RequestedMultiRemoteCapabilities
 
         if (multiRemoteCap.capabilities) {
             return Object.entries(multiRemoteCap).forEach(([, caps]) => fn(caps.capabilities as WebdriverIO.Capabilities))
@@ -268,7 +269,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 }
             }
 
-            if (this._browser.isMultiremote) {
+            if (isMultiRemoteBrowser(this._browser)) {
                 const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
                 Object.keys(this._caps).forEach((browserName) => {
                     patchBidiExecutorRouting(() => multiRemoteBrowser.getInstance(browserName), browserName)
@@ -1185,7 +1186,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             failureReason = hasReasons ? this._failReasons.join('\n') : undefined
         }
 
-        if (!this._browser.isMultiremote) {
+        if (!isMultiRemoteBrowser(this._browser)) {
             BStackLogger.info(`Update (reloaded) job with sessionId ${oldSessionId}, ${sessionStatus}`)
         } else {
             const browserName = (this._browser as unknown as WebdriverIO.MultiRemoteBrowser).instances.filter(
@@ -1254,7 +1255,13 @@ export default class BrowserstackService implements Services.ServiceInstance {
             return originalExecute(script, ...args)
         })
 
-        browser.overwriteCommand('executeAsync', async (originalExecuteAsync, script, ...args) => {
+        // WebdriverIO v10 removed executeAsync; only v9 has the command to overwrite.
+        if (typeof (browser as { executeAsync?: unknown }).executeAsync !== 'function') {
+            return
+        }
+
+        // @ts-expect-error executeAsync is in the WebdriverIO v9 types only
+        browser.overwriteCommand('executeAsync', async (originalExecuteAsync: (...args: unknown[]) => unknown, script: string, ...args: Parameters<WebdriverIO.Browser['executeAsyncScript']>[1]) => {
             if (isBrowserstackExecutorScript(script)) {
                 return browser.executeAsyncScript(script, args)
             }
@@ -1267,7 +1274,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             return Promise.resolve()
         }
 
-        if (!this._browser.isMultiremote) {
+        if (!isMultiRemoteBrowser(this._browser)) {
             return action(this._browser.sessionId)
         }
 
@@ -1400,7 +1407,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
         const cmd = { action, ...(args ? { arguments: args } : {}) }
         const script = `browserstack_executor: ${JSON.stringify(cmd)}`
 
-        if (this._browser.isMultiremote) {
+        if (isMultiRemoteBrowser(this._browser)) {
             const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
             return Promise.all(Object.keys(this._caps).map(async (browserName) => {
                 const browser = multiRemoteBrowser.getInstance(browserName)

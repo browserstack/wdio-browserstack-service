@@ -9,6 +9,7 @@ import AccessibilityHandler from '../src/accessibility-handler.js'
 import type { BrowserstackConfig, BrowserstackOptions } from '../src/types.js'
 import type { Options } from '@wdio/types'
 import * as utils from '../src/util.js'
+import accessibilityScripts from '../src/scripts/accessibility-scripts.js'
 import type { Capabilities } from '@wdio/types'
 import * as bstackLogger from '../src/bstackLogger.js'
 
@@ -481,6 +482,32 @@ describe('scans ahead of the first test (config-level hooks)', () => {
         await handler.before('session-multi')
 
         expect(AccessibilityHandler['_a11yScanSessionMap']['session-multi']).toBeUndefined()
+    })
+
+    it('skips multiremote with the WebdriverIO v10 flag', async () => {
+        const handler = handlerFor('mocha')
+        handler['_browser'] = { ...browser, isMultiremote: false, isMultiRemote: true } as any
+
+        await handler.before('session-multi-v10')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-multi-v10']).toBeUndefined()
+    })
+
+    it('wraps element commands with an options object and browser commands without one', async () => {
+        const handler = handlerFor('mocha')
+        const overwriteCommand = vi.fn()
+        handler['_browser'] = { ...browser, overwriteCommand } as any
+        const savedCommands = accessibilityScripts.commandsToWrap
+        accessibilityScripts.commandsToWrap = [{ name: 'click', class: 'Element' }, { name: 'url', class: 'Browser' }] as any
+
+        try {
+            await handler.before('session-wrap')
+        } finally {
+            accessibilityScripts.commandsToWrap = savedCommands
+        }
+
+        expect(overwriteCommand).toHaveBeenCalledWith('click', expect.any(Function), { attachToElement: true })
+        expect(overwriteCommand).toHaveBeenCalledWith('url', expect.any(Function), undefined)
     })
 
     // Stateless rule: parentless only when neither a framework hook run nor a test can own it.

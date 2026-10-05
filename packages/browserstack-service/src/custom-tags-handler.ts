@@ -2,7 +2,7 @@
 import InsightsHandler from './insights-handler.js'
 import { CustomTagAccumulator } from './customTags.js'
 import type { CustomMetadata } from './customTags.js'
-import { o11yClassErrorHandler } from './util.js'
+import { isMultiRemoteBrowser, o11yClassErrorHandler } from './util.js'
 import { BStackLogger } from './bstackLogger.js'
 
 /**
@@ -61,7 +61,7 @@ class _CustomTagsHandler {
         // Fan out to every MultiRemote instance (mirror service._executeCommand),
         // plus the top-level browser object the user calls directly.
         register(this._browser)
-        if ((this._browser as WebdriverIO.Browser).isMultiremote) {
+        if (isMultiRemoteBrowser(this._browser)) {
             const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
             Object.keys(this._caps).forEach((browserName) => {
                 try {

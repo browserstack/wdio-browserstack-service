@@ -58,6 +58,8 @@ import {
     isAccessibilityAutomationSession,
     isAppAccessibilityAutomationSession,
     isBrowserstackSession,
+    isMultiRemoteBrowser,
+    commandScopeOptions,
     o11yClassErrorHandler,
     shouldScanTestForAccessibility,
     validateCapsWithA11y,
@@ -319,7 +321,7 @@ class _AccessibilityHandler {
                     const orig = browser[command.name as keyof WebdriverIO.Browser]
                     const prevImpl = orig ? orig.bind(browser) : undefined
                     // @ts-expect-error fix type
-                    browser.overwriteCommand(command.name, this.commandWrapper.bind(this, command, prevImpl), command.class === 'Element')
+                    browser.overwriteCommand(command.name, this.commandWrapper.bind(this, command, prevImpl), commandScopeOptions(command.class === 'Element'))
                 } catch (error) {
                     BStackLogger.debug(`Exception in overwrite command ${command.name} - ${error}`)
                 }
@@ -336,7 +338,7 @@ class _AccessibilityHandler {
 
     private supportsPreTestWindow(): boolean {
         return AccessibilityHandler.PRE_TEST_SCAN_FRAMEWORKS.includes(this._framework as string) &&
-            !this._browser?.isMultiremote
+            !isMultiRemoteBrowser(this._browser)
     }
 
     async beforeTest (suiteTitle: string | undefined, test: Frameworks.Test) {

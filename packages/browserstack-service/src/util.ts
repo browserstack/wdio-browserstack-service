@@ -5,6 +5,7 @@ import zlib from 'node:zlib'
 import { format, promisify } from 'node:util'
 import path from 'node:path'
 import util from 'node:util'
+import { createRequire } from 'node:module'
 
 import type { Capabilities, Frameworks, Options } from '@wdio/types'
 import type { BeforeCommandArgs, AfterCommandArgs } from '@wdio/reporter'
@@ -48,7 +49,8 @@ import {
     STOP_BUILD_MAX_ATTEMPTS,
     STOP_BUILD_ATTEMPT_TIMEOUT_MS,
     STOP_BUILD_TOTAL_BUDGET_MS,
-    STOP_BUILD_BACKOFF_BASE_MS
+    STOP_BUILD_BACKOFF_BASE_MS,
+    DEFAULT_APPIUM_3_VERSION
 } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import { BStackLogger } from './bstackLogger.js'
@@ -120,17 +122,78 @@ export function getBrowserDescription(cap: WebdriverIO.Capabilities) {
 }
 
 /**
+ * check for a multiremote browser. WebdriverIO v10 renamed `isMultiremote` to `isMultiRemote`,
+ * and the service supports both v9 and v10.
+ * @param browser browser object
+ */
+export function isMultiRemoteBrowser(browser: unknown): browser is WebdriverIO.MultiRemoteBrowser {
+    const flags = browser as { isMultiRemote?: boolean, isMultiremote?: boolean } | undefined
+    return Boolean(flags?.isMultiRemote || flags?.isMultiremote)
+}
+
+/**
+ * third argument for `overwriteCommand` that works in WebdriverIO v9 and v10. v10 throws on a
+ * boolean, and v9 attaches the command to elements for any truthy value.
+ * @param attachToElement true to overwrite an element command
+ */
+export function commandScopeOptions(attachToElement: boolean): { attachToElement: true } | undefined {
+    return attachToElement ? { attachToElement: true } : undefined
+}
+
+/**
+ * major version of the `@wdio/cli` that runs the tests. `@wdio/cli` is a peer dependency, so it
+ * resolves to the user's copy. `webdriverio` does not: `@percy/webdriverio` can install a second,
+ * older copy next to the service.
+ * @param from file or file URL to resolve `@wdio/cli` from
+ * @returns the major version, or undefined if `@wdio/cli` is not found
+ */
+export function getWdioMajorVersion(from: string = import.meta.url): number | undefined {
+    try {
+        // `@wdio/cli` does not export its package.json, so go up from its entry point
+        let dir = path.dirname(createRequire(from).resolve('@wdio/cli'))
+        while (dir !== path.dirname(dir)) {
+            const manifestPath = path.join(dir, 'package.json')
+            if (fs.existsSync(manifestPath)) {
+                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+                if (manifest.name === '@wdio/cli') {
+                    const major = parseInt(manifest.version, 10)
+                    return Number.isNaN(major) ? undefined : major
+                }
+            }
+            dir = path.dirname(dir)
+        }
+    } catch (err) {
+        BStackLogger.debug(`Cannot find the @wdio/cli version: ${err}`)
+    }
+    return undefined
+}
+
+/**
+ * set `bstack:options.appiumVersion` to the default Appium 3 version, unless the user set a version
+ * @param capability capability to update
+ * @returns true if the version was set
+ */
+export function setDefaultAppiumVersion(capability: WebdriverIO.Capabilities): boolean {
+    const legacyVersion = (capability as Record<string, unknown>)['browserstack.appium_version']
+    if (capability['bstack:options']?.appiumVersion || legacyVersion) {
+        return false
+    }
+    capability['bstack:options'] = { ...capability['bstack:options'], appiumVersion: DEFAULT_APPIUM_3_VERSION }
+    return true
+}
+
+/**
  * get correct browser capabilities object in both multiremote and normal setups
  * @param browser browser object
  * @param caps browser capbilities object. In case of multiremote, the object itself should have a property named 'capabilities'
  * @param browserName browser name in case of multiremote
  */
 export function getBrowserCapabilities(browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, caps?: Capabilities.ResolvedTestrunnerCapabilities, browserName?: string) {
-    if (!browser.isMultiremote) {
+    if (!isMultiRemoteBrowser(browser)) {
         return { ...browser.capabilities, ...caps } as WebdriverIO.Capabilities
     }
 
-    const multiCaps = caps as Capabilities.RequestedMultiremoteCapabilities
+    const multiCaps = caps as Capabilities.RequestedMultiRemoteCapabilities
     const globalCap = browserName && browser.getInstance(browserName) ? browser.getInstance(browserName).capabilities : {}
     const cap = browserName && multiCaps[browserName] ? multiCaps[browserName].capabilities : {}
     return { ...globalCap, ...cap } as WebdriverIO.Capabilities

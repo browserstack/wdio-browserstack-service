@@ -57,7 +57,7 @@ export const getBestPlatformForPercySnapshot = (capabilities?: Capabilities.Test
                 })
             return bestPlatformCaps
         } else if (typeof capabilities === 'object') {
-            Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+            Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                 let currBrowserName = (caps.capabilities as WebdriverIO.Capabilities).browserName
                 if ((caps.capabilities as WebdriverIO.Capabilities)['bstack:options']) {
                     currBrowserName = (caps.capabilities as WebdriverIO.Capabilities)['bstack:options']?.browserName || currBrowserName
