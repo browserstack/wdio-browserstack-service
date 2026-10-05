@@ -16,8 +16,9 @@ vi.mock('../src/cli/skipReporter.js', () => ({
     resolveSpecFile: vi.fn()
 }))
 
+const onWorkerEnd = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 vi.mock('../src/testOps/listener.js', () => ({
-    default: { getInstance: () => ({ onWorkerEnd: vi.fn().mockResolvedValue(undefined) }) }
+    default: { getInstance: () => ({ onWorkerEnd }) }
 }))
 
 vi.mock('../src/data-store.js', () => ({ saveWorkerData: vi.fn() }))
@@ -101,5 +102,16 @@ describe('service.after() — skip drain must precede the deferred-finish flush 
         await BrowserstackService.prototype.after.call(fakeService() as never, 0)
 
         expect(finishWorker).toHaveBeenCalledTimes(1)
+    })
+
+    it('waits for late test finishes after the flush and before worker teardown (SDK-7843)', async () => {
+        await BrowserstackService.prototype.after.call(fakeService() as never, 0)
+
+        expect(awaitLateTestFinishes).toHaveBeenCalledTimes(1)
+        const flushOrder = finishWorker.mock.invocationCallOrder[0]
+        const lateOrder = awaitLateTestFinishes.mock.invocationCallOrder[0]
+        const teardownOrder = onWorkerEnd.mock.invocationCallOrder[0]
+        expect(flushOrder).toBeLessThan(lateOrder)
+        expect(lateOrder).toBeLessThan(teardownOrder)
     })
 })

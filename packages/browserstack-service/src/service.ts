@@ -671,9 +671,15 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     this._cliTestUuids.delete(identifier)
                 }
             }
-            await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result: results })
-            await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result: results, suiteTitle: this._suiteTitle })
-            await this.reportBailSkippedTests(test, results)
+            const finish = async () => {
+                await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result: results })
+                await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result: results, suiteTitle: this._suiteTitle })
+                await this.reportBailSkippedTests(test, results)
+            }
+            // SDK-7843: a timed-out test's afterTest can run while after() is already tearing
+            // down; register it so after() waits for its finish AND its bail cascade.
+            const testHubModule = BrowserstackCLI.getInstance().modules?.TestHubModule as TestHubModule | undefined
+            await (testHubModule ? testHubModule.trackLateWork(finish()) : finish())
             return
         }
 

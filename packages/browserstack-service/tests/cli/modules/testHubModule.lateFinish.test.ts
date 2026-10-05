@@ -50,6 +50,7 @@ function makeMochaTestInstance(uuid: string) {
             [TestFrameworkConstants.KEY_TEST_ENDED_AT, '2026-08-10T20:53:02Z']
         ]),
         getRef: () => `ref-${uuid}`,
+        updateMultipleEntries: vi.fn(),
         getCurrentTestState: () => state.test,
         getCurrentHookState: () => state.hook,
         state
@@ -118,7 +119,7 @@ describe('TestHubModule — a TEST/POST that lands after the worker\'s final flu
         expect(sendsFor(mockGrpcClient, 'still-running', 'POST')).toBe(1)
     })
 
-    it('awaitLateTestFinishes gives up after the bound when a test never finishes', async () => {
+    it('closes a test that never finishes with one synthetic failed finish once the bound expires', async () => {
         const stuck = makeMochaTestInstance('never-finishes')
         emit(stuck, HookState.PRE)
         await testHubModule.finishWorker()
@@ -127,7 +128,58 @@ describe('TestHubModule — a TEST/POST that lands after the worker\'s final flu
         await testHubModule.awaitLateTestFinishes(200)
 
         expect(Date.now() - t0).toBeLessThan(1000)
-        expect(sendsFor(mockGrpcClient, 'never-finishes', 'POST')).toBe(0)
+        expect(sendsFor(mockGrpcClient, 'never-finishes', 'POST')).toBe(1)
+        expect(stuck.updateMultipleEntries).toHaveBeenCalledWith(expect.objectContaining({
+            [TestFrameworkConstants.KEY_TEST_RESULT]: 'failed',
+            [TestFrameworkConstants.KEY_TEST_FAILURE_REASON]: TestHubModule.INCOMPLETE_TEST_REASON
+        }))
+    })
+
+    it('drops a real TEST/POST that straggles in after the synthetic close', async () => {
+        const stuck = makeMochaTestInstance('straggler')
+        emit(stuck, HookState.PRE)
+        await testHubModule.finishWorker()
+        await testHubModule.awaitLateTestFinishes(100)
+
+        emit(stuck, HookState.POST)
+        await testHubModule.awaitLateTestFinishes(100)
+
+        expect(sendsFor(mockGrpcClient, 'straggler', 'POST')).toBe(1)
+    })
+
+    it('waits for a late afterTest\'s bail cascade, not only the timed-out test\'s own finish', async () => {
+        const timedOut = makeMochaTestInstance('timed-out-mid-spec')
+        const bailSkipped = makeMochaTestInstance('bail-skipped')
+        emit(timedOut, HookState.PRE)
+        await testHubModule.finishWorker()
+
+        // service.afterTest's CLI branch: TEST/POST, then (after real I/O in other observers)
+        // the bail cascade reports the spec's unrun tests as skipped.
+        const lateAfterTest = testHubModule.trackLateWork((async () => {
+            emit(timedOut, HookState.POST)
+            await new Promise((resolve) => setTimeout(resolve, 120))
+            emit(bailSkipped, HookState.PRE)
+            emit(bailSkipped, HookState.POST)
+        })())
+        await testHubModule.awaitLateTestFinishes(2000)
+
+        expect(sendsFor(mockGrpcClient, 'timed-out-mid-spec', 'POST')).toBe(1)
+        expect(sendsFor(mockGrpcClient, 'bail-skipped', 'POST')).toBe(1)
+        await lateAfterTest
+    })
+
+    it('does not track work registered before the worker is ending', async () => {
+        let release!: () => void
+        testHubModule.trackLateWork(new Promise<void>((resolve) => {
+            release = resolve
+        }))
+
+        await testHubModule.finishWorker()
+        const t0 = Date.now()
+        await testHubModule.awaitLateTestFinishes(2000)
+
+        expect(Date.now() - t0).toBeLessThan(500)
+        release()
     })
 
     it('still defers a finish during the run, so afterEach custom tags make the payload', () => {
