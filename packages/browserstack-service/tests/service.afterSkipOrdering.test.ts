@@ -34,7 +34,9 @@ vi.mock('../src/instrumentation/performance/performance-tester.js', () => ({
     }
 }))
 
-const flushPendingTestFinishEvent = vi.fn().mockResolvedValue(undefined)
+// after() flushes through finishWorker() (SDK-7843), which also arms the immediate-send path.
+const finishWorker = vi.fn().mockResolvedValue(undefined)
+const awaitLateTestFinishes = vi.fn().mockResolvedValue(undefined)
 
 vi.mock('../src/cli/index.js', () => ({
     BrowserstackCLI: {
@@ -60,7 +62,7 @@ describe('service.after() — skip drain must precede the deferred-finish flush 
         vi.clearAllMocks()
         vi.mocked(BrowserstackCLI.getInstance).mockReturnValue({
             isRunning: () => true,
-            modules: { TestHubModule: { flushPendingTestFinishEvent } },
+            modules: { TestHubModule: { finishWorker, awaitLateTestFinishes } },
             getAutomationFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) })
         } as never)
     })
@@ -86,10 +88,10 @@ describe('service.after() — skip drain must precede the deferred-finish flush 
         await BrowserstackService.prototype.after.call(fakeService() as never, 0)
 
         expect(drainSkipReports).toHaveBeenCalledTimes(1)
-        expect(flushPendingTestFinishEvent).toHaveBeenCalledTimes(1)
+        expect(finishWorker).toHaveBeenCalledTimes(1)
 
         const drainOrder = vi.mocked(drainSkipReports).mock.invocationCallOrder[0]
-        const flushOrder = flushPendingTestFinishEvent.mock.invocationCallOrder[0]
+        const flushOrder = finishWorker.mock.invocationCallOrder[0]
         expect(drainOrder).toBeLessThan(flushOrder)
     })
 
@@ -98,6 +100,6 @@ describe('service.after() — skip drain must precede the deferred-finish flush 
 
         await BrowserstackService.prototype.after.call(fakeService() as never, 0)
 
-        expect(flushPendingTestFinishEvent).toHaveBeenCalledTimes(1)
+        expect(finishWorker).toHaveBeenCalledTimes(1)
     })
 })

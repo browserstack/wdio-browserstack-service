@@ -57,6 +57,22 @@ export default class TestHubModule extends BaseModule {
     private pendingTestFinishes: Map<string, { args: Record<string, unknown>, uuid: string }> = new Map()
 
     /**
+     * SDK-7843: set by service.after() once it has run the worker's final flush. A mocha test
+     * that hits its timeout keeps running after mocha moves on, so its `afterTest` (and so its
+     * TEST/POST) can land AFTER that flush — with `bail` it routinely does. Deferring it then
+     * strands it: there is no next test and no later flush, the TestRunFinished is never sent,
+     * and Test Hub reaps the build as `timeout` ~60 min later. Past this point a finish is sent
+     * immediately instead.
+     */
+    private workerEnding = false
+
+    /** Tests whose TEST/PRE was seen but whose TEST/POST has not arrived yet (SDK-7843). */
+    private openTestUuids: Set<string> = new Set()
+
+    /** Finishes sent after workerEnding, which service.after() awaits before teardown. */
+    private lateFinishSends: Set<Promise<void>> = new Set()
+
+    /**
      * Create a new TestHubModule
      */
     constructor(testhubConfig: unknown) {
@@ -131,6 +147,14 @@ export default class TestHubModule extends BaseModule {
 
         if (testState === TestFrameworkState.TEST || CLIUtils.matchHookRegex(testState.toString().split('.')[1])) {
             const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
+            const testUuid = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID)
+            if (testUuid && testState === TestFrameworkState.TEST) {
+                if (hookState === HookState.PRE) {
+                    this.openTestUuids.add(String(testUuid))
+                } else if (hookState === HookState.POST) {
+                    this.openTestUuids.delete(String(testUuid))
+                }
+            }
             if (testState === TestFrameworkState.TEST && hookState === HookState.POST && frameworkName.toLowerCase().includes('mocha')) {
                 // Defer the TestRunFinished send past the Mocha after-each hook window so
                 // custom tags set in `afterEach` still make the payload (see field docs).
@@ -143,7 +167,17 @@ export default class TestHubModule extends BaseModule {
                     TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) || instance.getRef()
                 )
                 this.pendingTestFinishes.set(deferUuid, { args, uuid: deferUuid })
-                this.logger.debug(`onAllTestEvents: deferred TEST/POST send past the after-each hook window (uuid=${deferUuid}, pending=${this.pendingTestFinishes.size})`)
+                if (this.workerEnding) {
+                    // The worker's final flush already ran; nothing would ever send this stash.
+                    this.logger.debug(`onAllTestEvents: TEST/POST arrived after the worker's final flush, sending now (uuid=${deferUuid})`)
+                    const send = this.flushPendingTestFinishEvent()
+                    if (send) {
+                        this.lateFinishSends.add(send)
+                        send.finally(() => this.lateFinishSends.delete(send))
+                    }
+                } else {
+                    this.logger.debug(`onAllTestEvents: deferred TEST/POST send past the after-each hook window (uuid=${deferUuid}, pending=${this.pendingTestFinishes.size})`)
+                }
             } else {
                 this.sendTestFrameworkEvent(args)
             }
@@ -157,6 +191,34 @@ export default class TestHubModule extends BaseModule {
      * instance so late custom-tag merges are included. Called from onAllTestEvents at the
      * next test's boundary and from service.after() at worker end.
      */
+    /**
+     * Worker end, step 1 (start of service.after()): flush the deferred finish of the worker's
+     * last test and switch to sending any later TEST/POST immediately (SDK-7843).
+     */
+    finishWorker(): Promise<void> | undefined {
+        this.workerEnding = true
+        return this.flushPendingTestFinishEvent()
+    }
+
+    /**
+     * Worker end, step 2 (end of service.after(), before teardown): a test that timed out is
+     * still running when after() starts, and its TEST/POST arrives while after() is in progress.
+     * Wait (bounded) for every started test to report its finish, then for those sends to land,
+     * so the worker does not exit with a TestRunFinished in flight or never sent (SDK-7843).
+     */
+    async awaitLateTestFinishes(waitMs: number = TestHubModule.LATE_TEST_FINISH_WAIT_MS): Promise<void> {
+        const deadline = Date.now() + waitMs
+        while (this.openTestUuids.size > 0 && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        if (this.openTestUuids.size > 0) {
+            this.logger.debug(`awaitLateTestFinishes: no TEST/POST within ${waitMs}ms for ${[...this.openTestUuids].join(', ')}`)
+        }
+        await Promise.all([...this.lateFinishSends])
+    }
+
+    static LATE_TEST_FINISH_WAIT_MS = 5000
+
     flushPendingTestFinishEvent(): Promise<void> | undefined {
         if (this.pendingTestFinishes.size === 0) {
             return undefined

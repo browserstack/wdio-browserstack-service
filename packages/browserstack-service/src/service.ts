@@ -766,10 +766,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 }
                 // Flush a test-finish event deferred past the after-each hook window — the last
                 // test of the worker has no next-test boundary to trigger the flush. Must run
-                // before worker teardown so the event isn't dropped.
+                // before worker teardown so the event isn't dropped. finishWorker() also makes any
+                // TEST/POST that lands later in after() (a timed-out test) send immediately.
                 try {
                     const testHubModule = BrowserstackCLI.getInstance().modules.TestHubModule as TestHubModule | undefined
-                    await testHubModule?.flushPendingTestFinishEvent()
+                    await testHubModule?.finishWorker()
                 } catch (flushErr) {
                     BStackLogger.debug(`Exception flushing deferred test finish in after(): ${util.format(flushErr)}`)
                 }
@@ -849,6 +850,17 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 await this._insightsHandler?.sweepUnfinished()
             } catch (sweepErr) {
                 BStackLogger.debug('Exception in sweepUnfinished during after(): ' + util.format(sweepErr))
+            }
+            // CLI counterpart (SDK-7843): a mocha test that timed out reports its TEST/POST only
+            // once its still-running body settles, which is after the finishWorker() flush above.
+            // Give it a bounded window to land and be sent before the worker tears down.
+            if (BrowserstackCLI.getInstance().isRunning()) {
+                try {
+                    const testHubModule = BrowserstackCLI.getInstance().modules.TestHubModule as TestHubModule | undefined
+                    await testHubModule?.awaitLateTestFinishes()
+                } catch (lateErr) {
+                    BStackLogger.debug(`Exception awaiting late test finishes in after(): ${util.format(lateErr)}`)
+                }
             }
             // The sweep closes the _tests entries, but the CLI uuid snapshots (_cliTestUuids) are
             // only drained in afterTest — the callback that never fires for a test the sweep just
