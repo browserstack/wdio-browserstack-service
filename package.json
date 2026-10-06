@@ -14,6 +14,7 @@
   "scripts": {
     "build": "npm run build -w @wdio/browserstack-service",
     "test": "npm run test -w @wdio/browserstack-service",
+    "test:types": "npm run test:types -w @wdio/browserstack-service",
     "lint": "eslint --ext .ts packages/browserstack-service/src packages/browserstack-service/tests",
     "changeset": "changeset",
     "version": "changeset version",

@@ -53,5 +53,8 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Type regression test (SDK-6882)
+        run: npm run test:types
+
       - name: Test
         run: npm test
