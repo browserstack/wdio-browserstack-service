@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.39.4
+
+### Patch Changes
+
+- 7ed97bc: - Fixed `ETXTBSY: text file is busy, open '~/.browserstack/percy'` crashes on Linux when Percy is enabled.
+
 ## 9.39.3
 
 ### Patch Changes
