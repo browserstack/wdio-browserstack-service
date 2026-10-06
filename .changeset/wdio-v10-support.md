@@ -4,6 +4,7 @@
 
 Support WebdriverIO 10. WebdriverIO 9 stays supported.
 
+- The `@wdio/cli` peer range is now `^9.0.0 || ^10.0.0`. It allowed WebdriverIO 5 to 8, but the service needs WebdriverIO 9 or 10. WebdriverIO 7 and 8 users use the `v7` and `v8` release lines of the service.
 - Multiremote sessions use `isMultiRemote` (v10) or `isMultiremote` (v9), and get each instance with `getInstance()`.
 - Accessibility command wrapping passes `{ attachToElement: true }` to `overwriteCommand`, which works in v9 and v10.
 - The CLI accessibility scripts run through `execute()`, because v10 removed `executeAsync()`.
