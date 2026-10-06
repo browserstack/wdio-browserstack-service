@@ -151,6 +151,32 @@ describe('onPrepare', () => {
         expect(service.browserstackLocal).toBeUndefined()
     })
 
+    it('does not start a service-side Percy when the CLI is running', async () => {
+        const isRunningSpy = vi.spyOn(BrowserstackCLI.getInstance(), 'isRunning').mockReturnValue(true)
+        const service = new BrowserstackLauncher({ testObservability: false, percy: true } as any, caps, config)
+        const setupPercySpy = vi.spyOn(service, 'setupPercy').mockResolvedValue(undefined)
+        try {
+            await service.onPrepare(config, caps)
+        } finally {
+            isRunningSpy.mockRestore()
+        }
+
+        expect(setupPercySpy).not.toHaveBeenCalled()
+    })
+
+    it('starts a service-side Percy when the CLI is not running', async () => {
+        const isRunningSpy = vi.spyOn(BrowserstackCLI.getInstance(), 'isRunning').mockReturnValue(false)
+        const service = new BrowserstackLauncher({ testObservability: false, percy: true } as any, caps, config)
+        const setupPercySpy = vi.spyOn(service, 'setupPercy').mockResolvedValue(undefined)
+        try {
+            await service.onPrepare(config, caps)
+        } finally {
+            isRunningSpy.mockRestore()
+        }
+
+        expect(setupPercySpy).toHaveBeenCalledTimes(1)
+    })
+
     it('should add the "app" property to a multiremote capability if no "bstack:options"', async () => {
         const options: BrowserstackConfig = { app: 'bs://<app-id>' }
         const service = new BrowserstackLauncher(options as any, caps, config)

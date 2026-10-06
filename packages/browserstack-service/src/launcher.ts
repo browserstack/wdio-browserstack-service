@@ -515,11 +515,16 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             try {
                 const bestPlatformPercyCaps = getBestPlatformForPercySnapshot(capabilities as Capabilities.TestrunnerCapabilities)
                 this._percyBestPlatformCaps = bestPlatformPercyCaps as WebdriverIO.Capabilities
-                process.env[BROWSERSTACK_PERCY] = 'false'
-                await this.setupPercy(this._options, this._config, {
-                    projectName: this._projectName
-                })
-                this._updateBrowserStackPercyConfig()
+                // The CLI runs Percy from the same path; re-downloading over the running executable fails with ETXTBSY on Linux.
+                if (BrowserstackCLI.getInstance().isRunning()) {
+                    PercyLogger.debug('Percy is managed by the BrowserStack CLI, skipping service-side Percy setup')
+                } else {
+                    process.env[BROWSERSTACK_PERCY] = 'false'
+                    await this.setupPercy(this._options, this._config, {
+                        projectName: this._projectName
+                    })
+                    this._updateBrowserStackPercyConfig()
+                }
             } catch (err) {
                 PercyLogger.error(`Error while setting up Percy ${err}`)
             }
