@@ -1217,10 +1217,11 @@ export function getCloudProvider(browser: WebdriverIO.Browser | WebdriverIO.Mult
     // `isLoadTestingSession() ? 'browserstack' : getCloudProvider(browser)`
     // (see reporter.ts, insights-handler.ts).
     if (browser && 'instances' in browser) {
-        // Loop through all instances
+        // Loop through all instances. WebdriverIO v10 has no named instance properties;
+        // getInstance works in v9 and v10
         for (const instanceName of browser.instances) {
-            const instance = (browser as any)[instanceName] as WebdriverIO.Browser
-            if (instance.options && instance.options.hostname && instance.options.hostname.includes('browserstack')) {
+            const instance = browser.getInstance(instanceName)
+            if (instance?.options?.hostname?.includes('browserstack')) {
                 return 'browserstack'
             }
         }

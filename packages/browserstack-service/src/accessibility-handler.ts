@@ -660,8 +660,9 @@ class _AccessibilityHandler {
             return true
         }
         if (Array.isArray(b?.instances)) {
-            const children = b as unknown as Record<string, { isBidi?: boolean } | undefined>
-            return b.instances.some((name) => children[name]?.isBidi === true)
+            // WebdriverIO v10 has no named instance properties; getInstance works in v9 and v10
+            const multiRemote = b as unknown as WebdriverIO.MultiRemoteBrowser
+            return b.instances.some((name) => (multiRemote.getInstance(name) as { isBidi?: boolean } | undefined)?.isBidi === true)
         }
         return false
     }

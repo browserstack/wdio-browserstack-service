@@ -593,15 +593,24 @@ describe('getCloudProvider', () => {
     it('return Browserstack if test being run on browserstack', () => {
         expect(getCloudProvider({ options: { hostname: 'hub.browserstack.com' } })).toEqual('browserstack')
     })
+    // WebdriverIO v10 multiremote: no instance properties, only getInstance()
+    const multiRemote = (children: Record<string, object>) => ({
+        isMultiRemote: true,
+        instances: Object.keys(children),
+        getInstance: (name: string) => children[name]
+    }) as unknown as WebdriverIO.MultiRemoteBrowser
+
     it('return Browserstack if test being run on browserstack with multiremote', () => {
-        const browser = {
-            isMultiremote: true,
-            instances: ['browserA'],
-            browserA: {
-                options: { hostname: 'hub.browserstack.com' }
-            }
-        } as unknown as WebdriverIO.MultiRemoteBrowser
+        const browser = multiRemote({
+            browserA: { options: { hostname: 'localhost' } },
+            browserB: { options: { hostname: 'hub.browserstack.com' } }
+        })
         expect(getCloudProvider(browser)).toEqual('browserstack')
+    })
+
+    it('return unknown_grid if no multiremote instance is on browserstack', () => {
+        const browser = multiRemote({ browserA: { options: { hostname: 'localhost' } } })
+        expect(getCloudProvider(browser)).toEqual('unknown_grid')
     })
 })
 
