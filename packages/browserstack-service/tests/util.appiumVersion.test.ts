@@ -63,6 +63,14 @@ describe('setDefaultAppiumVersion', () => {
         expect(capability['bstack:options']).toEqual({ appiumVersion: DEFAULT_APPIUM_3_VERSION })
     })
 
+    it('uses the legacy key for legacy capabilities, which WebdriverIO rejects next to bstack:options', () => {
+        const capability = { app: 'bs://app', device: 'Google Pixel 8', 'browserstack.local': true } as WebdriverIO.Capabilities
+
+        expect(setDefaultAppiumVersion(capability)).toBe(true)
+        expect(capability['bstack:options']).toBeUndefined()
+        expect((capability as Record<string, unknown>)['browserstack.appium_version']).toBe(DEFAULT_APPIUM_3_VERSION)
+    })
+
     it('keeps an appiumVersion that the user set', () => {
         const capability: WebdriverIO.Capabilities = { 'bstack:options': { appiumVersion: '3.5.2' } }
 

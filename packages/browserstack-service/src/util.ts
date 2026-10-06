@@ -141,6 +141,29 @@ export function commandScopeOptions(attachToElement: boolean): { attachToElement
 }
 
 /**
+ * overwrite a command of every WebdriverIO 10 browsing context. `browser.url()` and
+ * `browser.newWindow()` return a browsing context with its own commands (`execute`, `refresh`, ...),
+ * which a browser-level `overwriteCommand` does not reach. WebdriverIO 9 has no browsing contexts
+ * and reads any third argument as "attach to elements", so this does nothing there.
+ * @param browser browser object
+ * @param name command name
+ * @param fn overwrite function, called with the context as `this`
+ * @returns true if the command was overwritten, false on WebdriverIO 9 or for a command that a browsing context does not have
+ */
+export function overwriteBrowsingContextCommand(browser: WebdriverIO.Browser, name: string, fn: Function): boolean {
+    if (typeof (browser as { browsingContexts?: unknown }).browsingContexts !== 'function') {
+        return false
+    }
+    try {
+        // @ts-expect-error attachToBrowsingContext is in the WebdriverIO v10 types only
+        browser.overwriteCommand(name, fn, { attachToBrowsingContext: true })
+        return true
+    } catch {
+        return false
+    }
+}
+
+/**
  * major version of the `@wdio/cli` that runs the tests. `@wdio/cli` is a peer dependency, so it
  * resolves to the user's copy. `webdriverio` does not: `@percy/webdriverio` can install a second,
  * older copy next to the service.
@@ -169,7 +192,8 @@ export function getWdioMajorVersion(from: string = import.meta.url): number | un
 }
 
 /**
- * set `bstack:options.appiumVersion` to the default Appium 3 version, unless the user set a version
+ * set `bstack:options.appiumVersion` (or `browserstack.appium_version` for legacy capabilities) to the
+ * default Appium 3 version, unless the user set a version
  * @param capability capability to update
  * @returns true if the version was set
  */
@@ -177,6 +201,13 @@ export function setDefaultAppiumVersion(capability: WebdriverIO.Capabilities): b
     const legacyVersion = (capability as Record<string, unknown>)['browserstack.appium_version']
     if (capability['bstack:options']?.appiumVersion || legacyVersion) {
         return false
+    }
+    // WebdriverIO rejects a capability that mixes extension keys (`x:y`) with legacy keys, so a
+    // capability without extension keys gets the legacy key, as in launcher._updateCaps
+    const hasExtensionCaps = Object.keys(capability).some((cap) => cap.includes(':'))
+    if (!hasExtensionCaps) {
+        (capability as Record<string, unknown>)['browserstack.appium_version'] = DEFAULT_APPIUM_3_VERSION
+        return true
     }
     capability['bstack:options'] = { ...capability['bstack:options'], appiumVersion: DEFAULT_APPIUM_3_VERSION }
     return true

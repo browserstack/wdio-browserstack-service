@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, commandScopeOptions, executeAccessibilityScript, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
+import { _getParamsForAppAccessibility, commandScopeOptions, overwriteBrowsingContextCommand, executeAccessibilityScript, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -264,6 +264,14 @@ export default class AccessibilityModule extends BaseModule {
                                 this.commandWrapper.bind(this, command),
                                 commandScopeOptions(command.class === 'Element')
                             )
+                            if (command.class !== 'Element') {
+                                // WebdriverIO v10 browsing contexts have their own browser commands;
+                                // scan the context that runs the command
+                                const accessibilityModule = this
+                                overwriteBrowsingContextCommand(browser, command.name, function (this: WebdriverIO.Browser, originFunction: Function, ...args: unknown[]) {
+                                    return accessibilityModule.wrapCommand(this, command, originFunction, args)
+                                })
+                            }
                         } catch (wrapError) {
                             this.logger.debug(`Skipping command wrap for ${command.name}: ${wrapError}`)
                         }
@@ -289,6 +297,14 @@ export default class AccessibilityModule extends BaseModule {
     }
 
     private async commandWrapper(command: Command, originFunction: Function, ...args: unknown[]) {
+        return this.wrapCommand(undefined, command, originFunction, args)
+    }
+
+    /**
+     * @param scanTarget the WebdriverIO v10 browsing context that runs the command, or undefined to
+     * scan the tracked driver
+     */
+    private async wrapCommand(scanTarget: WebdriverIO.Browser | undefined, command: Command, originFunction: Function, args: unknown[]) {
         try {
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
@@ -302,11 +318,8 @@ export default class AccessibilityModule extends BaseModule {
                 // driver is the only thing that knows: no sessionId, no session.
                 if (!browser?.sessionId) {
                     this.logger.debug('Skipping accessibility scan: the session has ended')
-                    return await originFunction(...args)
-                }
-
-                // Perform accessibility scan before command if script is available
-                if (
+                } else if (
+                    // Perform accessibility scan before command if script is available
                     !command.name.includes('execute') ||
                     !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
                 ) {
@@ -314,24 +327,21 @@ export default class AccessibilityModule extends BaseModule {
                         // Parentless only before the framework has started anything: no hook run
                         // and no test seen yet. The wrapper never knows which hook it is in, and
                         // does not need to.
-                        await this.performScanCli(browser, command.name, this.currentHookRunUuid, this.hasNoParent)
+                        await this.performScanCli(scanTarget ?? browser, command.name, this.currentHookRunUuid, this.hasNoParent)
                         this.logger.debug(`Accessibility scan performed after ${command.name} command`)
                     } catch (scanError) {
                         this.logger.debug(`Error performing accessibility scan after ${command.name}: ${scanError}`)
                     }
                 }
             }
-
-            // Execute the original command
-            const result = await originFunction(...args)
-
-            return result
-
         } catch (error) {
+            // A failed scan setup must not stop the command: it still runs below
             this.logger.error(`Error in commandWrapper for ${command.name}: ${error}`)
-            // Still execute the original command even if accessibility scan fails
-            return await originFunction(...args)
         }
+
+        // Execute the original command outside the try: its errors belong to the caller (for
+        // example a WebdriverIO 10 StrictSelectorError), and must not run the command again
+        return await originFunction(...args)
     }
 
     async onBeforeTest(args: Record<string, unknown>) {

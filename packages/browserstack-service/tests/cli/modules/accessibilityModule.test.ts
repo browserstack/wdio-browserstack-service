@@ -35,6 +35,7 @@ vi.mock('../../../src/util.js', async (importOriginal) => {
         // real helpers: the tests check the script and the options that reach the browser
         executeAccessibilityScript: actual.executeAccessibilityScript,
         commandScopeOptions: actual.commandScopeOptions,
+        overwriteBrowsingContextCommand: actual.overwriteBrowsingContextCommand,
         validateCapsWithA11y: vi.fn().mockReturnValue(true),
         validateCapsWithAppA11y: vi.fn().mockReturnValue(true),
         shouldScanTestForAccessibility: vi.fn().mockReturnValue(true),
@@ -247,6 +248,69 @@ describe('AccessibilityModule', () => {
             // the command still runs; only the scan is skipped
             expect(orig).toHaveBeenCalled()
             expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
+        })
+
+        // WebdriverIO 10: browser.url() and browser.newWindow() return a browsing context with
+        // its own commands, which a browser-level overwriteCommand does not reach
+        it('also wraps browser commands on WebdriverIO 10 browsing contexts, and scans that context', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            mockBrowser.browsingContexts = vi.fn()
+            accessibilityScripts.commandsToWrap = [
+                { name: 'click', class: 'Element' },
+                { name: 'refresh', class: 'Browser' }
+            ]
+            try {
+                await accessibilityModule.onBeforeExecute()
+            } finally {
+                accessibilityScripts.commandsToWrap = []
+            }
+
+            expect(mockBrowser.overwriteCommand).toHaveBeenCalledWith('refresh', expect.any(Function), { attachToBrowsingContext: true })
+            expect(mockBrowser.overwriteCommand).not.toHaveBeenCalledWith('click', expect.any(Function), { attachToBrowsingContext: true })
+
+            const contextOverwrite = vi.mocked(mockBrowser.overwriteCommand).mock.calls
+                .find(([name, , options]: any[]) => name === 'refresh' && options?.attachToBrowsingContext)?.[1] as Function
+            mockBrowser.execute.mockClear()
+            const context = { contextId: 'tab-2', execute: vi.fn().mockResolvedValue({}) }
+            const original = vi.fn().mockResolvedValue('refreshed')
+
+            await expect(contextOverwrite.call(context, original, 'arg')).resolves.toBe('refreshed')
+
+            expect(original).toHaveBeenCalledTimes(1)
+            // the scan runs on the context, not on the browser
+            expect(context.execute).toHaveBeenCalled()
+            expect(mockBrowser.execute).not.toHaveBeenCalled()
+        })
+
+        // WebdriverIO 10 throws StrictSelectorError from inside an element command when `$`
+        // matches more than one element. That error belongs to the test, not to the wrapper.
+        it('runs a failing command once and gives its error to the caller', async () => {
+            withA11yCaps()
+            await accessibilityModule.onBeforeExecute()
+            const strictError = Object.assign(new Error('strict mode violation: `$("button")` resolved to 2 elements, expected 1.'), { name: 'StrictSelectorError' })
+            const orig = vi.fn().mockRejectedValue(strictError)
+            const errorSpy = vi.spyOn(accessibilityModule.logger, 'error')
+
+            await expect((accessibilityModule as any).commandWrapper({ name: 'click', class: 'Element' }, orig, 'arg'))
+                .rejects.toBe(strictError)
+
+            expect(orig).toHaveBeenCalledTimes(1)
+            expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Error in commandWrapper'))
+        })
+
+        it('still runs the command once when the scan setup throws', async () => {
+            withA11yCaps()
+            await accessibilityModule.onBeforeExecute()
+            vi.mocked(AutomationFramework.getTrackedInstance).mockImplementation(() => {
+                throw new Error('no tracked instance')
+            })
+            const orig = vi.fn().mockResolvedValue('ok')
+
+            await expect((accessibilityModule as any).commandWrapper({ name: 'click', class: 'Element' }, orig, 'arg'))
+                .resolves.toBe('ok')
+
+            expect(orig).toHaveBeenCalledTimes(1)
         })
 
         it('leaves the gate open after a test, so afterSuite/after still scan', async () => {

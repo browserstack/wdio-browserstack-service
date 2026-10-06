@@ -15,7 +15,8 @@ import {
     isBrowserstackExecutorScript,
     getWdioMajorVersion,
     mochaFailsHookAffectedTests,
-    createHookAffectedTestError
+    createHookAffectedTestError,
+    overwriteBrowsingContextCommand
 } from './util.js'
 import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from './types.js'
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
@@ -1265,6 +1266,15 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         browser.overwriteCommand('execute', async (originalExecute, script, ...args) => {
+            if (isBrowserstackExecutorScript(script)) {
+                return browser.executeScript(script, args)
+            }
+            return originalExecute(script, ...args)
+        })
+
+        // WebdriverIO v10: `execute` on a browsing context (from browser.url() or newWindow()) does not
+        // go through the browser overwrite. Executor commands act on the session, not on one context.
+        overwriteBrowsingContextCommand(browser, 'execute', async (originalExecute: (...args: unknown[]) => unknown, script: string, ...args: Parameters<WebdriverIO.Browser['executeScript']>[1]) => {
             if (isBrowserstackExecutorScript(script)) {
                 return browser.executeScript(script, args)
             }

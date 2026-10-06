@@ -835,6 +835,30 @@ describe('before', () => {
         expect(browser.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
     })
 
+    it('should also route executor scripts that run on a WebdriverIO 10 browsing context', async () => {
+        (browser as any).isBidi = true
+        ;(browser as any).browsingContexts = vi.fn()
+        try {
+            const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+            service['_routeBidiExecutorToHttp'](browser)
+        } finally {
+            delete (browser as any).browsingContexts
+        }
+
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function), { attachToBrowsingContext: true })
+        const contextOverwrite = vi.mocked(browser.overwriteCommand).mock.calls
+            .find(([, , options]) => (options as { attachToBrowsingContext?: boolean })?.attachToBrowsingContext)?.[1] as Function
+        const context = { contextId: 'tab-2' }
+        const originalExecute = vi.fn()
+
+        await contextOverwrite.call(context, originalExecute, 'browserstack_executor: {"action":"annotate"}')
+        expect(browser.executeScript).toHaveBeenCalledWith('browserstack_executor: {"action":"annotate"}', [])
+        expect(originalExecute).not.toHaveBeenCalled()
+
+        await contextOverwrite.call(context, originalExecute, 'return document.title')
+        expect(originalExecute).toHaveBeenCalledWith('return document.title')
+    })
+
     it('should not overwrite execute command for non-BrowserStack BiDi sessions', async () => {
         (browser as any).isBidi = true
         const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })

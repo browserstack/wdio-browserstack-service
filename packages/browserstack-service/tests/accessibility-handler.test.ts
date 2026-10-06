@@ -516,6 +516,57 @@ describe('scans ahead of the first test (config-level hooks)', () => {
         expect(overwriteCommand).toHaveBeenCalledWith('url', expect.any(Function), undefined)
     })
 
+    // WebdriverIO 10: browser.url() and browser.newWindow() return a browsing context with its own
+    // commands, which a browser-level overwriteCommand does not reach
+    it('also wraps browser commands on WebdriverIO 10 browsing contexts, and scans that context', async () => {
+        const handler = handlerFor('mocha')
+        const overwriteCommand = vi.fn()
+        handler['_browser'] = { ...browser, overwriteCommand, browsingContexts: vi.fn() } as any
+        handler['_sessionId'] = 'session-context'
+        const savedCommands = accessibilityScripts.commandsToWrap
+        accessibilityScripts.commandsToWrap = [{ name: 'click', class: 'Element' }, { name: 'refresh', class: 'Browser' }] as any
+
+        try {
+            await handler.before('session-context')
+        } finally {
+            accessibilityScripts.commandsToWrap = savedCommands
+        }
+
+        expect(overwriteCommand).toHaveBeenCalledWith('refresh', expect.any(Function), { attachToBrowsingContext: true })
+        expect(overwriteCommand).not.toHaveBeenCalledWith('click', expect.any(Function), { attachToBrowsingContext: true })
+
+        const contextOverwrite = overwriteCommand.mock.calls
+            .find(([name, , options]) => name === 'refresh' && options?.attachToBrowsingContext)?.[1] as Function
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        const context = { contextId: 'tab-2', execute: vi.fn() }
+        const original = vi.fn().mockResolvedValue('refreshed')
+
+        await expect(contextOverwrite.call(context, original, 'arg')).resolves.toBe('refreshed')
+
+        expect(original).toHaveBeenCalledTimes(1)
+        expect(original).toHaveBeenCalledWith('arg')
+        // performA11yScan(isAppAutomate, browser, ...): the scan runs on the context, not on the browser
+        expect(scanSpy.mock.calls.at(-1)?.[1]).toBe(context)
+    })
+
+    it('does not wrap browsing context commands on WebdriverIO 9', async () => {
+        const handler = handlerFor('mocha')
+        const overwriteCommand = vi.fn()
+        handler['_browser'] = { ...browser, overwriteCommand } as any
+        const savedCommands = accessibilityScripts.commandsToWrap
+        accessibilityScripts.commandsToWrap = [{ name: 'refresh', class: 'Browser' }] as any
+
+        try {
+            await handler.before('session-v9')
+        } finally {
+            accessibilityScripts.commandsToWrap = savedCommands
+        }
+
+        expect(overwriteCommand).toHaveBeenCalledTimes(1)
+        expect(overwriteCommand).toHaveBeenCalledWith('refresh', expect.any(Function), undefined)
+    })
+
     // Stateless rule: parentless only when neither a framework hook run nor a test can own it.
     it('sends no test run uuid when no hook run and no test can own the scan', async () => {
         const handler = handlerFor('mocha')

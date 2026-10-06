@@ -60,6 +60,7 @@ import {
     isBrowserstackSession,
     isMultiRemoteBrowser,
     commandScopeOptions,
+    overwriteBrowsingContextCommand,
     o11yClassErrorHandler,
     shouldScanTestForAccessibility,
     validateCapsWithA11y,
@@ -322,6 +323,14 @@ class _AccessibilityHandler {
                     const prevImpl = orig ? orig.bind(browser) : undefined
                     // @ts-expect-error fix type
                     browser.overwriteCommand(command.name, this.commandWrapper.bind(this, command, prevImpl), commandScopeOptions(command.class === 'Element'))
+                    if (command.class !== 'Element') {
+                        // WebdriverIO v10 browsing contexts have their own browser commands; scan the
+                        // context that runs the command
+                        const handler = this
+                        overwriteBrowsingContextCommand(browser, command.name, function (this: WebdriverIO.Browser, origFunction: Function, ...args: unknown[]) {
+                            return handler.wrapCommand(this, command as CommandInfo, origFunction, args)
+                        })
+                    }
                 } catch (error) {
                     BStackLogger.debug(`Exception in overwrite command ${command.name} - ${error}`)
                 }
@@ -543,6 +552,13 @@ class _AccessibilityHandler {
      */
 
     private async commandWrapper (command: CommandInfo, prevImpl: Function, origFunction: Function, ...args: unknown[]) {
+        return this.wrapCommand(this._browser, command, prevImpl || origFunction, args)
+    }
+
+    /**
+     * @param scanTarget the browser, or the WebdriverIO v10 browsing context that runs the command
+     */
+    private async wrapCommand (scanTarget: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, command: CommandInfo, impl: Function, args: unknown[]) {
         const skipScanForBidiWindowCommand = AccessibilityHandler.shouldSkipScanForBidiWindowCommand(this._browser, command)
         if (
             this._sessionId && AccessibilityHandler._a11yScanSessionMap[this._sessionId] &&
@@ -561,12 +577,11 @@ class _AccessibilityHandler {
             if (!(this._browser as WebdriverIO.Browser)?.sessionId) {
                 BStackLogger.debug('Skipping accessibility scan: the session has ended')
             } else {
-                await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this.hasNoParent)
+                await performA11yScan(this.isAppAutomate, scanTarget, true, true, command.name, undefined, this._currentHookRunUuid, this.hasNoParent)
             }
         } else if (skipScanForBidiWindowCommand) {
             BStackLogger.debug(`SDK-5047: skipping accessibility scan for BiDi window/context command '${command.name}' to avoid racing the WebdriverIO ContextManager during session-start window churn`)
         }
-        const impl = prevImpl || origFunction
         return impl(...args)
     }
 
