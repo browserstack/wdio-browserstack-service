@@ -28,6 +28,16 @@ export default class TestHubModule extends BaseModule {
     static MODULE_NAME = 'TestHubModule'
 
     /**
+     * SDK-7843: how long service.after() waits for late test finishes to ARRIVE (see
+     * awaitLateTestFinishes). It does not bound the sends themselves, which keep their own
+     * retry/backoff in flushPendingTestFinishEvent.
+     */
+    static readonly LATE_TEST_FINISH_WAIT_MS = 5000
+
+    /** Failure reason on a TestRunFinished synthesised for a test that never reported one. */
+    static readonly INCOMPLETE_TEST_REASON = 'Test did not finish before the session ended (incomplete).'
+
+    /**
      * Mocha-only: the TEST/POST (TestRunFinished) send deferred past the after-each hook
      * window. WDIO fires `afterTest` (which triggers TEST/POST) BEFORE the user's
      * `afterEach` hooks run, so custom tags set in `afterEach` would otherwise miss the
@@ -55,6 +65,32 @@ export default class TestHubModule extends BaseModule {
      * to a late send rather than a silently lost TestRunFinished.
      */
     private pendingTestFinishes: Map<string, { args: Record<string, unknown>, uuid: string }> = new Map()
+
+    /**
+     * SDK-7843: set by service.after() once it has run the worker's final flush. A mocha test
+     * that hits its timeout keeps running after mocha moves on, so its `afterTest` (and so its
+     * TEST/POST) can land AFTER that flush — with `bail` it routinely does. Deferring it then
+     * strands it: there is no next test and no later flush, the TestRunFinished is never sent,
+     * and Test Hub reaps the build as `timeout` ~60 min later. Past this point a finish is sent
+     * immediately instead.
+     */
+    private workerEnding = false
+
+    /**
+     * Tests whose TEST/PRE was seen but whose TEST/POST has not arrived yet, keyed by uuid, with
+     * the PRE `args` so a finish can be synthesised for one that never reports (SDK-7843). The
+     * stored `args.instance` is that test's own object, see pendingTestFinishes.
+     */
+    private openTests: Map<string, Record<string, unknown>> = new Map()
+
+    /** Late work (an afterTest that started after workerEnding, with its bail cascade). */
+    private lateWork: Set<Promise<unknown>> = new Set()
+
+    /** Finishes sent after workerEnding, which service.after() awaits before teardown. */
+    private lateFinishSends: Set<Promise<unknown>> = new Set()
+
+    /** Tests closed with a synthetic finish; a straggling real TEST/POST for them is dropped. */
+    private syntheticallyClosed: Set<string> = new Set()
 
     /**
      * Create a new TestHubModule
@@ -131,6 +167,19 @@ export default class TestHubModule extends BaseModule {
 
         if (testState === TestFrameworkState.TEST || CLIUtils.matchHookRegex(testState.toString().split('.')[1])) {
             const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
+            const testUuid = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID)
+            if (testUuid && testState === TestFrameworkState.TEST) {
+                if (hookState === HookState.PRE) {
+                    this.openTests.set(String(testUuid), args)
+                } else if (hookState === HookState.POST) {
+                    if (this.syntheticallyClosed.has(String(testUuid))) {
+                        // Already closed at teardown; a second finish would contradict it.
+                        this.logger.debug(`onAllTestEvents: dropping TEST/POST for a test already closed as incomplete (uuid=${testUuid})`)
+                        return
+                    }
+                    this.openTests.delete(String(testUuid))
+                }
+            }
             if (testState === TestFrameworkState.TEST && hookState === HookState.POST && frameworkName.toLowerCase().includes('mocha')) {
                 // Defer the TestRunFinished send past the Mocha after-each hook window so
                 // custom tags set in `afterEach` still make the payload (see field docs).
@@ -143,11 +192,86 @@ export default class TestHubModule extends BaseModule {
                     TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) || instance.getRef()
                 )
                 this.pendingTestFinishes.set(deferUuid, { args, uuid: deferUuid })
-                this.logger.debug(`onAllTestEvents: deferred TEST/POST send past the after-each hook window (uuid=${deferUuid}, pending=${this.pendingTestFinishes.size})`)
+                if (this.workerEnding) {
+                    // The worker's final flush already ran; nothing would ever send this stash.
+                    this.logger.debug(`onAllTestEvents: TEST/POST arrived after the worker's final flush, sending now (uuid=${deferUuid})`)
+                    const send = this.flushPendingTestFinishEvent()
+                    if (send) {
+                        this.trackIn(this.lateFinishSends, send)
+                    }
+                } else {
+                    this.logger.debug(`onAllTestEvents: deferred TEST/POST send past the after-each hook window (uuid=${deferUuid}, pending=${this.pendingTestFinishes.size})`)
+                }
             } else {
                 this.sendTestFrameworkEvent(args)
             }
         }
+    }
+
+    /**
+     * Worker end, step 1 (start of service.after()): flush the deferred finish of the worker's
+     * last test and switch to sending any later TEST/POST immediately (SDK-7843).
+     */
+    finishWorker(): Promise<void> | undefined {
+        this.workerEnding = true
+        return this.flushPendingTestFinishEvent()
+    }
+
+    /**
+     * Register work that has to finish before the worker tears down. Only tracked once the
+     * worker is ending: service.afterTest passes its whole CLI branch, so a late afterTest's
+     * bail cascade (skip reports after the timed-out test's own TEST/POST) is waited for too.
+     */
+    trackLateWork<T>(work: Promise<T>): Promise<T> {
+        if (this.workerEnding) {
+            this.trackIn(this.lateWork, work)
+        }
+        return work
+    }
+
+    /**
+     * Worker end, step 2 (end of service.after(), before teardown). A test that timed out is
+     * still running when after() starts; its afterTest (TEST/POST, then any bail cascade) lands
+     * while after() is in progress. Wait, up to the bound, until every started test has
+     * reported, late afterTest work has settled and late sends have landed. Any test still open
+     * after that is closed with a synthetic failed finish, as the classic path's
+     * sweepUnfinished() does, so the build is not left to Test Hub's ~60-min idle reap.
+     */
+    async awaitLateTestFinishes(waitMs: number = TestHubModule.LATE_TEST_FINISH_WAIT_MS): Promise<void> {
+        const deadline = Date.now() + waitMs
+        while ((this.openTests.size > 0 || this.lateWork.size > 0 || this.lateFinishSends.size > 0) && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        if (this.openTests.size > 0) {
+            this.logger.debug(`awaitLateTestFinishes: no TEST/POST within ${waitMs}ms for ${[...this.openTests.keys()].join(', ')}; closing as incomplete`)
+            this.closeOpenTestsAsIncomplete()
+        }
+        await Promise.all([...this.lateFinishSends])
+    }
+
+    private closeOpenTestsAsIncomplete() {
+        const reason = TestHubModule.INCOMPLETE_TEST_REASON
+        for (const [uuid, args] of this.openTests) {
+            const instance = args.instance as TestFrameworkInstance
+            instance.updateMultipleEntries({
+                [TestFrameworkConstants.KEY_TEST_RESULT]: 'failed',
+                [TestFrameworkConstants.KEY_TEST_FAILURE]: [{ backtrace: [reason] }],
+                [TestFrameworkConstants.KEY_TEST_FAILURE_REASON]: reason,
+                [TestFrameworkConstants.KEY_TEST_FAILURE_TYPE]: 'UnhandledError',
+                [TestFrameworkConstants.KEY_TEST_ENDED_AT]: new Date().toISOString()
+            })
+            this.syntheticallyClosed.add(uuid)
+            this.trackIn(this.lateFinishSends, this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST', uuid }))
+        }
+        this.openTests.clear()
+    }
+
+    private trackIn(set: Set<Promise<unknown>>, work: Promise<unknown>) {
+        set.add(work)
+        const untrack = () => {
+            set.delete(work)
+        }
+        work.then(untrack, untrack)
     }
 
     /**
