@@ -183,6 +183,33 @@ export function setDefaultAppiumVersion(capability: WebdriverIO.Capabilities): b
 }
 
 /**
+ * Mocha 12 (WebdriverIO 10) fails the tests that a failed `before` or `beforeEach` hook skipped,
+ * unless `mochaOpts.failHookAffectedTests` is false. The Mocha of WebdriverIO 9 has no such option.
+ * @param config testrunner config
+ * @param wdioMajor major version of WebdriverIO, from getWdioMajorVersion()
+ */
+export function mochaFailsHookAffectedTests(config: Options.Testrunner | undefined, wdioMajor: number | undefined): boolean {
+    if (config?.framework !== 'mocha' || !wdioMajor || wdioMajor < 10) {
+        return false
+    }
+    const mochaOpts = (config as { mochaOpts?: { failHookAffectedTests?: boolean } }).mochaOpts
+    return mochaOpts?.failHookAffectedTests !== false
+}
+
+/**
+ * the error that Mocha 12 gives a test that a failed hook skipped
+ * @param hookTitle title of the failed hook
+ * @param hookError error of the failed hook
+ */
+export function createHookAffectedTestError(hookTitle: string, hookError?: Error): Error {
+    const error = new Error(`Test skipped due to failure in hook "${hookTitle}": ${hookError?.message || 'Hook failed'}`)
+    if (hookError?.stack) {
+        error.stack = hookError.stack
+    }
+    return error
+}
+
+/**
  * get correct browser capabilities object in both multiremote and normal setups
  * @param browser browser object
  * @param caps browser capbilities object. In case of multiremote, the object itself should have a property named 'capabilities'

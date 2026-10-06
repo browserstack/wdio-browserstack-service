@@ -12,7 +12,10 @@ import {
     isFalse,
     getUniqueIdentifier,
     getHookType,
-    isBrowserstackExecutorScript
+    isBrowserstackExecutorScript,
+    getWdioMajorVersion,
+    mochaFailsHookAffectedTests,
+    createHookAffectedTestError
 } from './util.js'
 import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from './types.js'
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
@@ -36,7 +39,7 @@ import PerformanceTester from './instrumentation/performance/performance-tester.
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import { EVENTS } from './instrumentation/performance/constants.js'
 import { BrowserstackCLI } from './cli/index.js'
-import { drainSkipReports, markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
+import { drainSkipReports, markTestStarted, reportSuiteFailed, reportSuiteSkipped } from './cli/skipReporter.js'
 import { CLIUtils } from './cli/cliUtils.js'
 
 import { _fetch as fetch } from './fetchWrapper.js'
@@ -57,6 +60,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     private _sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
     private _failReasons: string[] = []
     private _hookFailReasons: string[] = []
+    private _failHookAffectedTests?: boolean
     private _pureTestFailReasons: string[] = []
     private _scenariosThatRan: string[] = []
     private _lastScenarioName?: string  // Track last scenario for preferScenarioName feature
@@ -499,6 +503,15 @@ export default class BrowserstackService implements Services.ServiceInstance {
         await this._accessibilityHandler?.beforeHook(test as Frameworks.Test, context, this._insightsHandler?.getCurrentHook()?.uuid)
     }
 
+    /**
+     * true when Mocha fails the tests that a failed before/beforeEach hook skipped
+     * (Mocha 12, WebdriverIO 10). Read once: the WebdriverIO version comes from the file system.
+     */
+    private get failHookAffectedTests(): boolean {
+        this._failHookAffectedTests ??= mochaFailsHookAffectedTests(this._config, getWdioMajorVersion())
+        return this._failHookAffectedTests
+    }
+
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'afterHook' })
     async afterHook(test: Frameworks.Test | CucumberHook, context: unknown, result: Frameworks.TestResult) {
         // The Mocha hook window is closed — clear the tracker (see beforeHook).
@@ -549,13 +562,16 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 const hookType = getHookType((test as Frameworks.Test).title)
                 const suite = (test as Frameworks.Test).ctx?.test?.parent
                 if (result && !result.passed && ['BEFORE_ALL', 'BEFORE_EACH', 'AFTER_EACH'].includes(hookType) && suite) {
-                    await reportSuiteSkipped(framework, suite)
+                    // Mocha 12 (WebdriverIO 10) fails these tests after a before/beforeEach hook
+                    await (hookType !== 'AFTER_EACH' && this.failHookAffectedTests
+                        ? reportSuiteFailed(framework, suite, createHookAffectedTestError((test as Frameworks.Test).title, result.error))
+                        : reportSuiteSkipped(framework, suite))
                 }
             }
             return
         }
 
-        await this._insightsHandler?.afterHook(test, result)
+        await this._insightsHandler?.afterHook(test, result, this.failHookAffectedTests)
         await this._accessibilityHandler?.afterHook()
     }
 

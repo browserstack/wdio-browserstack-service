@@ -118,13 +118,13 @@ export function reportSkippedTest(
     identifier: string,
     test: Frameworks.Test,
     suiteTitle?: string,
-    options?: { immediate?: boolean }
+    options?: { immediate?: boolean, result?: Frameworks.TestResult }
 ): Promise<void> {
     if (startedTests.has(identifier) || reportedSkips.has(identifier)) {
         return reportChain
     }
     reportedSkips.add(identifier)
-    const result = { passed: false, skipped: true } as Frameworks.TestResult
+    const result = options?.result ?? { passed: false, skipped: true } as Frameworks.TestResult
     const queued: QueuedSkip = { framework, test, result, suiteTitle }
 
     // SDK-7493: only the DETACHED caller needs deferring. `immediate` is for callers wdio
@@ -163,6 +163,19 @@ export function reportSkippedTest(
  * belong to the hook/test being reported, so they must not slide to end-of-run.
  */
 export async function reportSuiteSkipped(framework: TestFramework, suite: { tests?: unknown[], suites?: unknown[] }): Promise<void> {
+    await reportSuiteResult(framework, suite)
+}
+
+/**
+ * Mocha 12 (WebdriverIO 10) fails the tests that a failed BEFORE_ALL/BEFORE_EACH hook skipped
+ * (`failHookAffectedTests`). Report each state-undefined test as failed with that error, so the
+ * dashboard shows the status that WebdriverIO reports. Same walk and timing as reportSuiteSkipped.
+ */
+export async function reportSuiteFailed(framework: TestFramework, suite: { tests?: unknown[], suites?: unknown[] }, error: Error): Promise<void> {
+    await reportSuiteResult(framework, suite, { passed: false, error, duration: 0, retries: { attempts: 0, limit: 0 } } as Frameworks.TestResult)
+}
+
+async function reportSuiteResult(framework: TestFramework, suite: { tests?: unknown[], suites?: unknown[] }, result?: Frameworks.TestResult): Promise<void> {
     for (const t of (suite.tests || []) as MochaRuntimeTest[]) {
         if (t.state !== undefined) {
             continue
@@ -179,10 +192,10 @@ export async function reportSuiteSkipped(framework: TestFramework, suite: { test
             file: t.file,
             ctx: { test: { parent: t.parent } }
         } as unknown as Frameworks.Test
-        await reportSkippedTest(framework, identifier, synthetic, parentTitle, { immediate: true })
+        await reportSkippedTest(framework, identifier, synthetic, parentTitle, { immediate: true, result })
     }
     for (const sub of (suite.suites || []) as { tests?: unknown[], suites?: unknown[] }[]) {
-        await reportSuiteSkipped(framework, sub)
+        await reportSuiteResult(framework, sub, result)
     }
 }
 

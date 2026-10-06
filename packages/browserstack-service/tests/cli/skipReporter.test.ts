@@ -5,7 +5,7 @@ import type { Frameworks } from '@wdio/types'
 
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
 
-import { drainSkipReports, markTestStarted, reportSkippedTest, reportSuiteSkipped, resolveSpecFile } from '../../src/cli/skipReporter.js'
+import { drainSkipReports, markTestStarted, reportSkippedTest, reportSuiteFailed, reportSuiteSkipped, resolveSpecFile } from '../../src/cli/skipReporter.js'
 import { TestFrameworkState } from '../../src/cli/states/testFrameworkState.js'
 import { HookState } from '../../src/cli/states/hookState.js'
 import type TestFramework from '../../src/cli/frameworks/testFramework.js'
@@ -89,6 +89,34 @@ describe('skipReporter', () => {
             .filter(([state]) => state === TestFrameworkState.INIT_TEST)
             .map(([, , args]) => (args as { test: { title: string } }).test.title)
         expect(reported).toEqual(['undetermined', 'nested undetermined'])
+    })
+
+    it('reports the undetermined tests of a suite as failed with the hook error', async () => {
+        const framework = makeFramework()
+        const parent = { title: 'failed hook suite' }
+        const suite = {
+            tests: [
+                { title: 'passed before the hook', state: 'passed', parent },
+                { title: 'affected by the hook', parent, file: '/spec/b.spec.js' },
+            ],
+            suites: [{
+                tests: [{ title: 'nested affected by the hook', parent: { title: 'inner failed hook suite' } }],
+                suites: [],
+            }],
+        }
+        const error = new Error('Test skipped due to failure in hook "x": boom')
+
+        await reportSuiteFailed(framework, suite, error)
+
+        const results = vi.mocked(framework.trackEvent).mock.calls
+            .filter(([state, hook]) => state === TestFrameworkState.TEST && hook === HookState.POST)
+            .map(([, , args]) => args as { test: { title: string }, result: Frameworks.TestResult })
+        expect(results.map(({ test }) => test.title)).toEqual(['affected by the hook', 'nested affected by the hook'])
+        for (const { result } of results) {
+            expect(result.passed).toBe(false)
+            expect(result.skipped).toBeUndefined()
+            expect(result.error).toBe(error)
+        }
     })
 
     it('resolves spec file from the runner spec when the test has none', () => {
