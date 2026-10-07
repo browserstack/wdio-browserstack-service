@@ -181,7 +181,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
                 [TestFrameworkConstants.KEY_TEST_SCOPES]: scopes,
                 [TestFrameworkConstants.KEY_TEST_TAGS]: getTestTags(testStats as unknown as Frameworks.Test, scopes),
                 ...this.#filePaths(context.suiteFile),
-                [TestFrameworkConstants.KEY_TEST_STARTED_AT]: this.#iso(testStats.start),
+                [TestFrameworkConstants.KEY_TEST_STARTED_AT]: testStats.start?.toISOString(),
                 [WdioJasmineTestFramework.KEY_TEST_DURATION]: testStats._duration,
                 [WdioJasmineTestFramework.KEY_TEST_RETRIES]: { limit: testStats.retries || 0, attempts: testStats.retries || 0 },
             })
@@ -226,8 +226,8 @@ export default class WdioJasmineTestFramework extends TestFramework {
             }
             const entries: Record<string, unknown> = {
                 [TestFrameworkConstants.KEY_TEST_RESULT]: result,
-                [TestFrameworkConstants.KEY_TEST_STARTED_AT]: this.#iso(testStats.start),
-                [TestFrameworkConstants.KEY_TEST_ENDED_AT]: this.#iso(testStats.end),
+                [TestFrameworkConstants.KEY_TEST_STARTED_AT]: testStats.start?.toISOString(),
+                [TestFrameworkConstants.KEY_TEST_ENDED_AT]: testStats.end?.toISOString(),
                 [WdioJasmineTestFramework.KEY_TEST_DURATION]: testStats._duration,
                 [TestFrameworkConstants.KEY_TEST_RESULT_AT]: new Date().toISOString(),
             }
@@ -268,7 +268,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
                 key,
                 [TestFrameworkConstants.KEY_HOOK_ID]: hookId,
                 [TestFrameworkConstants.KEY_HOOK_RESULT]: TestFrameworkConstants.DEFAULT_HOOK_RESULT,
-                [TestFrameworkConstants.KEY_EVENT_STARTED_AT]: this.#iso(hookStats.start),
+                [TestFrameworkConstants.KEY_EVENT_STARTED_AT]: hookStats.start?.toISOString(),
                 [TestFrameworkConstants.KEY_HOOK_LOGS]: [],
                 [TestFrameworkConstants.KEY_HOOK_NAME]: title,
                 [WdioJasmineTestFramework.KEY_HOOK_IDENTIFIER]: `${title} for ${scopes[scopes.length - 1]}`,
@@ -316,7 +316,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
                     failure = this.#failureFields(error)
                 }
             }
-            const endedAt = this.#iso(hookStats.end)
+            const endedAt = hookStats.end?.toISOString()
             const duration = hookStats._duration
             const emitHook = shouldProcessEventForTesthub('HookRunFinished')
             this.#enqueue(`${key}/POST`, async () => {
@@ -482,10 +482,6 @@ export default class WdioJasmineTestFramework extends TestFramework {
     #suiteTitle(testStats: TestStats) {
         const fullName = testStats.fullTitle || ''
         return fullName.slice(0, fullName.indexOf(testStats.title || '') - 1)
-    }
-
-    #iso(date: Date | undefined) {
-        return date ? date.toISOString() : undefined
     }
 
     static #hookState(key: string) {
