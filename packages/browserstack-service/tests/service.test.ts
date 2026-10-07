@@ -15,6 +15,7 @@ import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
 import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
 import { AutomationFrameworkState } from '../src/cli/states/automationFrameworkState.js'
+import APIUtils from '../src/cli/apiUtils.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
@@ -720,6 +721,23 @@ describe('before', () => {
 
         expect(service['_failReasons']).toEqual([])
         expect(service['_sessionBaseUrl']).toEqual('https://api.browserstack.com/automate-turboscale/v1/sessions')
+    })
+
+    it('uses the GRR/staging api host applied by the CLI for the session base url (SDK-6948)', () => {
+        const original = APIUtils.BROWSERSTACK_AUTOMATE_API_URL
+        APIUtils.BROWSERSTACK_AUTOMATE_API_URL = 'https://apik8s.bsstag.com'
+        try {
+            const service = new BrowserstackService({} as any, [{}] as any, {
+                user: 'foo',
+                key: 'bar',
+                capabilities: {}
+            })
+            service.before(service['_config'] as any, [], browser)
+
+            expect(service['_sessionBaseUrl']).toEqual('https://apik8s.bsstag.com/automate/sessions')
+        } finally {
+            APIUtils.BROWSERSTACK_AUTOMATE_API_URL = original
+        }
     })
 
     it('should overwrite execute command to route browserstack_executor via executeScript', async () => {

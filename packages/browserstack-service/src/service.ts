@@ -37,6 +37,7 @@ import { EVENTS } from './instrumentation/performance/constants.js'
 import { BrowserstackCLI } from './cli/index.js'
 import { drainSkipReports, markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
 import { CLIUtils } from './cli/cliUtils.js'
+import APIUtils from './cli/apiUtils.js'
 
 import { _fetch as fetch } from './fetchWrapper.js'
 import AutomationFramework from './cli/frameworks/automationFramework.js'
@@ -246,12 +247,16 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
         // Ensure capabilities are not null in case of multiremote
 
+        // Resolved here, after beforeSession's CLI bootstrap has applied the binary-supplied
+        // GRR/staging hosts (APIUtils.updateURLSForGRR); the defaults are the production hosts.
+        this._sessionBaseUrl = `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate/sessions`
+
         if (this._isAppAutomate()) {
-            this._sessionBaseUrl = 'https://api-cloud.browserstack.com/app-automate/sessions'
+            this._sessionBaseUrl = `${APIUtils.BROWSERSTACK_AA_API_CLOUD_URL}/app-automate/sessions`
         }
 
         if (this._turboScale) {
-            this._sessionBaseUrl = 'https://api.browserstack.com/automate-turboscale/v1/sessions'
+            this._sessionBaseUrl = `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate-turboscale/v1/sessions`
         }
 
         this._scenariosThatRan = []

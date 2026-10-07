@@ -1142,6 +1142,20 @@ export function getLtsSessionId(): string {
     return process.env[BROWSERSTACK_LTS_SESSION_ID] || ''
 }
 
+/**
+ * SDK-6948: a named internal staging env (`BROWSERSTACK_STAGING_ENV` set to a bare token such as
+ * `k8s`) serves its hub/cdp from `*.bsstag.com` (e.g. `hub-k8s.bsstag.com`). Treat those hosts as
+ * BrowserStack so session marking and Automate <-> TRA linking work there. A dotted value (full
+ * host) or an unset variable leaves the production-only host checks unchanged.
+ */
+export function isStagingEnvBsstagHost(hostname: string): boolean {
+    const stagingEnv = process.env.BROWSERSTACK_STAGING_ENV
+    if (!stagingEnv || stagingEnv.includes('.')) {
+        return false
+    }
+    return hostname === 'bsstag.com' || hostname.endsWith('.bsstag.com')
+}
+
 export function getCloudProvider(browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser): string {
     // NOTE: do NOT branch on isLoadTestingSession() here. getCloudProvider is
     // shared with Automate-side guards (automateModule onBefore/onAfterTest,
@@ -1157,11 +1171,11 @@ export function getCloudProvider(browser: WebdriverIO.Browser | WebdriverIO.Mult
         // Loop through all instances
         for (const instanceName of browser.instances) {
             const instance = (browser as any)[instanceName] as WebdriverIO.Browser
-            if (instance.options && instance.options.hostname && instance.options.hostname.includes('browserstack')) {
+            if (instance.options && instance.options.hostname && (instance.options.hostname.includes('browserstack') || isStagingEnvBsstagHost(instance.options.hostname))) {
                 return 'browserstack'
             }
         }
-    } else if (browser.options && browser.options.hostname && browser.options.hostname.includes('browserstack')) { // Single browser instance
+    } else if (browser.options && browser.options.hostname && (browser.options.hostname.includes('browserstack') || isStagingEnvBsstagHost(browser.options.hostname))) { // Single browser instance
         return 'browserstack'
     }
     return 'unknown_grid'
@@ -1270,7 +1284,7 @@ export function isBrowserstackInfra(config: BrowserstackConfig & Options.Testrun
     // In case hostname is not present anywhere in the config, it returns true by default as hostname is not a mandatory parameter in the config
 
     const isBrowserstack = (str: string ): boolean => {
-        return str === 'browserstack.com' || str.endsWith('.browserstack.com')
+        return str === 'browserstack.com' || str.endsWith('.browserstack.com') || isStagingEnvBsstagHost(str)
     }
 
     if ((config.hostname) && !isBrowserstack(config.hostname)) {
