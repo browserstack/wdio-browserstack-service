@@ -9,7 +9,6 @@ import { TestFrameworkConstants } from '../../../src/cli/frameworks/constants/te
 import { isBrowserstackSession } from '../../../src/util.js'
 import PerformanceTester from '../../../src/instrumentation/performance/performance-tester.js'
 import { _fetch as fetch } from '../../../src/fetchWrapper.js'
-import WdioJasmineTestFramework from '../../../src/cli/frameworks/wdioJasmineTestFramework.js'
 import { BrowserstackCLI } from '../../../src/cli/index.js'
 import type { Options } from '@wdio/types'
 
@@ -26,13 +25,6 @@ vi.mock('../../../src/cli/frameworks/testFramework.js', () => ({
 vi.mock('../../../src/cli/index.js', () => ({
     BrowserstackCLI: {
         getInstance: vi.fn(() => ({ options: {} }))
-    }
-}))
-
-// undefined = this worker is not jasmine on the CLI flow, so the existing aggregation applies
-vi.mock('../../../src/cli/frameworks/wdioJasmineTestFramework.js', () => ({
-    default: {
-        sessionVerdict: vi.fn(() => undefined)
     }
 }))
 
@@ -1024,6 +1016,11 @@ describe('AutomateModule preferScenarioName', () => {
 describe('AutomateModule — jasmine session verdict', () => {
     let automateModule: AutomateModule
     const putBodies = () => vi.mocked(fetch).mock.calls.map(([url, opts]) => [String(url).split('/sessions/')[1], JSON.parse((opts as { body: string }).body)])
+    const inputs = (overrides: Record<string, unknown> = {}) => ({
+        result: 0, specsRan: true, failReasons: [], pureTestFailReasons: [], hookFailReasons: [], ...overrides
+    })
+    const verdict = (overrides: Record<string, unknown>, ignoreHooksStatus: boolean) =>
+        (automateModule as any).jasmineVerdict(inputs(overrides), ignoreHooksStatus)
 
     beforeEach(() => {
         vi.clearAllMocks()
@@ -1040,17 +1037,61 @@ describe('AutomateModule — jasmine session verdict', () => {
         } as any
     })
 
-    afterEach(() => {
-        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockReset().mockReturnValue(undefined)
+    describe('jasmineVerdict (legacy service.after())', () => {
+        it('passes a clean run with no reason, whatever ignoreHooksStatus says', () => {
+            expect(verdict({}, false)).toEqual({ status: 'passed' })
+            expect(verdict({}, true)).toEqual({ status: 'passed' })
+        })
+
+        it('fails a runner-clean run on any recorded reason, joined in order', () => {
+            expect(verdict({ failReasons: ['beforeAll hook failure', 'boom'], pureTestFailReasons: ['boom'], hookFailReasons: ['beforeAll hook failure'] }, false))
+                .toEqual({ status: 'failed', reason: 'beforeAll hook failure\nboom' })
+        })
+
+        it('under ignoreHooksStatus judges a runner-clean run on its pure test failures only', () => {
+            expect(verdict({ hookFailReasons: ['afterAll hook failure'] }, true)).toEqual({ status: 'passed' })
+            expect(verdict({ failReasons: ['boom'], pureTestFailReasons: ['boom'], hookFailReasons: ['afterAll hook failure'] }, true))
+                .toEqual({ status: 'failed', reason: 'boom' })
+        })
+
+        it('under ignoreHooksStatus passes a runner-failed run whose only failures are hooks', () => {
+            expect(verdict({ result: 2, hookFailReasons: ['beforeEach hook failure'] }, true)).toEqual({ status: 'passed' })
+        })
+
+        it('under ignoreHooksStatus fails a runner-failed run with pure failures, on those reasons', () => {
+            expect(verdict({ result: 1, failReasons: ['boom'], pureTestFailReasons: ['boom'], hookFailReasons: ['hook'] }, true))
+                .toEqual({ status: 'failed', reason: 'boom' })
+        })
+
+        it('under ignoreHooksStatus fails a runner-failed run with no recorded failure, with no reason', () => {
+            expect(verdict({ result: 1 }, true)).toEqual({ status: 'failed', reason: undefined })
+        })
+
+        it('fails a runner-failed run with every recorded reason when hooks count', () => {
+            expect(verdict({ result: 1, failReasons: ['beforeEach hook failure', 'boom'], pureTestFailReasons: ['boom'], hookFailReasons: ['beforeEach hook failure'] }, false))
+                .toEqual({ status: 'failed', reason: 'beforeEach hook failure\nboom' })
+            expect(verdict({ result: 1 }, false)).toEqual({ status: 'failed', reason: undefined })
+        })
+
+        it('fails a worker where no spec ran, preferring pure reasons under ignoreHooksStatus', () => {
+            expect(verdict({ specsRan: false }, false)).toEqual({ status: 'failed', reason: undefined })
+            expect(verdict({ specsRan: false, failReasons: ['beforeAll hook failure'], hookFailReasons: ['beforeAll hook failure'] }, false))
+                .toEqual({ status: 'failed', reason: 'beforeAll hook failure' })
+            expect(verdict({ specsRan: false, hookFailReasons: ['beforeAll hook failure'] }, true)).toEqual({ status: 'failed', reason: undefined })
+            expect(verdict({ specsRan: false, failReasons: ['boom'], pureTestFailReasons: ['boom'] }, true)).toEqual({ status: 'failed', reason: 'boom' })
+        })
+
+        it('reproduces the CP0 hookfail verdict: failed, every hook failure in the order it happened', () => {
+            const hookFailures = ['beforeAll hook failure', 'beforeEach hook failure', 'beforeEach hook failure', 'afterEach hook failure', 'afterEach hook failure']
+            expect(verdict({ result: 6, failReasons: hookFailures, hookFailReasons: hookFailures }, false))
+                .toEqual({ status: 'failed', reason: hookFailures.join('\n') })
+        })
     })
 
-    it('marks the live session with the framework verdict, the last name and the joined reasons', async () => {
-        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockImplementation((id) => id === 'live'
-            ? { status: 'failed', reason: 'beforeAll hook failure\nafterEach hook failure' }
-            : null)
-        ;(automateModule as any).sessionMap.set('live', { lastTestName: 'Hookfail afterEach suite', appliedName: 'Hookfail afterEach suite', testResults: new Map(), scenariosRan: 0 })
+    it('marks the live session with the verdict, the last name and the joined reasons', async () => {
+        (automateModule as any).sessionMap.set('live', { lastTestName: 'Hookfail afterEach suite', appliedName: 'Hookfail afterEach suite', testResults: new Map(), scenariosRan: 0 })
 
-        await automateModule.onAfterExecute()
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1, failReasons: ['beforeAll hook failure', 'afterEach hook failure'] }) })
 
         expect(putBodies()).toEqual([
             ['live.json', { status: 'failed', name: 'Hookfail afterEach suite', reason: 'beforeAll hook failure\nafterEach hook failure' }]
@@ -1058,18 +1099,15 @@ describe('AutomateModule — jasmine session verdict', () => {
     })
 
     it('marks a live session no spec registered, without a name', async () => {
-        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockReturnValue({ status: 'failed', reason: 'beforeAll hook failure' })
-
-        await automateModule.onAfterExecute()
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1, specsRan: false, failReasons: ['beforeAll hook failure'] }) })
 
         expect(putBodies()).toEqual([['live.json', { status: 'failed', reason: 'beforeAll hook failure' }]])
     })
 
     it('leaves a reloaded session to its onReload mark, but still names it', async () => {
-        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockImplementation((id) => id === 'live' ? { status: 'passed' } : null)
-        ;(automateModule as any).sessionMap.set('old', { lastTestName: 'Suite A', testResults: new Map(), scenariosRan: 0 })
+        (automateModule as any).sessionMap.set('old', { lastTestName: 'Suite A', testResults: new Map(), scenariosRan: 0 })
 
-        await automateModule.onAfterExecute()
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs() })
 
         expect(putBodies()).toEqual([
             ['old.json', { name: 'Suite A' }],
@@ -1077,32 +1115,39 @@ describe('AutomateModule — jasmine session verdict', () => {
         ])
     })
 
-    it('passes ignoreHooksStatus from the worker\'s service options to the verdict', async () => {
-        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockReturnValue({ status: 'passed' })
+    it('marks no session status when no session is live', async () => {
+        vi.mocked(AutomationFramework.getState).mockReturnValue('' as any)
+        ;(automateModule as any).sessionMap.set('old', { lastTestName: 'Suite A', testResults: new Map(), scenariosRan: 0 })
+
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1 }) })
+
+        expect(putBodies()).toEqual([['old.json', { name: 'Suite A' }]])
+    })
+
+    it('reads ignoreHooksStatus from the worker\'s service options', async () => {
         vi.mocked(BrowserstackCLI.getInstance).mockReturnValueOnce({ options: { testObservabilityOptions: { ignoreHooksStatus: true } } } as any)
 
-        await automateModule.onAfterExecute()
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1, hookFailReasons: ['beforeEach hook failure'] }) })
 
-        expect(WdioJasmineTestFramework.sessionVerdict).toHaveBeenCalledWith('live', true)
+        expect(putBodies()).toEqual([['live.json', { status: 'passed' }]])
     })
 
     it('honours skipSessionStatus and skipSessionName', async () => {
-        vi.mocked(WdioJasmineTestFramework.sessionVerdict).mockReturnValue({ status: 'failed', reason: 'x' })
-        ;(automateModule as any).sessionMap.set('live', { lastTestName: 'Suite', testResults: new Map(), scenariosRan: 0 })
+        (automateModule as any).sessionMap.set('live', { lastTestName: 'Suite', testResults: new Map(), scenariosRan: 0 })
         ;(automateModule.config as any).testContextOptions = { skipSessionName: true, skipSessionStatus: true }
 
-        await automateModule.onAfterExecute()
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1, failReasons: ['x'] }) })
 
         expect(fetch).not.toHaveBeenCalled()
     })
 
-    it('keeps the existing per-test aggregation when the worker is not jasmine', async () => {
+    it('keeps the existing per-test aggregation when no verdict inputs arrive (mocha, cucumber)', async () => {
         (automateModule as any).sessionMap.set('live', {
             lastTestName: 'Suite', appliedName: 'Suite', scenariosRan: 0,
             testResults: new Map([['t', { testName: 'Suite', status: 'failed', reason: 'boom' }]])
         })
 
-        await automateModule.onAfterExecute()
+        await automateModule.onAfterExecute({})
 
         expect(putBodies()).toEqual([['live.json', { status: 'failed', reason: 'boom' }]])
     })

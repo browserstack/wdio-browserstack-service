@@ -7,7 +7,8 @@ import { BrowserstackCLI } from './cli/index.js'
 import { reportSkippedTest, resolveSpecFile } from './cli/skipReporter.js'
 import WdioJasmineTestFramework from './cli/frameworks/wdioJasmineTestFramework.js'
 import type { JasmineSuiteContext } from './cli/frameworks/wdioJasmineTestFramework.js'
-import type TestHubModule from './cli/modules/testHubModule.js'
+import { TestFrameworkState } from './cli/states/testFrameworkState.js'
+import { HookState } from './cli/states/hookState.js'
 import * as url from 'node:url'
 
 import { v4 as uuidv4 } from 'uuid'
@@ -76,7 +77,7 @@ class _TestReporter extends WDIOReporter {
 
     public async appendTestItemLog(stdLog: StdLog) {
         if (this.isCliJasmine()) {
-            this.cliJasmineFramework()?.onReporterLog(stdLog as unknown as Record<string, unknown>)
+            this.cliJasmineFramework()?.trackEvent(TestFrameworkState.LOG, HookState.POST, { source: 'reporter', logEntry: stdLog })
             return
         }
         if (this._currentHook.uuid && !this._currentHook.finished) {
@@ -146,7 +147,7 @@ class _TestReporter extends WDIOReporter {
      * asynchronously, so hold the worker until it has drained. Always true on every other path.
      */
     get isSynchronised() {
-        return WdioJasmineTestFramework.isIdle()
+        return !this.isCliJasmine() || (this.cliJasmineFramework()?.isIdle() ?? true)
     }
 
     /** On the CLI flow jasmine's test/hook/log events feed the framework tracker, never the legacy Listener. */
@@ -155,13 +156,8 @@ class _TestReporter extends WDIOReporter {
     }
 
     cliJasmineFramework() {
-        const cli = BrowserstackCLI.getInstance()
-        const framework = cli.getTestFramework()
-        if (!(framework instanceof WdioJasmineTestFramework)) {
-            return null
-        }
-        framework.setTestHubModule(cli.modules?.TestHubModule as TestHubModule | undefined)
-        return framework
+        const framework = BrowserstackCLI.getInstance().getTestFramework()
+        return framework instanceof WdioJasmineTestFramework ? framework : null
     }
 
     jasmineSuiteContext(): JasmineSuiteContext {
@@ -194,7 +190,7 @@ class _TestReporter extends WDIOReporter {
 
         testStats.end ||= new Date()
         if (this.isCliJasmine()) {
-            this.cliJasmineFramework()?.onReporterTestEnd(testStats, this.jasmineSuiteContext())
+            this.cliJasmineFramework()?.trackEvent(TestFrameworkState.TEST, HookState.POST, { source: 'reporter', testStats, context: this.jasmineSuiteContext() })
             return
         }
         this.listener.testFinished(await this.getRunData(testStats, 'TestRunFinished'))
@@ -208,7 +204,9 @@ class _TestReporter extends WDIOReporter {
             return
         }
         if (this.isCliJasmine()) {
-            const cliUuid = this.cliJasmineFramework()?.onReporterTestStart(testStats, this.jasmineSuiteContext())
+            const args: Record<string, unknown> = { source: 'reporter', testStats, context: this.jasmineSuiteContext() }
+            this.cliJasmineFramework()?.trackEvent(TestFrameworkState.TEST, HookState.PRE, args)
+            const cliUuid = args.testUuid as string | undefined
             if (cliUuid) {
                 _TestReporter.currentTest.uuid = cliUuid
                 _TestReporter.currentTest.name = testStats.title
@@ -230,7 +228,7 @@ class _TestReporter extends WDIOReporter {
             return
         }
         if (this.isCliJasmine()) {
-            this.cliJasmineFramework()?.onReporterHookStart(hookStats, this.jasmineSuiteContext())
+            this.cliJasmineFramework()?.trackEvent(WdioJasmineTestFramework.reporterHookState(hookStats.title), HookState.PRE, { source: 'reporter', hookStats, context: this.jasmineSuiteContext() })
             return
         }
 
@@ -252,7 +250,7 @@ class _TestReporter extends WDIOReporter {
             if (!hookStats.state && !hookStats.error) {
                 hookStats.state = 'passed'
             }
-            this.cliJasmineFramework()?.onReporterHookEnd(hookStats)
+            this.cliJasmineFramework()?.trackEvent(WdioJasmineTestFramework.reporterHookState(hookStats.title), HookState.POST, { source: 'reporter', hookStats, context: this.jasmineSuiteContext() })
             return
         }
         const identifier = this.getHookIdentifier(hookStats)

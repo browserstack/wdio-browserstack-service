@@ -5,8 +5,6 @@ import type { Frameworks } from '@wdio/types'
 import type { HookStats, TestStats } from '@wdio/reporter'
 
 import TestFramework from './testFramework.js'
-import AutomationFramework from './automationFramework.js'
-import { AutomationFrameworkConstants } from './constants/automationFrameworkConstants.js'
 import { TestFrameworkState } from '../states/testFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import TestFrameworkInstance from '../instances/testFrameworkInstance.js'
@@ -25,17 +23,6 @@ export interface JasmineSuiteContext {
     suiteFile?: string
 }
 
-/** The Automate verdict legacy `service.after()` marks a session with. */
-export interface SessionVerdict {
-    status: 'passed' | 'failed'
-    reason?: string
-}
-
-interface SessionFailure {
-    reason: string
-    fromHook: boolean
-}
-
 interface FailureFields {
     failure?: Array<{ backtrace: string[] }>
     failureReason?: string
@@ -48,10 +35,11 @@ interface FailureFields {
  * Extends the BASE TestFramework, never WdioMochaTestFramework: jasmine's identity (fullName),
  * hook taxonomy and skip/exclude states differ from mocha's.
  *
- * Two event sources, as on the legacy flow:
- * - the WDIO reporter (`reporter.ts`) feeds Test Observability only — it is the one jasmine source that
- *   sees pending, focused-out and beforeAll-failed specs. Its hooks are not awaited by WDIO, so its events
- *   are applied through one ordered queue and sent straight to TestHubModule, never to the other modules;
+ * Two event sources, as on the legacy flow, both through `trackEvent`:
+ * - the WDIO reporter (`reporter.ts`, `source: 'reporter'`) feeds Test Observability only — it is the one
+ *   jasmine source that sees pending, focused-out and beforeAll-failed specs. Its hooks are not awaited by
+ *   WDIO, so its events are applied through one ordered queue and sent straight to TestHubModule, never to
+ *   the other modules;
  * - the service's awaited beforeTest/afterTest drive the product modules (a11y, Automate, Percy) through
  *   the observers, for executed specs only, with TestHub skipped.
  */
@@ -70,13 +58,6 @@ export default class WdioJasmineTestFramework extends TestFramework {
     static KEY_HOOK_FAILURE_TYPE = 'hook_failure_type'
     static KEY_HOOK_FAILURE_REASON = 'hook_failure_reason'
 
-    static #pendingEvents = 0
-    static #serviceHookStates = new Set<State>([
-        TestFrameworkState.BEFORE_ALL,
-        TestFrameworkState.BEFORE_EACH,
-        TestFrameworkState.AFTER_EACH,
-        TestFrameworkState.AFTER_ALL,
-    ])
     static #hookTypes = new Map([
         ['beforeAll', 'BEFORE_ALL'],
         ['afterAll', 'AFTER_ALL'],
@@ -97,23 +78,16 @@ export default class WdioJasmineTestFramework extends TestFramework {
     #openHook: TestFrameworkInstance | null = null
     #lastSpec: TestFrameworkInstance | null = null
     #queue: Promise<void> = Promise.resolve()
-    // Legacy `service.ts` session verdict inputs: `_specsRan` and the runner result are per worker,
-    // the reason lists per session (`onReload` resets them).
-    #specsRan = false
-    #runnerFailedCount = 0
-    // In the order they happened, as legacy pushed them
-    #sessionFailures = new Map<string, SessionFailure[]>()
-    static #current: WdioJasmineTestFramework | null = null
+    #pendingEvents = 0
 
     constructor(testFrameworks: string[], testFrameworkVersions: Record<string, string>, binSessionId: string) {
         super(testFrameworks, testFrameworkVersions, binSessionId)
-        WdioJasmineTestFramework.#current = this
         logger.debug('WdioJasmineTestFramework: constructed')
     }
 
     /** True when no reporter event is still waiting to be dispatched (the reporter's `isSynchronised`). */
-    static isIdle() {
-        return WdioJasmineTestFramework.#pendingEvents === 0
+    isIdle() {
+        return this.#pendingEvents === 0
     }
 
     /** The WDIO `hookName` a jasmine hook runs under, as the hook-type key `getHookType` returns for mocha titles. */
@@ -121,27 +95,32 @@ export default class WdioJasmineTestFramework extends TestFramework {
         return WdioJasmineTestFramework.#hookTypes.get(hookName ?? '') ?? 'unknown'
     }
 
+    /** The state the reporter reports a hook in: BEFORE_ALL/AFTER_ALL, else NONE (each-hooks are not reported). */
+    static reporterHookState(hookTitle: string | undefined): State {
+        return WdioJasmineTestFramework.#hookState(getHookType(String(hookTitle ?? '').toLowerCase())) ?? TestFrameworkState.NONE
+    }
+
     setTestHubModule(testHub: TestHubModule | null | undefined) {
         this.#testHub = testHub ?? null
     }
 
     /**
-     * The service's hooks call this. INIT_TEST pins the spec's instance and uuid; TEST PRE/POST reach the
-     * product modules. LOG_REPORT carries nothing jasmine needs: the result comes from the reporter.
+     * Reporter events (`source: 'reporter'`) are applied before this returns its promise: TEST PRE writes the
+     * spec's uuid to `args.testUuid`. The service's hooks call this without a source: INIT_TEST pins the
+     * spec's instance and uuid; TEST PRE/POST reach the product modules. LOG_REPORT and the hook states carry
+     * nothing jasmine needs: results come from the reporter.
      */
     async trackEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown> = {}) {
+        if (args.source === 'reporter') {
+            this.#trackReporterEvent(testFrameworkState, hookState, args)
+            return
+        }
         if (testFrameworkState === TestFrameworkState.LOG) {
-            this.onReporterLog(args.logEntry as Record<string, unknown>)
+            this.#log(args.logEntry as Record<string, unknown>)
             return
         }
         try {
             await this.#queue
-            if (WdioJasmineTestFramework.#serviceHookStates.has(testFrameworkState)) {
-                if (hookState === HookState.POST) {
-                    this.#recordHookResult(args.result as Frameworks.TestResult | undefined)
-                }
-                return
-            }
             if (testFrameworkState !== TestFrameworkState.INIT_TEST && testFrameworkState !== TestFrameworkState.TEST) {
                 return
             }
@@ -157,7 +136,6 @@ export default class WdioJasmineTestFramework extends TestFramework {
             if (hookState === HookState.PRE) {
                 this.#suiteTitles.set(instance, args.suiteTitle)
             } else {
-                this.#recordTestResult(args.result as Frameworks.TestResult | undefined)
                 // afterTest hands over the raw `Jasmine__TopLevel__Suite`; the modules need the describe chain beforeTest derived
                 moduleArgs.suiteTitle = this.#suiteTitles.get(instance) ?? args.suiteTitle
                 this.#suiteTitles.delete(instance)
@@ -171,7 +149,24 @@ export default class WdioJasmineTestFramework extends TestFramework {
         }
     }
 
-    onReporterTestStart(testStats: TestStats, context: JasmineSuiteContext) {
+    #trackReporterEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
+        const context = args.context as JasmineSuiteContext
+        if (testFrameworkState === TestFrameworkState.TEST) {
+            if (hookState === HookState.PRE) {
+                args.testUuid = this.#testStarted(args.testStats as TestStats, context)
+            } else {
+                this.#testEnded(args.testStats as TestStats, context)
+            }
+        } else if (testFrameworkState === TestFrameworkState.LOG) {
+            this.#log(args.logEntry as Record<string, unknown> | undefined)
+        } else if (hookState === HookState.PRE) {
+            this.#hookStarted(testFrameworkState, args.hookStats as HookStats, context)
+        } else {
+            this.#hookEnded(testFrameworkState, args.hookStats as HookStats)
+        }
+    }
+
+    #testStarted(testStats: TestStats, context: JasmineSuiteContext) {
         try {
             logger.debug(`WdioJasmineTestFramework: test start uid=${testStats.uid}`)
             const instance = this.#createInstance()
@@ -207,7 +202,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
         }
     }
 
-    onReporterTestEnd(testStats: TestStats, context: JasmineSuiteContext) {
+    #testEnded(testStats: TestStats, context: JasmineSuiteContext) {
         try {
             const instance = this.#specInstances.get(testStats.uid)
             if (!instance) {
@@ -221,9 +216,6 @@ export default class WdioJasmineTestFramework extends TestFramework {
 
             const state = testStats.state
             const error = testStats.error
-            if (state === 'failed') {
-                this.#runnerFailedCount++
-            }
             let result: string = state
             let failure: FailureFields = {}
             if (state === 'failed') {
@@ -261,12 +253,11 @@ export default class WdioJasmineTestFramework extends TestFramework {
         }
     }
 
-    onReporterHookStart(hookStats: HookStats, context: JasmineSuiteContext) {
+    #hookStarted(hookFrameworkState: State, hookStats: HookStats, context: JasmineSuiteContext) {
         try {
             const title = hookStats.title
             const key = getHookType(String(title ?? '').toLowerCase())
-            const hookFrameworkState = WdioJasmineTestFramework.#hookState(key)
-            if (!hookFrameworkState || context.scopes.length === 0) {
+            if (!WdioJasmineTestFramework.#hookState(key) || context.scopes.length === 0) {
                 logger.debug(`WdioJasmineTestFramework: hook start not reported title=${title} scopes=${context.scopes.length}`)
                 return
             }
@@ -306,7 +297,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
         }
     }
 
-    onReporterHookEnd(hookStats: HookStats) {
+    #hookEnded(hookFrameworkState: State, hookStats: HookStats) {
         try {
             const instance = this.#hookInstances.get(hookStats.uid)
             if (!instance) {
@@ -314,7 +305,6 @@ export default class WdioJasmineTestFramework extends TestFramework {
             }
             this.#hookInstances.delete(hookStats.uid)
             const key = getHookType(String(hookStats.title ?? '').toLowerCase())
-            const hookFrameworkState = WdioJasmineTestFramework.#hookState(key)!
 
             const state = hookStats.state
             const error = hookStats.error
@@ -364,7 +354,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
      * Console logs: an open beforeAll/afterAll wins, else the last-started spec, even after it ended.
      * HTTP command logs and screenshots name their spec (`test_run_uuid`), as legacy did; unknown uuids are dropped.
      */
-    onReporterLog(logEntry: Record<string, unknown> | undefined) {
+    #log(logEntry: Record<string, unknown> | undefined) {
         try {
             if (!logEntry || !shouldProcessEventForTesthub('LogCreated')) {
                 return
@@ -393,73 +383,6 @@ export default class WdioJasmineTestFramework extends TestFramework {
         } catch (error) {
             logger.error(`WdioJasmineTestFramework: log failed: ${util.format(error)}`)
         }
-    }
-
-    /**
-     * The verdict legacy `service.after()` would mark the live session with: passed only when the runner
-     * reported no failed spec, a spec ran, and no test or hook failed, with `ignoreHooksStatus` handled as
-     * coded there. `null` for any other session: legacy marked a reloaded session once, in `onReload`.
-     * `undefined` when this worker does not run jasmine on the CLI flow.
-     */
-    static sessionVerdict(sessionId: string, ignoreHooksStatus: boolean): SessionVerdict | null | undefined {
-        const current = WdioJasmineTestFramework.#current
-        return current ? current.#verdict(sessionId, ignoreHooksStatus) : undefined
-    }
-
-    #verdict(sessionId: string, ignoreHooksStatus: boolean): SessionVerdict | null {
-        if (!sessionId || sessionId !== WdioJasmineTestFramework.#liveSessionId()) {
-            return null
-        }
-        const failures = this.#sessionFailures.get(sessionId) ?? []
-        const pureTestFailReasons = failures.filter(f => !f.fromHook).map(f => f.reason)
-        const hookFailReasons = failures.filter(f => f.fromHook).map(f => f.reason)
-        const failReasons = ignoreHooksStatus ? pureTestFailReasons : failures.map(f => f.reason)
-        const joined = (reasons: string[]) => reasons.length > 0 ? reasons.join('\n') : undefined
-
-        if (this.#runnerFailedCount === 0 && this.#specsRan) {
-            const reasons = ignoreHooksStatus ? pureTestFailReasons : failReasons
-            return reasons.length > 0 ? { status: 'failed', reason: joined(reasons) } : { status: 'passed' }
-        }
-        if (ignoreHooksStatus && this.#specsRan) {
-            const hasOnlyHookFailures = failReasons.length === 0 && hookFailReasons.length > 0
-            if (hasOnlyHookFailures && pureTestFailReasons.length === 0) {
-                return { status: 'passed' }
-            }
-            return { status: 'failed', reason: joined(pureTestFailReasons) }
-        }
-        return {
-            status: 'failed',
-            reason: ignoreHooksStatus && pureTestFailReasons.length > 0 ? joined(pureTestFailReasons) : joined(failReasons),
-        }
-    }
-
-    /** Legacy `service.afterTest()`: the spec ran; a failure counts toward the session. */
-    #recordTestResult(result: Frameworks.TestResult | undefined) {
-        this.#specsRan = true
-        if (!result || result.passed || result.skipped) {
-            return
-        }
-        this.#recordFailure((result.error && result.error.message) || 'Unknown Error', false)
-    }
-
-    /** Legacy `service.afterHook()`, any of the four hook types. */
-    #recordHookResult(result: Frameworks.TestResult | undefined) {
-        if (!result || result.passed) {
-            return
-        }
-        this.#recordFailure((result.error && result.error.message) || 'Hook failed', true)
-    }
-
-    #recordFailure(reason: string, fromHook: boolean) {
-        const sessionId = WdioJasmineTestFramework.#liveSessionId()
-        const failures = this.#sessionFailures.get(sessionId) ?? []
-        failures.push({ reason, fromHook })
-        this.#sessionFailures.set(sessionId, failures)
-    }
-
-    static #liveSessionId(): string {
-        const autoInstance = AutomationFramework.getTrackedInstance()
-        return autoInstance ? String(AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID) || '') : ''
     }
 
     #createInstance() {
@@ -525,11 +448,11 @@ export default class WdioJasmineTestFramework extends TestFramework {
     }
 
     #enqueue(label: string, step: () => Promise<void>) {
-        WdioJasmineTestFramework.#pendingEvents++
+        this.#pendingEvents++
         this.#queue = this.#queue.then(step).catch((error) => {
             logger.error(`WdioJasmineTestFramework: ${label} failed: ${util.format(error)}`)
         }).finally(() => {
-            WdioJasmineTestFramework.#pendingEvents--
+            this.#pendingEvents--
         })
     }
 

@@ -6,6 +6,8 @@ import type { StdLog } from '../src/index.js'
 import TestReporter from '../src/reporter.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
 import WdioJasmineTestFramework from '../src/cli/frameworks/wdioJasmineTestFramework.js'
+import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
+import { HookState } from '../src/cli/states/hookState.js'
 import * as utils from '../src/util.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 
@@ -385,7 +387,8 @@ describe('test-reporter', () => {
         let framework: WdioJasmineTestFramework
         let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
         let getGitMetaDataSpy: ReturnType<typeof vi.spyOn>
-        let isIdleSpy: ReturnType<typeof vi.spyOn> | undefined
+        // the reporter-sourced trackEvent calls, as [state, hookState, args]
+        const reporterCalls = () => vi.mocked(framework.trackEvent).mock.calls.filter(([, , args]) => (args as Record<string, unknown>)?.source === 'reporter')
 
         const setCli = (running: boolean, testFramework: unknown) => {
             getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
@@ -398,14 +401,11 @@ describe('test-reporter', () => {
             vi.spyOn(utils, 'getCloudProvider').mockReturnValue('browserstack')
             getGitMetaDataSpy = vi.spyOn(utils, 'getGitMetaData').mockResolvedValue(undefined as any)
             framework = new WdioJasmineTestFramework(['WebdriverIO-jasmine'], { 'WebdriverIO-jasmine': '9.39.0' }, 'bin')
-            for (const m of ['onReporterTestStart', 'onReporterTestEnd', 'onReporterHookStart', 'onReporterHookEnd', 'onReporterLog'] as const) {
-                vi.spyOn(framework, m)
-            }
-            vi.mocked(framework.onReporterTestStart).mockReturnValue('cli-uuid')
-            vi.mocked(framework.onReporterTestEnd).mockReturnValue(undefined)
-            vi.mocked(framework.onReporterHookStart).mockReturnValue(undefined)
-            vi.mocked(framework.onReporterHookEnd).mockReturnValue(undefined)
-            vi.mocked(framework.onReporterLog).mockReturnValue(undefined)
+            vi.spyOn(framework, 'trackEvent').mockImplementation(async (state, hookState, args = {}) => {
+                if (state === TestFrameworkState.TEST && hookState === HookState.PRE) {
+                    args.testUuid = 'cli-uuid'
+                }
+            })
 
             reporter = new TestReporter({})
             await reporter.onRunnerStart(jasmineRunnerConfig as any)
@@ -422,8 +422,6 @@ describe('test-reporter', () => {
         afterEach(() => {
             getInstanceSpy?.mockRestore()
             getInstanceSpy = undefined
-            isIdleSpy?.mockRestore()
-            isIdleSpy = undefined
             getGitMetaDataSpy.mockRestore()
             for (const spy of Object.values(listener)) {
                 spy.mockRestore()
@@ -441,11 +439,14 @@ describe('test-reporter', () => {
                 await reporter.onTestEnd({ ...stats, state: 'passed' } as any)
                 await reporter.appendTestItemLog(logEntry())
 
-                expect(framework.onReporterHookStart).toHaveBeenCalledTimes(1)
-                expect(framework.onReporterHookEnd).toHaveBeenCalledTimes(1)
-                expect(framework.onReporterTestStart).toHaveBeenCalledTimes(1)
-                expect(framework.onReporterTestEnd).toHaveBeenCalledTimes(1)
-                expect(framework.onReporterLog).toHaveBeenCalledTimes(1)
+                expect(reporterCalls().map(([state, hookState]) => [state, hookState])).toEqual([
+                    [TestFrameworkState.BEFORE_ALL, HookState.PRE],
+                    [TestFrameworkState.BEFORE_ALL, HookState.POST],
+                    [TestFrameworkState.TEST, HookState.PRE],
+                    [TestFrameworkState.TEST, HookState.POST],
+                    [TestFrameworkState.LOG, HookState.POST],
+                ])
+                expect(framework.trackEvent).toHaveBeenCalledTimes(5)
                 for (const spy of Object.values(listener)) {
                     expect(spy).not.toHaveBeenCalled()
                 }
@@ -453,10 +454,38 @@ describe('test-reporter', () => {
 
             it('passes the suite stack and suite file', async () => {
                 await reporter.onTestStart(jasmineTestStats() as any)
-                expect(framework.onReporterTestStart).toHaveBeenCalledWith(
-                    expect.objectContaining({ fullTitle: 'Nested outer outer passing test' }),
-                    { scopes: ['Nested outer'], suiteFile: '/work/test/p2/nested.spec.js' }
-                )
+                expect(framework.trackEvent).toHaveBeenCalledWith(TestFrameworkState.TEST, HookState.PRE, expect.objectContaining({
+                    source: 'reporter',
+                    testStats: expect.objectContaining({ fullTitle: 'Nested outer outer passing test' }),
+                    context: { scopes: ['Nested outer'], suiteFile: '/work/test/p2/nested.spec.js' },
+                }))
+            })
+
+            it('passes hook stats with the suite context, and log entries as they came', async () => {
+                const hook = hookStats()
+                await reporter.onHookStart(hook as any)
+                await reporter.onHookEnd(hook as any)
+                const entry = logEntry()
+                await reporter.appendTestItemLog(entry)
+                const context = { scopes: ['Nested outer'], suiteFile: '/work/test/p2/nested.spec.js' }
+                expect(reporterCalls().map(([, , args]) => args)).toEqual([
+                    { source: 'reporter', hookStats: hook, context },
+                    { source: 'reporter', hookStats: hook, context },
+                    { source: 'reporter', logEntry: entry },
+                ])
+            })
+
+            it('reports an each-hook in NONE, leaving the class to drop it', async () => {
+                await reporter.onHookStart({ ...hookStats(), title: '"before each" hook' } as any)
+                expect(framework.trackEvent).toHaveBeenCalledWith(TestFrameworkState.NONE, HookState.PRE, expect.objectContaining({ source: 'reporter' }))
+            })
+
+            it('records nothing for the spec when the framework minted no uuid', async () => {
+                vi.mocked(framework.trackEvent).mockResolvedValue(undefined)
+                ;(TestReporter as any).currentTest = {}
+                await reporter.onTestStart({ ...jasmineTestStats(), fullTitle: 'No uuid spec' } as any)
+                expect(TestReporter.getTests()['No uuid spec']).toBeUndefined()
+                expect((TestReporter as any).currentTest).toEqual({})
             })
 
             it('records the CLI uuid for the spec so command-result lookups resolve to the wire uuid', async () => {
@@ -481,14 +510,13 @@ describe('test-reporter', () => {
             it('drops <unknown test>', async () => {
                 await reporter.onTestStart({ ...jasmineTestStats(), fullTitle: '<unknown test>' } as any)
                 await reporter.onTestEnd({ ...jasmineTestStats(), fullTitle: '<unknown test>' } as any)
-                expect(framework.onReporterTestStart).not.toHaveBeenCalled()
-                expect(framework.onReporterTestEnd).not.toHaveBeenCalled()
+                expect(framework.trackEvent).not.toHaveBeenCalled()
             })
 
             it('sends nothing when Test Observability is opted out', async () => {
                 reporter['_observability'] = false
                 await reporter.onTestStart(jasmineTestStats() as any)
-                expect(framework.onReporterTestStart).not.toHaveBeenCalled()
+                expect(framework.trackEvent).not.toHaveBeenCalled()
                 expect(listener.testStarted).not.toHaveBeenCalled()
             })
 
@@ -501,9 +529,14 @@ describe('test-reporter', () => {
             })
 
             it('reports unsynchronised while the framework has queued events', () => {
-                isIdleSpy = vi.spyOn(WdioJasmineTestFramework, 'isIdle').mockReturnValue(false)
+                const isIdle = vi.spyOn(framework, 'isIdle').mockReturnValue(false)
                 expect(reporter.isSynchronised).toBe(false)
-                isIdleSpy.mockReturnValue(true)
+                isIdle.mockReturnValue(true)
+                expect(reporter.isSynchronised).toBe(true)
+            })
+
+            it('is synchronised when the CLI test framework is not jasmine\'s', () => {
+                setCli(true, { isIdle: () => false })
                 expect(reporter.isSynchronised).toBe(true)
             })
         })
@@ -525,8 +558,7 @@ describe('test-reporter', () => {
                 expect(listener.testStarted).toHaveBeenCalledTimes(1)
                 expect(listener.testFinished).toHaveBeenCalledTimes(1)
                 expect(listener.logCreated).toHaveBeenCalledTimes(1)
-                expect(framework.onReporterTestStart).not.toHaveBeenCalled()
-                expect(framework.onReporterLog).not.toHaveBeenCalled()
+                expect(framework.trackEvent).not.toHaveBeenCalled()
                 expect(TestReporter.getTests()['Nested outer outer passing test']).toEqual({ uuid: '123456789' })
             })
         })
@@ -538,7 +570,7 @@ describe('test-reporter', () => {
                 reporter['_config']!.framework = 'mocha'
                 await reporter.onTestStart(jasmineTestStats() as any)
                 await reporter.onTestEnd({ ...jasmineTestStats(), state: 'passed' } as any)
-                expect(framework.onReporterTestStart).not.toHaveBeenCalled()
+                expect(framework.trackEvent).not.toHaveBeenCalled()
                 expect(listener.testStarted).not.toHaveBeenCalled()
                 expect(listener.testFinished).not.toHaveBeenCalled()
             })

@@ -179,7 +179,11 @@ export class BrowserstackCLI {
                 this.modules[ObservabilityModule.MODULE_NAME] = new ObservabilityModule(startBinResponse.observability)
             }
 
-            this.modules[TestHubModule.MODULE_NAME] = new TestHubModule(startBinResponse.testhub)
+            const testHubModule = new TestHubModule(startBinResponse.testhub)
+            this.modules[TestHubModule.MODULE_NAME] = testHubModule
+            if (this.testFramework instanceof WdioJasmineTestFramework) {
+                this.testFramework.setTestHubModule(testHubModule)
+            }
 
             // Custom-tag (multi Test-Case-ID) tagging rides the per-test event_json
             // to TestHub, so it is gated on the testhub pipeline being active.

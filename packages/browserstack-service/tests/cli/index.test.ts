@@ -4,6 +4,7 @@ import { BStackLogger } from '../../src/cli/cliLogger.js'
 
 import { BrowserstackCLI } from '../../src/cli/index.js'
 import { CLIUtils } from '../../src/cli/cliUtils.js'
+import APIUtils from '../../src/cli/apiUtils.js'
 import TestFramework from '../../src/cli/frameworks/testFramework.js'
 import WdioMochaTestFramework from '../../src/cli/frameworks/wdioMochaTestFramework.js'
 import WdioCucumberTestFramework from '../../src/cli/frameworks/wdioCucumberTestFramework.js'
@@ -155,6 +156,42 @@ describe('BrowserstackCLI bootstrap error surfacing', () => {
 
         it('leaves an unknown name unregistered', () => {
             expect(setup('WebdriverIO-unknown')).toBeNull()
+        })
+    })
+
+    describe('loadModules TestHub wiring', () => {
+        const savedEnv = { ...process.env }
+
+        afterEach(() => {
+            instance.testFramework = null
+            instance.modulesLoaded = false
+            process.env = { ...savedEnv }
+        })
+
+        const load = (name: string) => {
+            vi.spyOn(CLIUtils, 'getTestFrameworkDetail').mockReturnValue({ name, version: { [name]: '9.0.0' } })
+            vi.spyOn(APIUtils, 'updateURLSForGRR').mockImplementation(() => {})
+            vi.spyOn(CLIUtils, 'getAutomationFrameworkDetail').mockReturnValue({ name: 'WebdriverIO', version: { WebdriverIO: '9.0.0' } })
+            instance.modulesLoaded = false
+            instance.loadModules({
+                binSessionId: 'b1',
+                config: '{}',
+                testhub: { jwt: 'jwt', buildHashedId: 'build' }
+            } as any)
+        }
+
+        it('hands the jasmine framework its TestHubModule once, when the module is built', () => {
+            const setTestHubModule = vi.spyOn(WdioJasmineTestFramework.prototype, 'setTestHubModule')
+            load('WebdriverIO-jasmine')
+            expect(setTestHubModule).toHaveBeenCalledTimes(1)
+            expect(setTestHubModule.mock.calls[0][0]).toBe(instance.modules.TestHubModule)
+        })
+
+        it('leaves the mocha framework untouched', () => {
+            const setTestHubModule = vi.spyOn(WdioJasmineTestFramework.prototype, 'setTestHubModule')
+            load('WebdriverIO-mocha')
+            expect(instance.modules.TestHubModule).toBeDefined()
+            expect(setTestHubModule).not.toHaveBeenCalled()
         })
     })
 })

@@ -794,7 +794,18 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 } catch (flushErr) {
                     BStackLogger.debug(`Exception flushing deferred test finish in after(): ${util.format(flushErr)}`)
                 }
-                await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.EXECUTE, HookState.POST, {})
+                const executeArgs = this._config.framework === 'jasmine'
+                    ? {
+                        sessionVerdictInputs: {
+                            result,
+                            specsRan: this._specsRan,
+                            failReasons: [...this._failReasons],
+                            pureTestFailReasons: [...this._pureTestFailReasons],
+                            hookFailReasons: [...this._hookFailReasons],
+                        }
+                    }
+                    : {}
+                await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.EXECUTE, HookState.POST, executeArgs)
             }
 
             // if (setSessionStatus) {

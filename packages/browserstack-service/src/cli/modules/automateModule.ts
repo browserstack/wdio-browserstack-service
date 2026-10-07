@@ -1,5 +1,4 @@
 import BaseModule from './baseModule.js'
-import WdioJasmineTestFramework from '../frameworks/wdioJasmineTestFramework.js'
 import { BrowserstackCLI } from '../index.js'
 import { BStackLogger } from '../cliLogger.js'
 import TestFramework from '../frameworks/testFramework.js'
@@ -21,6 +20,20 @@ import util from 'node:util'
 
 interface TestResult {
     testName: string
+    status: 'passed' | 'failed'
+    reason?: string
+}
+
+/** What legacy `service.after()` computed the jasmine session verdict from, as the service tracked it. */
+interface SessionVerdictInputs {
+    result: number
+    specsRan: boolean
+    failReasons: string[]
+    pureTestFailReasons: string[]
+    hookFailReasons: string[]
+}
+
+interface SessionVerdict {
     status: 'passed' | 'failed'
     reason?: string
 }
@@ -361,19 +374,18 @@ export default class AutomateModule extends BaseModule {
         }
     }
 
-    async onAfterExecute() {
+    async onAfterExecute(args: { sessionVerdictInputs?: SessionVerdictInputs } = {}) {
         this.logger.debug('onAfterExecute: inside automate module after execute hook!')
 
         const userName = this.config.userName as string
         const accessKey = this.config.accessKey as string
         const testContextOptions = this.config.testContextOptions as TestContextOptions
 
-        // The binary's config echo carries `testObservabilityOptions` empty, so read the worker's own service options
-        const serviceOptions = BrowserstackCLI.getInstance().options as { testObservabilityOptions?: { ignoreHooksStatus?: boolean } }
-        const ignoreHooksStatus = serviceOptions?.testObservabilityOptions?.ignoreHooksStatus === true
-        const liveSessionId = this.liveSessionId()
-        if (WdioJasmineTestFramework.sessionVerdict(liveSessionId, ignoreHooksStatus) !== undefined) {
-            await this.markJasmineSessions(liveSessionId, ignoreHooksStatus)
+        if (args?.sessionVerdictInputs) {
+            // The binary's config echo carries `testObservabilityOptions` empty, so read the worker's own service options
+            const serviceOptions = BrowserstackCLI.getInstance().options as { testObservabilityOptions?: { ignoreHooksStatus?: boolean } }
+            const ignoreHooksStatus = serviceOptions?.testObservabilityOptions?.ignoreHooksStatus === true
+            await this.markJasmineSessions(this.liveSessionId(), this.jasmineVerdict(args.sessionVerdictInputs, ignoreHooksStatus))
             this.sessionMap.clear()
             return
         }
@@ -425,11 +437,36 @@ export default class AutomateModule extends BaseModule {
     }
 
     /**
+     * Legacy `service.after()`'s session status: passed only when the runner reported no failed spec, a spec
+     * ran, and no test or hook failed, with `ignoreHooksStatus` handled as coded there.
+     */
+    private jasmineVerdict(inputs: SessionVerdictInputs, ignoreHooksStatus: boolean): SessionVerdict {
+        const { result, specsRan, failReasons, pureTestFailReasons, hookFailReasons } = inputs
+        const joined = (reasons: string[]) => reasons.length > 0 ? reasons.join('\n') : undefined
+
+        if (result === 0 && specsRan) {
+            const reasons = ignoreHooksStatus ? pureTestFailReasons : failReasons
+            return reasons.length > 0 ? { status: 'failed', reason: joined(reasons) } : { status: 'passed' }
+        }
+        if (ignoreHooksStatus && specsRan) {
+            const hasOnlyHookFailures = failReasons.length === 0 && hookFailReasons.length > 0
+            if (hasOnlyHookFailures && pureTestFailReasons.length === 0) {
+                return { status: 'passed' }
+            }
+            return { status: 'failed', reason: joined(pureTestFailReasons) }
+        }
+        return {
+            status: 'failed',
+            reason: ignoreHooksStatus && pureTestFailReasons.length > 0 ? joined(pureTestFailReasons) : joined(failReasons),
+        }
+    }
+
+    /**
      * Jasmine: legacy `service.after()` marked only the live session, with the worker's status, the last
      * name, and the test and hook failure reasons. A session nothing registered (a beforeAll failed before
      * any spec ran) is still marked, and a reloaded one is left to the mark `onReload` already sent.
      */
-    private async markJasmineSessions(liveSessionId: string, ignoreHooksStatus: boolean) {
+    private async markJasmineSessions(liveSessionId: string, verdict: SessionVerdict) {
         const testContextOptions = this.config.testContextOptions as TestContextOptions
         const auth = { user: this.config.userName as string, key: this.config.accessKey as string }
         const sessionIds = new Set(this.sessionMap.keys())
@@ -440,8 +477,7 @@ export default class AutomateModule extends BaseModule {
         for (const sessionId of sessionIds) {
             try {
                 await this.flushSessionName(sessionId)
-                const verdict = WdioJasmineTestFramework.sessionVerdict(sessionId, ignoreHooksStatus)
-                if (!verdict || testContextOptions.skipSessionStatus) {
+                if (!liveSessionId || sessionId !== liveSessionId || testContextOptions.skipSessionStatus) {
                     continue
                 }
                 const name = testContextOptions.skipSessionName ? undefined : this.sessionMap.get(sessionId)?.lastTestName || undefined

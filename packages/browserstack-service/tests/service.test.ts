@@ -17,6 +17,7 @@ import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
 import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
 import { AutomationFrameworkState } from '../src/cli/states/automationFrameworkState.js'
+import PerformanceTester from '../src/instrumentation/performance/performance-tester.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
@@ -3273,5 +3274,67 @@ describe('_cucumberTestResult failure reason adjacent', () => {
         const result = makeService(false)['_cucumberTestResult'](world('UNDEFINED') as never)
 
         expect(result.error?.message).toBe('Unknown Error')
+    })
+})
+
+describe('after hands AutomateModule the jasmine session verdict inputs', () => {
+    // describe('after') swaps the prototype method for a stand-in; these cases need the real one
+    const after = BrowserstackService.prototype.after
+    let trackEvent: ReturnType<typeof vi.fn>
+    let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
+
+    const makeService = (framework: string) => new BrowserstackService(
+        { testObservability: false, setSessionStatus: true } as never,
+        [] as never,
+        { user: 'foo', key: 'bar', framework } as never
+    )
+    const executeArgs = () => trackEvent.mock.calls.find(([state, hook]) => state === AutomationFrameworkState.EXECUTE && hook === HookState.POST)?.[2]
+
+    beforeEach(() => {
+        trackEvent = vi.fn().mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => null,
+            getAutomationFramework: () => ({ trackEvent }),
+            modules: {}
+        } as never)
+        ;(PerformanceTester as unknown as Record<string, unknown>).stopAndGenerate = vi.fn().mockResolvedValue(undefined)
+    })
+
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+        delete (PerformanceTester as unknown as Record<string, unknown>).stopAndGenerate
+    })
+
+    it.each(['mocha', 'cucumber'])('sends nothing extra for %s', async (framework) => {
+        const service = makeService(framework)
+        service['_specsRan'] = true
+        service['_failReasons'] = ['boom']
+
+        await after.call(service, 1)
+
+        expect(executeArgs()).toEqual({})
+    })
+
+    it('sends the runner result and a copy of the tracked reasons for jasmine', async () => {
+        const service = makeService('jasmine')
+        service['_specsRan'] = true
+        service['_failReasons'] = ['beforeEach hook failure', 'boom']
+        service['_pureTestFailReasons'] = ['boom']
+        service['_hookFailReasons'] = ['beforeEach hook failure']
+
+        await after.call(service, 2)
+
+        const args = executeArgs() as { sessionVerdictInputs: Record<string, unknown> }
+        expect(args).toEqual({
+            sessionVerdictInputs: {
+                result: 2,
+                specsRan: true,
+                failReasons: ['beforeEach hook failure', 'boom'],
+                pureTestFailReasons: ['boom'],
+                hookFailReasons: ['beforeEach hook failure'],
+            }
+        })
+        expect(args.sessionVerdictInputs.failReasons).not.toBe(service['_failReasons'])
     })
 })
