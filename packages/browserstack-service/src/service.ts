@@ -37,7 +37,7 @@ import { BrowserstackCLI } from './cli/index.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { HookState } from './cli/states/hookState.js'
 import { markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
-import { awaitCliTestFinishesOnFailure, claimCliTestFinish, registerCliTestFinisher } from './cli/earlyTestFinish.js'
+import { awaitCliTestFinishesOnFailure, claimCliTestFinish, cliTestAttemptKey, registerCliTestFinisher } from './cli/earlyTestFinish.js'
 import { AutomationFrameworkState } from './cli/states/automationFrameworkState.js'
 import TestFramework from './cli/frameworks/testFramework.js'
 import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
@@ -484,6 +484,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeTest' })
     async beforeTest (test: Frameworks.Test) {
         this._currentTest = test
+        // mocha's live runnable for this attempt; read before any await, since the suite's
+        // shared context moves on to the next runnable
+        const runnable = test.ctx?.test
         let suiteTitle = this._suiteTitle
 
         if (test.fullName) {
@@ -509,7 +512,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // the test times out, mocha reports the failure to the reporter first and the reporter
             // reports it (see cli/earlyTestFinish.ts).
             if (this._config.framework === 'mocha') {
-                registerCliTestFinisher(getUniqueIdentifier(test, this._config.framework), (result) => this.finishCliTest(test, result))
+                registerCliTestFinisher(this.cliAttemptKey(test), (result) => this.finishCliTest(test, result), runnable)
             }
             this._insightsHandler?.setTestData(test, uuid)
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
@@ -533,10 +536,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         if (BrowserstackCLI.getInstance().isRunning()) {
-            if (this._config.framework === 'mocha' && !claimCliTestFinish(getUniqueIdentifier(test, this._config.framework))) {
-                // SDK-7843: the test timed out, and the reporter already reported its failure when
-                // mocha did; reporting it again here would arrive after after() anyway.
-                BStackLogger.debug(`afterTest: '${getUniqueIdentifier(test, this._config.framework)}' was already reported when mocha failed it`)
+            if (this._config.framework === 'mocha' && !claimCliTestFinish(this.cliAttemptKey(test))) {
+                // SDK-7843: the test timed out, and its failure was already reported when mocha
+                // failed it; reporting it again here would arrive after after() anyway.
+                BStackLogger.debug(`afterTest: '${this.cliAttemptKey(test)}' was already reported when mocha failed it`)
                 return
             }
             await this.finishCliTest(test, results)
@@ -556,20 +559,22 @@ export default class BrowserstackService implements Services.ServiceInstance {
         await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result: results, suiteTite: this._suiteTitle })
     }
 
+    /** One attempt of a mocha test; see cliTestAttemptKey. */
+    private cliAttemptKey(test: Frameworks.Test): string {
+        return cliTestAttemptKey(getUniqueIdentifier(test, this._config.framework), (test as { _currentRetry?: number })._currentRetry)
+    }
+
     async after (result: number) {
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.HOOK_EVENTS.AFTER)
         PerformanceTester.start(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.QUIT)
 
         try {
             if (BrowserstackCLI.getInstance().isRunning()) {
-                // SDK-7843: a test that timed out was reported by the reporter when mocha failed it,
-                // which can still be in flight. EXECUTE/POST marks the session status from the
-                // results recorded so far, so wait for it first.
-                try {
-                    await awaitCliTestFinishesOnFailure()
-                } catch (finishErr) {
-                    BStackLogger.debug(`Exception awaiting failed-test finishes in after(): ${finishErr}`)
-                }
+                // SDK-7843: a test that timed out is finished when mocha failed it (or here, from
+                // mocha's runnable, when no reporter is registered), and that finish can still be in
+                // flight. EXECUTE/POST marks the session status from the results recorded so far, so
+                // wait for it first. Every finish catches its own error, so this cannot reject.
+                await awaitCliTestFinishesOnFailure()
                 await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.EXECUTE, HookState.POST, {})
             }
             const { preferScenarioName, setSessionName, setSessionStatus } = this._options

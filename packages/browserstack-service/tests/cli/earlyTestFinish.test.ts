@@ -5,6 +5,7 @@ import type { Frameworks } from '@wdio/types'
 import {
     awaitCliTestFinishesOnFailure,
     claimCliTestFinish,
+    cliTestAttemptKey,
     finishCliTestOnFailure,
     registerCliTestFinisher,
     resetCliTestFinishers
@@ -67,5 +68,50 @@ describe('SDK-7843 — a mocha test finish is reported exactly once, by whicheve
         finishCliTestOnFailure('Suite - finish throws', failed)
 
         await expect(awaitCliTestFinishesOnFailure()).resolves.toBeUndefined()
+    })
+
+    it('keeps each retry attempt separate, so a late afterTest of one attempt cannot claim the next', () => {
+        const first = vi.fn().mockResolvedValue(undefined)
+        const second = vi.fn().mockResolvedValue(undefined)
+        registerCliTestFinisher(cliTestAttemptKey('Suite - flaky', 0), first)
+        registerCliTestFinisher(cliTestAttemptKey('Suite - flaky', 1), second)
+
+        // attempt 0 timed out and was retried (mocha emits `retry`, not `fail`); its afterTest arrives late
+        expect(claimCliTestFinish(cliTestAttemptKey('Suite - flaky', 0))).toBe(true)
+        // attempt 1 is still owed, and can still be reported when mocha fails it
+        expect(finishCliTestOnFailure(cliTestAttemptKey('Suite - flaky', 1), failed)).toBe(true)
+        expect(second).toHaveBeenCalledWith(failed)
+        expect(first).not.toHaveBeenCalled()
+    })
+
+    it('keys the first attempt by the plain identity', () => {
+        expect(cliTestAttemptKey('Suite - t', 0)).toBe('Suite - t')
+        expect(cliTestAttemptKey('Suite - t', undefined)).toBe('Suite - t')
+        expect(cliTestAttemptKey('Suite - t', 2)).toBe('Suite - t (retry 2)')
+    })
+
+    it('without a reporter, after() finishes a test mocha already failed, from mocha\'s runnable', async () => {
+        const finisher = vi.fn().mockResolvedValue(undefined)
+        registerCliTestFinisher('Suite - times out', finisher, { state: 'failed', timedOut: true, duration: 10002, timeout: () => 10000 })
+
+        await awaitCliTestFinishesOnFailure()
+
+        expect(finisher).toHaveBeenCalledOnce()
+        const result = finisher.mock.calls[0][0] as Frameworks.TestResult
+        expect(result.passed).toBe(false)
+        expect(result.duration).toBe(10002)
+        expect((result.error as Error).message).toBe('Timeout of 10000ms exceeded.')
+        // its late afterTest then stands down
+        expect(claimCliTestFinish('Suite - times out')).toBe(false)
+    })
+
+    it('leaves a test mocha has not failed to its afterTest', async () => {
+        const finisher = vi.fn().mockResolvedValue(undefined)
+        registerCliTestFinisher('Suite - still running', finisher, { state: undefined })
+
+        await awaitCliTestFinishesOnFailure()
+
+        expect(finisher).not.toHaveBeenCalled()
+        expect(claimCliTestFinish('Suite - still running')).toBe(true)
     })
 })

@@ -8,7 +8,7 @@ import TestFramework from '../src/cli/frameworks/testFramework.js'
 import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { AutomationFrameworkState } from '../src/cli/states/automationFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
-import { finishCliTestOnFailure, resetCliTestFinishers } from '../src/cli/earlyTestFinish.js'
+import { cliTestAttemptKey, finishCliTestOnFailure, resetCliTestFinishers } from '../src/cli/earlyTestFinish.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
@@ -36,9 +36,10 @@ describe('service — a timed-out mocha test is finished when mocha fails it (SD
         resetCliTestFinishers()
         events = []
         // gRPC sends take real time; an instant mock would hide after() not waiting for the finish
-        testTrackEvent = vi.fn().mockImplementation(async (state: unknown, hook: unknown, args: { result?: Frameworks.TestResult }) => {
+        testTrackEvent = vi.fn().mockImplementation(async (state: unknown, hook: unknown, args: { result?: Frameworks.TestResult, test?: Frameworks.Test }) => {
             await new Promise((resolve) => setTimeout(resolve, 30))
-            events.push(`${String(state)}/${String(hook)}${args?.result ? ` passed=${args.result.passed}` : ''}`)
+            const title = state === TestFrameworkState.TEST && hook === HookState.POST ? ` ${args.test?.title} #${(args.test as { _currentRetry?: number })._currentRetry ?? 0}` : ''
+            events.push(`${String(state)}/${String(hook)}${args?.result ? ` passed=${args.result.passed}` : ''}${title}`)
         })
         vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
             isRunning: () => true,
@@ -70,7 +71,7 @@ describe('service — a timed-out mocha test is finished when mocha fails it (SD
         // ...and only then the late afterTest
         await service.afterTest(timedOutTest, undefined as never, { ...failed })
 
-        const testPost = events.indexOf(`${TestFrameworkState.TEST}/${HookState.POST} passed=false`)
+        const testPost = events.indexOf(`${TestFrameworkState.TEST}/${HookState.POST} passed=false times out #0`)
         const sessionStatusAt = events.indexOf(`${AutomationFrameworkState.EXECUTE}/${HookState.POST}`)
         expect(testPost).toBeGreaterThanOrEqual(0)
         // the failure is recorded before EXECUTE/POST, which is where AutomateModule marks the
@@ -98,5 +99,44 @@ describe('service — a timed-out mocha test is finished when mocha fails it (SD
         await service.afterTest({ title: 'unseen', parent: 'Suite', ctx: { test: {} } } as unknown as Frameworks.Test, undefined as never, { passed: true } as Frameworks.TestResult)
 
         expect(events.filter((e) => e.startsWith(`${TestFrameworkState.TEST}/${HookState.POST}`))).toHaveLength(1)
+    })
+
+    it('without a reporter, after() still finishes a test mocha failed, from mocha\'s runnable', async () => {
+        const service = makeService()
+        const runnable = { state: undefined as string | undefined, timedOut: false, timeout: () => 10000, duration: 0 }
+        const test = { title: 'times out unreported', parent: 'Suite', ctx: { test: runnable } } as unknown as Frameworks.Test
+        await service.beforeTest(test)
+        events.length = 0
+
+        // mocha's timeout: Runner#fail sets the state; no reporter hears the `fail`
+        Object.assign(runnable, { state: 'failed', timedOut: true, duration: 10001 })
+        await service.after(1)
+        await service.afterTest(test, undefined as never, { ...failed })
+
+        const testPost = events.indexOf(`${TestFrameworkState.TEST}/${HookState.POST} passed=false times out unreported #0`)
+        expect(testPost).toBeGreaterThanOrEqual(0)
+        expect(testPost).toBeLessThan(events.indexOf(`${AutomationFrameworkState.EXECUTE}/${HookState.POST}`))
+        expect(events.filter((e) => e.startsWith(`${TestFrameworkState.TEST}/${HookState.POST}`))).toHaveLength(1)
+    })
+
+    it('lets a retried attempt\'s late afterTest close that attempt, not the next one', async () => {
+        const service = makeService()
+        const attempt0 = { title: 'flaky', parent: 'Suite', ctx: { test: {} }, _currentRetry: 0 } as unknown as Frameworks.Test
+        const attempt1 = { title: 'flaky', parent: 'Suite', ctx: { test: {} }, _currentRetry: 1 } as unknown as Frameworks.Test
+        await service.beforeTest(attempt0)
+        // attempt 0 timed out and is retried (mocha emits `retry`, not `fail`); attempt 1 starts
+        await service.beforeTest(attempt1)
+        events.length = 0
+
+        // attempt 0's late afterTest
+        await service.afterTest(attempt0, undefined as never, { ...failed })
+        // attempt 1 times out too: the reporter can still report it
+        expect(finishCliTestOnFailure(cliTestAttemptKey('Suite - flaky', 1), failed)).toBe(true)
+        await service.after(1)
+
+        expect(events.filter((e) => e.startsWith(`${TestFrameworkState.TEST}/${HookState.POST}`))).toEqual([
+            `${TestFrameworkState.TEST}/${HookState.POST} passed=false flaky #0`,
+            `${TestFrameworkState.TEST}/${HookState.POST} passed=false flaky #1`
+        ])
     })
 })

@@ -8,7 +8,10 @@ import * as bstackLogger from '../src/bstackLogger.js'
 
 vi.mock('@wdio/reporter', () => import(path.join(process.cwd(), '__mocks__', '@wdio/reporter')))
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
-vi.mock('../src/cli/earlyTestFinish.js', () => ({ finishCliTestOnFailure: vi.fn().mockReturnValue(true) }))
+vi.mock('../src/cli/earlyTestFinish.js', async (importOriginal) => ({
+    ...(await importOriginal<typeof earlyTestFinish>()),
+    finishCliTestOnFailure: vi.fn().mockReturnValue(true)
+}))
 vi.spyOn(bstackLogger.BStackLogger, 'logToFile').mockImplementation(() => {})
 
 describe('reporter onTestFail — hands mocha\'s failure to the CLI finish (SDK-7843)', () => {
@@ -54,5 +57,16 @@ describe('reporter onTestFail — hands mocha\'s failure to the CLI finish (SDK-
         makeReporter('cucumber').onTestFail(testStats as never)
 
         expect(earlyTestFinish.finishCliTestOnFailure).not.toHaveBeenCalled()
+    })
+
+    it('reports a retried attempt under that attempt\'s key', () => {
+        vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({ isRunning: () => true } as never)
+
+        makeReporter('mocha').onTestFail({ ...testStats, retries: 1 } as never)
+
+        expect(earlyTestFinish.finishCliTestOnFailure).toHaveBeenCalledWith(
+            'Smoke: Home Navigation - should navigate via bottom nav (retry 1)',
+            expect.objectContaining({ passed: false })
+        )
     })
 })
