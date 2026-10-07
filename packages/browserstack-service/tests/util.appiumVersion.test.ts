@@ -36,7 +36,8 @@ describe('getWdioMajorVersion', () => {
     })
 
     it('reads the major version of the @wdio/cli that runs the tests', () => {
-        expect(getWdioMajorVersion()).toBe(10)
+        // CI sets WDIO_MAJOR for each job of the matrix; a local run uses the WebdriverIO 10 dev dependencies
+        expect(getWdioMajorVersion()).toBe(Number(process.env.WDIO_MAJOR ?? 10))
     })
 
     it('reads a WebdriverIO 9 install', () => {

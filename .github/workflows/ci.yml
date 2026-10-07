@@ -53,6 +53,11 @@ jobs:
       - name: Install
         run: npm ci
 
+      # The published build uses the WebdriverIO 10 types. Every job builds before it installs another
+      # WebdriverIO major, because the build also generates the gRPC client that the tests import.
+      - name: Build
+        run: npm run build
+
       - name: Install WebdriverIO ${{ matrix.wdio }}
         if: matrix.wdio != 10
         run: >-
@@ -65,10 +70,7 @@ jobs:
           npm ls -w @wdio/browserstack-service webdriverio @wdio/types @wdio/reporter @wdio/logger --depth=0 --json
           | node .github/scripts/check-wdio-major.mjs ${{ matrix.wdio }} 4
 
-      # The published build uses the WebdriverIO 10 types
-      - name: Build
-        if: matrix.wdio == 10
-        run: npm run build
-
       - name: Test
+        env:
+          WDIO_MAJOR: ${{ matrix.wdio }}
         run: npm test
