@@ -327,35 +327,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         BStackLogger.info(`CLI is running, tracking insights event for before: ${sessionId}`)
                         await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { browser: this._browser, hubUrl: this._config.hostname })
                         this._insightsHandler.setGitConfigPath()
-                        /**
-                         * `browserCommand` is the only producer of TEST_SCREENSHOT logs — the binary
-                         * has no screenshot producer of its own — so the result event has to be
-                         * registered on this path too, or a screenshot taken mid-test never reaches
-                         * Observability (SDK-4177). The `command` (beforeCommand) event only fills
-                         * the map browserCommand's HTTP-log half reads, so it is registered for
-                         * jasmine alone, whose HTTP command logs go over gRPC; mocha and cucumber
-                         * never reported them on this path.
-                         */
-                        if (this._config.framework === 'jasmine') {
-                            this._browser.on('command', (command) => {
-                                if (shouldProcessEventForTesthub('')) {
-                                    this._insightsHandler?.browserCommand(
-                                        'client:beforeCommand',
-                                        Object.assign(command, { sessionId }),
-                                        this._currentTest
-                                    )
-                                }
-                            })
-                        }
-                        this._browser.on('result', (result) => {
-                            if (shouldProcessEventForTesthub('')) {
-                                this._insightsHandler?.browserCommand(
-                                    'client:afterCommand',
-                                    Object.assign(result, { sessionId }),
-                                    this._currentTest
-                                )
-                            }
-                        })
                         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.DRIVER_EVENT.PRE_INITIALIZE)
                         return
                     }

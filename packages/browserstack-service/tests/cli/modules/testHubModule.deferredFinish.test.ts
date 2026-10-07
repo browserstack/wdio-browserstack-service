@@ -18,7 +18,7 @@ vi.mock('../../../src/cli/frameworks/testFramework.js', () => ({
 }))
 
 vi.mock('../../../src/cli/frameworks/automationFramework.js', () => ({
-    default: { getTrackedInstance: vi.fn(), getState: vi.fn(), getDriver: vi.fn() }
+    default: { getTrackedInstance: vi.fn(), getState: vi.fn(), getDriver: vi.fn(), registerObserver: vi.fn() }
 }))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({

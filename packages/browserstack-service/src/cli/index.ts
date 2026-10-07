@@ -181,6 +181,7 @@ export class BrowserstackCLI {
 
             const testHubModule = new TestHubModule(startBinResponse.testhub)
             this.modules[TestHubModule.MODULE_NAME] = testHubModule
+            testHubModule.setTestFramework(this.testFramework)
             if (this.testFramework instanceof WdioJasmineTestFramework) {
                 this.testFramework.setTestHubModule(testHubModule)
             }

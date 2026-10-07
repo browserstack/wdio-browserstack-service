@@ -11,15 +11,26 @@ import type TestFrameworkInstance from '../instances/testFrameworkInstance.js'
 // eslint-disable-next-line camelcase
 import type { LogCreatedEventRequest, LogCreatedEventRequest_LogEntry, TestFrameworkEventRequest, TestSessionEventRequest, AutomationSession } from '../../grpc/index.js'
 import type { Frameworks } from '@wdio/types'
+import type { AfterCommandArgs } from '@wdio/reporter'
 import WdioMochaTestFramework from '../frameworks/wdioMochaTestFramework.js'
 import type AutomationFrameworkInstance from '../instances/automationFrameworkInstance.js'
 import AutomationFramework from '../frameworks/automationFramework.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
-import { isLoadTestingSession, getLtsSessionId } from '../../util.js'
+import { isLoadTestingSession, getLtsSessionId, isFalse, isScreenshotCommand } from '../../util.js'
+import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
+import { shouldProcessEventForTesthub } from '../../testHub/utils.js'
+import { TESTOPS_SCREENSHOT_ENV } from '../../constants.js'
 
 /**
  * TestHub Module for BrowserStack
  */
+interface WebDriverCommand {
+    method: string
+    endpoint: string
+    body?: unknown
+    result?: unknown
+}
+
 export default class TestHubModule extends BaseModule {
 
     logger = BStackLogger
@@ -56,6 +67,12 @@ export default class TestHubModule extends BaseModule {
      */
     private pendingTestFinishes: Map<string, { args: Record<string, unknown>, uuid: string }> = new Map()
 
+    private testFramework: TestFramework | null = null
+    // A reloaded session keeps its browser object, so listeners are registered once per object.
+    private commandLogBrowsers = new WeakSet<object>()
+    // Commands seen, keyed by live session, method and endpoint; a result only logs HTTP for a seen command.
+    private seenCommands = new Set<string>()
+
     /**
      * Create a new TestHubModule
      */
@@ -65,6 +82,7 @@ export default class TestHubModule extends BaseModule {
         this.testhubConfig = testhubConfig
 
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
+        AutomationFramework.registerObserver(AutomationFrameworkState.CREATE, HookState.POST, this.onDriverCreated.bind(this))
 
         Object.values(TestFrameworkState).forEach(state => {
             Object.values(HookState).forEach(hook => {
@@ -79,6 +97,70 @@ export default class TestHubModule extends BaseModule {
      */
     getModuleName() {
         return TestHubModule.MODULE_NAME
+    }
+
+    setTestFramework(testFramework: TestFramework | null | undefined) {
+        this.testFramework = testFramework ?? null
+    }
+
+    /**
+     * WebDriver command logs: screenshots for every framework, HTTP command logs for frameworks that opt in.
+     * The framework attributes each entry; `commandLog: true` tells it the entry came from here.
+     */
+    onDriverCreated(args: Record<string, unknown>) {
+        try {
+            const browser = args.browser as WebdriverIO.Browser | undefined
+            if (!browser || this.commandLogBrowsers.has(browser) || !shouldProcessEventForTesthub('')) {
+                return
+            }
+            this.commandLogBrowsers.add(browser)
+            if (this.testFramework?.capturesHttpCommandLogs()) {
+                browser.on('command', (command: WebDriverCommand) => {
+                    if (shouldProcessEventForTesthub('')) {
+                        this.seenCommands.add(this.commandKey(browser, command))
+                    }
+                })
+            }
+            browser.on('result', (result: WebDriverCommand) => {
+                if (shouldProcessEventForTesthub('')) {
+                    void this.onCommandResult(browser, result)
+                }
+            })
+        } catch (error) {
+            this.logger.error(`onDriverCreated: failed to register command log listeners: ${util.format(error)}`)
+        }
+    }
+
+    private async onCommandResult(browser: WebdriverIO.Browser, result: WebDriverCommand) {
+        try {
+            const testFramework = this.testFramework
+            if (!testFramework) {
+                return
+            }
+            const value = (result.result as { value?: string } | undefined)?.value
+            // `allow_screenshots` is a string on the wire, so a denial arrives as 'false'
+            const allowScreenshots = process.env[TESTOPS_SCREENSHOT_ENV]
+            if (Boolean(allowScreenshots) && !isFalse(allowScreenshots) && isScreenshotCommand(result as AfterCommandArgs) && value) {
+                await testFramework.trackEvent(TestFrameworkState.LOG, HookState.POST, {
+                    logEntry: { kind: TestFrameworkConstants.KIND_SCREENSHOT, message: value, timestamp: new Date().toISOString() },
+                    commandLog: true,
+                })
+            }
+            if (!testFramework.capturesHttpCommandLogs() || !this.seenCommands.has(this.commandKey(browser, result))) {
+                return
+            }
+            const httpResponse = { path: result.endpoint, method: result.method, body: result.body, response: result.result }
+            await testFramework.trackEvent(TestFrameworkState.LOG, HookState.POST, {
+                logEntry: { kind: 'HTTP', message: JSON.stringify(httpResponse), timestamp: new Date().toISOString() },
+                commandLog: true,
+            })
+        } catch (error) {
+            this.logger.error(`onCommandResult: failed to log ${result?.method} ${result?.endpoint}: ${util.format(error)}`)
+        }
+    }
+
+    private commandKey(browser: WebdriverIO.Browser, command: WebDriverCommand) {
+        return `${browser.sessionId}_${command.method}_${command.endpoint}`
     }
 
     onBeforeTest(args: Record<string, unknown>) {

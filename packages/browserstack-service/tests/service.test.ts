@@ -589,10 +589,7 @@ describe('before', () => {
         expect(service['_sessionBaseUrl']).toEqual(sessionBaseUrl)
     })
 
-    it('registers the result event on the CLI path, and only that event', async () => {
-        // browserCommand is the only producer of TEST_SCREENSHOT logs, so the binary flow has to
-        // register the result event too (SDK-4177). `command` must stay unregistered — it only
-        // feeds browserCommand's HTTP-log half, which the binary owns on this path.
+    it('registers no command or result listener on the CLI path', async () => {
         process.env.BROWSERSTACK_OBSERVABILITY = 'true'
         const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
             isRunning: () => true,
@@ -610,7 +607,7 @@ describe('before', () => {
         await service.before(service['_config'] as any, [], browser)
 
         const events = vi.mocked(browser.on).mock.calls.map(([event]) => event)
-        expect(events).toContain('result')
+        expect(events).not.toContain('result')
         expect(events).not.toContain('command')
 
         getInstanceSpy.mockRestore()
@@ -878,16 +875,10 @@ describe('before', () => {
             return vi.mocked(cliBrowser.on).mock.calls.map(([event]: [string]) => event)
         }
 
-        it('registers command and result for jasmine', async () => {
-            const events = await registeredEvents('jasmine')
-            expect(events).toContain('command')
-            expect(events).toContain('result')
-        })
-
-        it.each(['mocha', 'cucumber'])('keeps %s on result only', async (framework) => {
+        it.each(['jasmine', 'mocha', 'cucumber'])('leaves %s command capture to TestHubModule', async (framework) => {
             const events = await registeredEvents(framework)
-            expect(events).toContain('result')
             expect(events).not.toContain('command')
+            expect(events).not.toContain('result')
         })
     })
 })

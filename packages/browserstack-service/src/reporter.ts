@@ -201,6 +201,9 @@ class _TestReporter extends WDIOReporter {
             return
         }
         if (testStats.fullTitle === '<unknown test>') {
+            if (this.isCliJasmine()) {
+                this.cliJasmineFramework()?.trackEvent(TestFrameworkState.TEST, HookState.PRE, { source: 'reporter', unknownTest: true })
+            }
             return
         }
         if (this.isCliJasmine()) {

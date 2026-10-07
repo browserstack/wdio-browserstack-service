@@ -507,10 +507,12 @@ describe('test-reporter', () => {
                 expect(hook.state).toBe('passed')
             })
 
-            it('drops <unknown test>', async () => {
+            it('reports <unknown test> only as a marker, never as a spec', async () => {
                 await reporter.onTestStart({ ...jasmineTestStats(), fullTitle: '<unknown test>' } as any)
                 await reporter.onTestEnd({ ...jasmineTestStats(), fullTitle: '<unknown test>' } as any)
-                expect(framework.trackEvent).not.toHaveBeenCalled()
+                expect(framework.trackEvent).toHaveBeenCalledExactlyOnceWith(TestFrameworkState.TEST, HookState.PRE, expect.objectContaining({ source: 'reporter', unknownTest: true }))
+                expect(vi.mocked(framework.trackEvent).mock.calls[0][2]).not.toHaveProperty('testStats')
+                expect(TestReporter.getTests()['<unknown test>']).toBeUndefined()
             })
 
             it('sends nothing when Test Observability is opted out', async () => {

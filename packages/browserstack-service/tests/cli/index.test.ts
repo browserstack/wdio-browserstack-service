@@ -187,6 +187,11 @@ describe('BrowserstackCLI bootstrap error surfacing', () => {
             expect(setTestHubModule.mock.calls[0][0]).toBe(instance.modules.TestHubModule)
         })
 
+        it('hands TestHubModule the test framework, whatever it is', () => {
+            load('WebdriverIO-mocha')
+            expect(instance.modules.TestHubModule['testFramework']).toBe(instance.getTestFramework())
+        })
+
         it('leaves the mocha framework untouched', () => {
             const setTestHubModule = vi.spyOn(WdioJasmineTestFramework.prototype, 'setTestHubModule')
             load('WebdriverIO-mocha')

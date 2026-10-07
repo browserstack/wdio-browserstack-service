@@ -68,8 +68,6 @@ export default class WdioJasmineTestFramework extends TestFramework {
     #specInstances = new Map<string, TestFrameworkInstance>()
     // Open specs by fullName: how the service's hooks find the instance the reporter minted.
     #specsByFullName = new Map<string, TestFrameworkInstance>()
-    // Every spec of this worker by uuid: legacy attaches HTTP logs and screenshots to the last started spec, even after it ended.
-    #specsByUuid = new Map<string, TestFrameworkInstance>()
     #serviceOnly = new Set<TestFrameworkInstance>()
     #suiteTitles = new Map<TestFrameworkInstance, unknown>()
     #testHub: TestHubModule | null = null
@@ -77,6 +75,9 @@ export default class WdioJasmineTestFramework extends TestFramework {
     #hookInstances = new Map<string, TestFrameworkInstance>()
     #openHook: TestFrameworkInstance | null = null
     #lastSpec: TestFrameworkInstance | null = null
+    // The spec WebDriver command logs attach to: the last started spec, even inside an all-hook or after it
+    // ended, unset by a `<unknown test>` (the runner's last spec then has no uuid, so its commands drop).
+    #commandLogSpec: TestFrameworkInstance | null = null
     #queue: Promise<void> = Promise.resolve()
     #pendingEvents = 0
 
@@ -100,6 +101,10 @@ export default class WdioJasmineTestFramework extends TestFramework {
         return WdioJasmineTestFramework.#hookState(getHookType(String(hookTitle ?? '').toLowerCase())) ?? TestFrameworkState.NONE
     }
 
+    capturesHttpCommandLogs() {
+        return true
+    }
+
     setTestHubModule(testHub: TestHubModule | null | undefined) {
         this.#testHub = testHub ?? null
     }
@@ -116,7 +121,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
             return
         }
         if (testFrameworkState === TestFrameworkState.LOG) {
-            this.#log(args.logEntry as Record<string, unknown>)
+            this.#log(args.logEntry as Record<string, unknown>, args.commandLog === true)
             return
         }
         try {
@@ -152,7 +157,11 @@ export default class WdioJasmineTestFramework extends TestFramework {
     #trackReporterEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
         const context = args.context as JasmineSuiteContext
         if (testFrameworkState === TestFrameworkState.TEST) {
-            if (hookState === HookState.PRE) {
+            if (hookState === HookState.PRE && args.unknownTest === true) {
+                this.#enqueue('UNKNOWN_TEST', async () => {
+                    this.#commandLogSpec = null
+                })
+            } else if (hookState === HookState.PRE) {
                 args.testUuid = this.#testStarted(args.testStats as TestStats, context)
             } else {
                 this.#testEnded(args.testStats as TestStats, context)
@@ -187,13 +196,13 @@ export default class WdioJasmineTestFramework extends TestFramework {
             })
             this.#specInstances.set(testStats.uid, instance)
             this.#specsByFullName.set(fullTitle, instance)
-            this.#specsByUuid.set(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) as string, instance)
             // Registered synchronously: the service's beforeTest for this spec may read it before the queue runs.
             TestFramework.setTrackedInstance(instance.getContext(), instance)
 
             const args = { test: this.#specArg(testStats, context), suiteTitle: this.#suiteTitle(testStats) }
             this.#enqueue('TEST/PRE', async () => {
                 this.#lastSpec = instance
+                this.#commandLogSpec = instance
                 await this.#toTestHub(instance, TestFrameworkState.TEST, HookState.PRE, args)
             })
             return TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) as string
@@ -352,16 +361,15 @@ export default class WdioJasmineTestFramework extends TestFramework {
 
     /**
      * Console logs: an open beforeAll/afterAll wins, else the last-started spec, even after it ended.
-     * HTTP command logs and screenshots name their spec (`test_run_uuid`), as legacy did; unknown uuids are dropped.
+     * WebDriver command logs (HTTP, screenshots) always go to the command-log spec, as legacy did.
      */
-    #log(logEntry: Record<string, unknown> | undefined) {
+    #log(logEntry: Record<string, unknown> | undefined, commandLog = false) {
         try {
             if (!logEntry || !shouldProcessEventForTesthub('LogCreated')) {
                 return
             }
-            const targetUuid = logEntry.test_run_uuid as string | undefined
             this.#enqueue('LOG/POST', async () => {
-                const instance = targetUuid ? this.#specsByUuid.get(targetUuid) : (this.#openHook ?? this.#lastSpec)
+                const instance = commandLog ? this.#commandLogSpec : (this.#openHook ?? this.#lastSpec)
                 if (!instance) {
                     return
                 }

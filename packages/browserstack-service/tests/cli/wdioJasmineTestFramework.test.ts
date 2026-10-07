@@ -350,36 +350,56 @@ describe('WdioJasmineTestFramework', () => {
         expect(logSends[2].data.test_uuid).toBe(specUuid)
     })
 
+    const commandLog = (logEntry: Record<string, unknown>) =>
+        framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry, commandLog: true })
+
     it('keeps a screenshot entry\'s kind on the log path', async () => {
         reporterTestStart(testStats(), context())
-        await framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry: { kind: 'TEST_SCREENSHOT', message: 'b64', timestamp: 't', level: 'INFO' } })
+        await commandLog({ kind: 'TEST_SCREENSHOT', message: 'b64', timestamp: 't', level: 'INFO' })
         await drain()
         expect(logSends[0].entries[0].kind).toBe('TEST_SCREENSHOT')
     })
 
-    it('sends an HTTP command log to the spec it names, even inside an all-hook or after the spec ended', async () => {
+    it('sends a command log to the last started spec, even inside an all-hook or after the spec ended', async () => {
         const first = testStats()
         const uuid = reporterTestStart(first, context())
         reporterTestEnd({ ...first, state: 'passed', end: new Date() }, context())
         const after = hookStats('"after all" hook')
         reporterHookStart(after, context())
         const message = JSON.stringify({ path: '/session/:sessionId/title', method: 'GET', body: {}, response: { value: 'StackDemo' } })
-        await framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry: { kind: 'HTTP', message, timestamp: 't', test_run_uuid: uuid } })
+        await commandLog({ kind: 'HTTP', message, timestamp: 't' })
+        reporterLog({ level: 'INFO', message: 'console in hook', timestamp: 't2', kind: 'TEST_LOG' })
         await drain()
 
-        expect(logSends).toHaveLength(1)
-        expect(logSends[0].state).toBe('TestFrameworkState.TEST')
+        expect(logSends.map(l => l.state)).toEqual(['TestFrameworkState.TEST', 'TestFrameworkState.AFTER_ALL'])
         expect(logSends[0].data.test_uuid).toBe(uuid)
         expect(logSends[0].entries[0]).toMatchObject({ kind: 'HTTP', timestamp: 't' })
         expect(logSends[0].entries[0]).not.toHaveProperty('hook_id')
         expect(Buffer.from(logSends[0].entries[0].message as Uint8Array).toString()).toBe(message)
+        expect(logSends[1].entries[0]).toHaveProperty('hook_id')
     })
 
-    it('drops a named-spec log whose uuid this worker never minted', async () => {
-        reporterTestStart(testStats(), context())
-        await framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry: { kind: 'HTTP', message: '{}', timestamp: 't', test_run_uuid: 'not-ours' } })
+    it('drops command logs before the first spec, even inside an all-hook', async () => {
+        reporterHookStart(hookStats('"before all" hook'), context())
+        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 't' })
         await drain()
         expect(logSends).toHaveLength(0)
+    })
+
+    it('drops command logs after an <unknown test> until the next spec, while console logs keep the last spec', async () => {
+        const first = testStats()
+        reporterTestStart(first, context())
+        reporterTestEnd({ ...first, state: 'passed', end: new Date() }, context())
+        framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { source: 'reporter', unknownTest: true })
+        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 't1' })
+        reporterLog({ level: 'INFO', message: 'console', timestamp: 't2', kind: 'TEST_LOG' })
+        const second = reporterTestStart(testStats({ uid: 'second', title: 'second', fullTitle: 'Nested outer second' }), context())
+        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 't3' })
+        await drain()
+
+        expect(logSends.map(l => l.entries[0].timestamp)).toEqual(['t2', 't3'])
+        expect(logSends[1].data.test_uuid).toBe(second)
+        expect(dispatches.filter(d => d.state === TestFrameworkState.TEST && d.hook === HookState.PRE)).toHaveLength(2)
     })
 
     it('maps the WDIO hookName to the hook-type key, and nothing else', () => {

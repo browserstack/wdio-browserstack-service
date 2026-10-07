@@ -47,7 +47,6 @@ import { TESTOPS_SCREENSHOT_ENV } from './constants.js'
 import { BrowserstackCLI } from './cli/index.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { HookState } from './cli/states/hookState.js'
-import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import CustomTagsHandler from './custom-tags-handler.js'
@@ -797,31 +796,12 @@ class _InsightsHandler {
         // string 'false' — which Boolean() reads as permission granted. Honour it explicitly.
         const allowScreenshots = process.env[TESTOPS_SCREENSHOT_ENV]
         if (Boolean(allowScreenshots) && !isFalse(allowScreenshots) && isScreenshotCommand(args) && result?.value) {
-            // On the binary path the direct screenshot endpoint answers 401 to the binary's JWT,
-            // so ride the same LOG rail appendTestItemLog uses: the CLI stamps the test uuid and
-            // forwards the entry over gRPC, where the binary owns reporting. The framework can be
-            // unset while isRunning() is true — the dev-env short-circuit returns true before
-            // setupTestFramework() has run, and it only assigns for webdriverio-mocha — so resolve
-            // it rather than assert, and let an untracked framework fall through to the direct
-            // upload instead of throwing the screenshot away.
-            const cliTestFramework = BrowserstackCLI.getInstance().isRunning()
-                ? BrowserstackCLI.getInstance().getTestFramework()
-                : undefined
-            await (cliTestFramework
-                ? cliTestFramework.trackEvent(TestFrameworkState.LOG, HookState.POST, {
-                    logEntry: {
-                        kind: TestFrameworkConstants.KIND_SCREENSHOT,
-                        message: result.value,
-                        timestamp: new Date().toISOString(),
-                        ...(this._framework === 'jasmine' ? { test_run_uuid: testMeta.uuid } : {})
-                    }
-                })
-                : this.listener.onScreenshot([{
-                    test_run_uuid: testMeta.uuid,
-                    timestamp: new Date().toISOString(),
-                    message: result.value,
-                    kind: 'TEST_SCREENSHOT'
-                }]))
+            await this.listener.onScreenshot([{
+                test_run_uuid: testMeta.uuid,
+                timestamp: new Date().toISOString(),
+                message: result.value,
+                kind: 'TEST_SCREENSHOT'
+            }])
         }
 
         const requestData = this._commands[dataKey]
@@ -835,18 +815,6 @@ class _InsightsHandler {
             method: requestData.method,
             body,
             response: result
-        }
-        // Only jasmine registers `command` on the CLI flow, and the legacy listener is inert there
-        if (BrowserstackCLI.getInstance().isRunning()) {
-            await BrowserstackCLI.getInstance().getTestFramework()?.trackEvent(TestFrameworkState.LOG, HookState.POST, {
-                logEntry: {
-                    kind: 'HTTP',
-                    message: JSON.stringify(httpResponse),
-                    timestamp: new Date().toISOString(),
-                    test_run_uuid: testMeta.uuid
-                }
-            })
-            return
         }
         this.listener.logCreated([{
             test_run_uuid: testMeta.uuid,
@@ -1258,16 +1226,6 @@ class _InsightsHandler {
     public setTestData (test: Frameworks.Test | ITestCaseHookParameter, uuid: string) {
         // Legacy's cucumber beforeScenario records the uuid alone; only mocha carries the test.
         InsightsHandler.currentTest = 'pickle' in test ? { uuid } : { test, uuid }
-        // browserCommand resolves the active test through this map and returns before the
-        // screenshot branch without an entry, so the CLI cucumber path has to seed it too
-        // (SDK-4177). getIdentifier already keys a world by its pickle.
-        if (this._framework !== 'mocha' && !('pickle' in test)) {
-            return
-        }
-        this._tests[this.getIdentifier(test)] = {
-            uuid,
-            startedAt: (new Date()).toISOString()
-        }
     }
 }
 

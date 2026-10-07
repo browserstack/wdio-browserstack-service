@@ -10,8 +10,6 @@ import * as utils from '../src/util.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import { TESTOPS_SCREENSHOT_ENV } from '../src/constants.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
-import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
-import { HookState } from '../src/cli/states/hookState.js'
 
 const log = logger('test')
 let insightsHandler: InsightsHandler
@@ -771,22 +769,22 @@ describe('browserCommand', () => {
             getInstanceSpy = undefined
         })
 
-        it('sends the HTTP log over gRPC to the named spec, never to the legacy listener', async () => {
+        it('never routes to the CLI test framework, whose capture lives in TestHubModule', async () => {
+            process.env[TESTOPS_SCREENSHOT_ENV] = 'true'
             const trackEvent = vi.fn().mockResolvedValue(undefined)
             cliWith({ trackEvent })
             const handler = handlerFor('jasmine')
             const logCreated = vi.spyOn(handler['listener'], 'logCreated').mockImplementation(() => {})
+            const onScreenshot = vi.spyOn(handler['listener'], 'onScreenshot').mockImplementation(() => {})
+            const screenshot = { sessionId: 's', method: 'GET', endpoint: '/session/:sessionId/screenshot', result: { value: 'b64' } }
 
             await handler.browserCommand('client:beforeCommand', { ...command } as any, lastSpec)
             await handler.browserCommand('client:afterCommand', { ...result } as any, lastSpec)
+            await handler.browserCommand('client:afterCommand', { ...screenshot } as any, lastSpec)
 
-            expect(logCreated).not.toHaveBeenCalled()
-            expect(trackEvent).toHaveBeenCalledTimes(1)
-            const [state, hook, { logEntry }] = trackEvent.mock.calls[0]
-            expect([state, hook]).toEqual([TestFrameworkState.LOG, HookState.POST])
-            expect(logEntry.kind).toBe('HTTP')
-            expect(logEntry.test_run_uuid).toBe('spec-uuid')
-            expect(JSON.parse(logEntry.message)).toEqual({ path: '/session/:sessionId/title', method: 'GET', body: {}, response: { value: 'StackDemo' } })
+            expect(trackEvent).not.toHaveBeenCalled()
+            expect(logCreated).toHaveBeenCalledTimes(1)
+            expect(onScreenshot).toHaveBeenCalledWith([{ test_run_uuid: 'spec-uuid', timestamp: expect.any(String), message: 'b64', kind: 'TEST_SCREENSHOT' }])
         })
 
         it('keeps the legacy HTTP log shape on the listener when the CLI is not running', async () => {
@@ -802,23 +800,6 @@ describe('browserCommand', () => {
                 kind: 'HTTP',
                 http_response: { path: '/session/:sessionId/title', method: 'GET', body: {}, response: { value: 'StackDemo' } }
             }])
-        })
-
-        it('names the spec on a jasmine screenshot, and leaves the mocha screenshot entry unchanged', async () => {
-            process.env[TESTOPS_SCREENSHOT_ENV] = 'true'
-            const screenshot = { sessionId: 's', method: 'GET', endpoint: '/session/:sessionId/screenshot', result: { value: 'b64' } }
-
-            const jasmineTrack = vi.fn().mockResolvedValue(undefined)
-            cliWith({ trackEvent: jasmineTrack })
-            await handlerFor('jasmine').browserCommand('client:afterCommand', { ...screenshot } as any, lastSpec)
-            getInstanceSpy!.mockRestore()
-
-            const mochaTrack = vi.fn().mockResolvedValue(undefined)
-            cliWith({ trackEvent: mochaTrack })
-            await handlerFor('mocha').browserCommand('client:afterCommand', { ...screenshot } as any, { title: 't' } as any)
-
-            expect(jasmineTrack.mock.calls[0][2].logEntry).toEqual({ kind: 'TEST_SCREENSHOT', message: 'b64', timestamp: expect.any(String), test_run_uuid: 'spec-uuid' })
-            expect(Object.keys(mochaTrack.mock.calls[0][2].logEntry)).toEqual(['kind', 'message', 'timestamp'])
         })
 
         it('drops commands with no spec yet, as legacy did before the first spec', async () => {
@@ -1421,5 +1402,18 @@ describe('hasTestStepFailures and ignoreHooksStatus integration', () => {
 
         const testInsightsHandlerDefault = new InsightsHandler(browser, 'cucumber', {}, {})
         expect(testInsightsHandlerDefault['_options']?.testObservabilityOptions?.ignoreHooksStatus).toBeUndefined()
+    })
+})
+
+describe('setTestData', () => {
+    it('records the current test for Percy and custom tags, and seeds no test entry', () => {
+        const handler = new InsightsHandler({ on: vi.fn(), sessionId: 's', capabilities: {}, config: {} } as any, 'mocha')
+        const test = { title: 't', parent: 'Suite' } as any
+        handler.setTestData(test, 'mocha-uuid')
+        expect(InsightsHandler.currentTest).toEqual({ test, uuid: 'mocha-uuid' })
+
+        handler.setTestData({ pickle: { uri: 'f.feature', astNodeIds: ['1'] } } as any, 'scenario-uuid')
+        expect(InsightsHandler.currentTest).toEqual({ uuid: 'scenario-uuid' })
+        expect(handler['_tests']).toEqual({})
     })
 })
