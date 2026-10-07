@@ -89,6 +89,11 @@ export default class AutomateModule extends BaseModule {
             return
         }
 
+        // Legacy annotated from service.beforeTest, which never runs for cucumber or a skipped test
+        if (!this.isCucumberInstance(instace) && args.skipReport !== true) {
+            await this.annotate(browser, `Test: ${test.fullName ?? test.title}`)
+        }
+
         // `setSessionName: false` suppresses the NAME, not the registration. The session still has
         // to enter sessionMap or onAfterExecute has nothing to status-mark, and legacy marks it
         // either way — its `after()` status block gates on setSessionStatus alone. Registering with
@@ -355,6 +360,14 @@ export default class AutomateModule extends BaseModule {
         }
         const format = (BrowserstackCLI.getInstance().options as { sessionNameFormat?: unknown })?.sessionNameFormat
         return typeof format === 'function' ? format as TestContextOptions['sessionNameFormat'] : undefined
+    }
+
+    private async annotate(browser: WebdriverIO.Browser, data: string) {
+        try {
+            await browser.executeScript(`browserstack_executor: ${JSON.stringify({ action: 'annotate', arguments: { data, level: 'info' } })}`, [])
+        } catch (error) {
+            this.logger.error(`annotate: failed to annotate the session: ${util.format(error)}`)
+        }
     }
 
     private isCucumberInstance(instance: TestFrameworkInstance): boolean {

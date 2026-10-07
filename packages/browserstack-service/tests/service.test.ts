@@ -1218,16 +1218,13 @@ describe('beforeTest', () => {
             return { annotate, trackEvent }
         }
 
-        it('annotates each jasmine spec with its full name, before the modules see TEST/PRE', async () => {
-            const { annotate, trackEvent } = await runBeforeTest('jasmine', jasmineLastSpec)
-            expect(annotate).toHaveBeenCalledWith('Test: Nested outer outer passing test')
-            const testPre = trackEvent.mock.calls.findIndex(([state]) => state === TestFrameworkState.TEST)
-            expect(annotate.mock.invocationCallOrder[0]).toBeLessThan(trackEvent.mock.invocationCallOrder[testPre])
-        })
-
-        it('does not annotate mocha tests on the CLI flow', async () => {
-            const { annotate } = await runBeforeTest('mocha', { title: 't', parent: 'suite' })
+        it.each([
+            ['jasmine', jasmineLastSpec],
+            ['mocha', { title: 't', parent: 'suite' }],
+        ])('leaves the %s test annotation to AutomateModule and still sends TEST/PRE', async (framework, test) => {
+            const { annotate, trackEvent } = await runBeforeTest(framework, test as Record<string, unknown>)
             expect(annotate).not.toHaveBeenCalled()
+            expect(trackEvent).toHaveBeenCalledWith(TestFrameworkState.TEST, HookState.PRE, expect.objectContaining({ test }))
         })
     })
 })

@@ -69,7 +69,7 @@ async function emitSkipReport({ framework, test, result, suiteTitle }: QueuedSki
     // gated on it, not on TEST/POST) — same sequence afterTest uses
     const steps: Array<[State, State, Record<string, unknown>]> = [
         [TestFrameworkState.INIT_TEST, HookState.PRE, { test }],
-        [TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle }],
+        [TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle, skipReport: true }],
         [TestFrameworkState.LOG_REPORT, HookState.POST, { test, result }],
         [TestFrameworkState.TEST, HookState.POST, { test, result, suiteTitle }],
     ]

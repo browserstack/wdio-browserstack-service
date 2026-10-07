@@ -33,6 +33,7 @@ describe('skipReporter', () => {
             [TestFrameworkState.TEST, HookState.POST],
         ])
         expect(calls[2][2]).toMatchObject({ result: { passed: false, skipped: true } })
+        expect(calls.map(([, , args]) => (args as Record<string, unknown>).skipReport)).toEqual([undefined, true, undefined, undefined])
     })
 
     it('does not re-report the same identifier', async () => {

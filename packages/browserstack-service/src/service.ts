@@ -644,9 +644,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // skip reporter must never re-report it from onTestSkip
             markTestStarted(getUniqueIdentifier(test, this._config.framework))
             this._insightsHandler?.setTestData(test, uuid)
-            if (this._config.framework === 'jasmine') {
-                await this._setAnnotation(`Test: ${test.fullName ?? test.title}`)
-            }
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
             return
         }

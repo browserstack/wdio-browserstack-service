@@ -6,6 +6,7 @@ import { TestFrameworkState } from '../../../src/cli/states/testFrameworkState.j
 import { AutomationFrameworkState } from '../../../src/cli/states/automationFrameworkState.js'
 import { HookState } from '../../../src/cli/states/hookState.js'
 import { TestFrameworkConstants } from '../../../src/cli/frameworks/constants/testFrameworkConstants.js'
+import { BStackLogger } from '../../../src/cli/cliLogger.js'
 import { isBrowserstackSession } from '../../../src/util.js'
 import PerformanceTester from '../../../src/instrumentation/performance/performance-tester.js'
 import { _fetch as fetch } from '../../../src/fetchWrapper.js'
@@ -1150,6 +1151,64 @@ describe('AutomateModule — jasmine session verdict', () => {
         await automateModule.onAfterExecute({})
 
         expect(putBodies()).toEqual([['live.json', { status: 'failed', reason: 'boom' }]])
+    })
+})
+
+describe('AutomateModule — per-test annotation', () => {
+    let automateModule: AutomateModule
+    let executeScript: ReturnType<typeof vi.fn>
+    const annotation = (data: string) => `browserstack_executor: ${JSON.stringify({ action: 'annotate', arguments: { data, level: 'info' } })}`
+
+    const runBeforeTest = (frameworkName: string, test: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+        vi.mocked(TestFramework.getState).mockImplementation((_i, key) => key === TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME ? frameworkName : undefined)
+        return automateModule.onBeforeTest({ instance: {}, test, suiteTitle: 'Suite', ...extra })
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        executeScript = vi.fn().mockResolvedValue(undefined)
+        vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as any)
+        vi.mocked(AutomationFramework.getDriver).mockReturnValue({ sessionId: 's1', executeScript } as any)
+        vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) => key === 'framework_session_id' ? 's1' : {})
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(fetch).mockResolvedValue({ json: async () => ({}) } as any)
+        automateModule = new AutomateModule({} as Options.Testrunner)
+        automateModule.config = {
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false },
+            userName: 'u',
+            accessKey: 'k'
+        } as any
+    })
+
+    it('annotates a mocha test with its title, as legacy beforeTest did', async () => {
+        await runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' })
+        expect(executeScript).toHaveBeenCalledExactlyOnceWith(annotation('Test: t'), [])
+    })
+
+    it('annotates a jasmine spec with its full name', async () => {
+        await runBeforeTest('WebdriverIO-jasmine', { description: 'outer passing test', fullName: 'Nested outer outer passing test' })
+        expect(executeScript).toHaveBeenCalledExactlyOnceWith(annotation('Test: Nested outer outer passing test'), [])
+    })
+
+    it('annotates even when the session name is skipped', async () => {
+        (automateModule.config as any).testContextOptions.skipSessionName = true
+        await runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' })
+        expect(executeScript).toHaveBeenCalledExactlyOnceWith(annotation('Test: t'), [])
+    })
+
+    it('never annotates cucumber, a skip report, or a non-BrowserStack session', async () => {
+        await runBeforeTest('WebdriverIO-cucumber', { title: 'Scenario', parent: 'Feature' })
+        await runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' }, { skipReport: true })
+        vi.mocked(isBrowserstackSession).mockReturnValue(false)
+        await runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' })
+        expect(executeScript).not.toHaveBeenCalled()
+    })
+
+    it('logs a failed annotate and still names the session', async () => {
+        executeScript.mockRejectedValue(new Error('annotate blew up'))
+        await expect(runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' })).resolves.toBeUndefined()
+        expect(BStackLogger.error).toHaveBeenCalledWith(expect.stringContaining('annotate blew up'))
+        expect((automateModule as any).sessionMap.get('s1')?.lastTestName).toBe('Suite - t')
     })
 })
 
