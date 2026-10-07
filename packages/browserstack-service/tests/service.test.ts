@@ -406,6 +406,27 @@ describe('_multiRemoteAction', () => {
     })
 })
 
+describe('_executeCommand', () => {
+    it('should run the executor script on each instance with the WebdriverIO v10 flag', async () => {
+        const browserA = { executeScript: vi.fn() }
+        const browserB = { executeScript: vi.fn() }
+        const multiRemoteBrowser = {
+            isMultiRemote: true,
+            executeScript: vi.fn(),
+            getInstance: vi.fn().mockImplementation((name: string) => name === 'browserA' ? browserA : browserB)
+        }
+        const tmpService = new BrowserstackService({} as any, { browserA: {}, browserB: {} } as any, { user: 'foo', key: 'bar' } as any)
+        tmpService['_browser'] = multiRemoteBrowser as any
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValueOnce(true)
+
+        await tmpService['_executeCommand']('annotate')
+
+        expect(browserA.executeScript).toHaveBeenCalledWith('browserstack_executor: {"action":"annotate"}', [])
+        expect(browserB.executeScript).toHaveBeenCalledWith('browserstack_executor: {"action":"annotate"}', [])
+        expect(multiRemoteBrowser.executeScript).not.toHaveBeenCalled()
+    })
+})
+
 describe('_update', () => {
     describe('should call fetch with put method', () => {
         const getCloudProviderSpy = vi.spyOn(utils, 'getCloudProvider').mockReturnValue('browserstack')
@@ -455,6 +476,19 @@ describe('_printSessionURL', () => {
             'Windows 10 chrome session: https://www.browserstack.com/automate/builds/1/sessions/2'
         )
         expect(isBrowserstackSessionSpy).toHaveBeenCalled()
+    })
+
+    it('should get and log multi remote session details with the WebdriverIO v10 flag', async () => {
+        browser.isMultiremote = false
+        ;(browser as any).isMultiRemote = true
+        service['_browser'] = browser
+        const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        await service._printSessionURL()
+        expect(fetch).toHaveBeenCalledWith(`${sessionBaseUrl}/${sessionIdA}.json`, { method: 'GET', headers })
+        expect(logInfoSpy).toHaveBeenCalledWith(
+            'Windows 10 chrome session: https://www.browserstack.com/automate/builds/1/sessions/2'
+        )
     })
 
     describe('if cant print', () => {
@@ -772,6 +806,8 @@ describe('before', () => {
 
     it('should overwrite executeAsync command to route browserstack_executor via executeAsyncScript', async () => {
         (browser as any).isBidi = true
+        // WebdriverIO v9 browser: executeAsync exists
+        ;(browser as any).executeAsync = vi.fn()
         const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
         service['_routeBidiExecutorToHttp'](browser)
 
@@ -788,6 +824,39 @@ describe('before', () => {
         const extraArg = { key: 'value' }
         await overwrite(originalExecuteAsync, 'arguments[0](1)', extraArg)
         expect(originalExecuteAsync).toHaveBeenCalledWith('arguments[0](1)', extraArg)
+    })
+
+    it('should not overwrite executeAsync on WebdriverIO v10, which removed the command', async () => {
+        (browser as any).isBidi = true
+        const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+        service['_routeBidiExecutorToHttp'](browser)
+
+        expect(browser.overwriteCommand).toHaveBeenCalledTimes(1)
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
+    })
+
+    it('should also route executor scripts that run on a WebdriverIO 10 browsing context', async () => {
+        (browser as any).isBidi = true
+        ;(browser as any).browsingContexts = vi.fn()
+        try {
+            const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+            service['_routeBidiExecutorToHttp'](browser)
+        } finally {
+            delete (browser as any).browsingContexts
+        }
+
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function), { attachToBrowsingContext: true })
+        const contextOverwrite = vi.mocked(browser.overwriteCommand).mock.calls
+            .find(([, , options]) => (options as { attachToBrowsingContext?: boolean })?.attachToBrowsingContext)?.[1] as Function
+        const context = { contextId: 'tab-2' }
+        const originalExecute = vi.fn()
+
+        await contextOverwrite.call(context, originalExecute, 'browserstack_executor: {"action":"annotate"}')
+        expect(browser.executeScript).toHaveBeenCalledWith('browserstack_executor: {"action":"annotate"}', [])
+        expect(originalExecute).not.toHaveBeenCalled()
+
+        await contextOverwrite.call(context, originalExecute, 'return document.title')
+        expect(originalExecute).toHaveBeenCalledWith('return document.title')
     })
 
     it('should not overwrite execute command for non-BrowserStack BiDi sessions', async () => {
@@ -827,6 +896,24 @@ describe('before', () => {
         const extraArg = { key: 'value' }
         await overwriteA(originalExecuteA, 'return arguments[0]', extraArg)
         expect(originalExecuteA).toHaveBeenCalledWith('return arguments[0]', extraArg)
+    })
+
+    it('should overwrite execute on each instance for multiremote with the WebdriverIO v10 flag', async () => {
+        const browserA = { executeScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionA', isBidi: true }
+        const browserB = { executeScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
+        const multiRemoteBrowser = {
+            ...browser,
+            isMultiRemote: true,
+            getInstance: vi.fn().mockImplementation((name: string) => name === 'browserA' ? browserA : browserB)
+        } as unknown as WebdriverIO.MultiRemoteBrowser
+
+        const service = new BrowserstackService({} as any, { browserA: {}, browserB: {} } as any, {
+            user: 'foo', key: 'bar'
+        })
+        await service.before(service['_config'] as any, [], multiRemoteBrowser as any)
+
+        expect(browserA.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
+        expect(browserB.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
     })
 
     it('should keep patching remaining multiremote instances when one instance fails to resolve', async () => {

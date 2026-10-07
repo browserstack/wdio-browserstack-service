@@ -10,7 +10,7 @@ import type { Capabilities } from '@wdio/types'
 import type BrowserStackConfig from './config.js'
 import type { Options } from '@wdio/types'
 import type { BrowserstackHealing } from '@browserstack/ai-sdk-node'
-import { getBrowserStackUserAndKey, isBrowserstackInfra } from './util.js'
+import { getBrowserStackUserAndKey, isBrowserstackInfra, isMultiRemoteBrowser } from './util.js'
 import type { BrowserstackOptions } from './types.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
@@ -124,7 +124,7 @@ class AiHandler {
         config: Options.Testrunner,
         browserStackConfig: BrowserStackConfig,
         options: BrowserstackOptions,
-        caps: Capabilities.RequestedMultiremoteCapabilities,
+        caps: Capabilities.RequestedMultiRemoteCapabilities,
         browser: string
     ) {
         if ( caps[browser].capabilities &&
@@ -145,7 +145,7 @@ class AiHandler {
         config: Options.Testrunner,
         browserStackConfig: BrowserStackConfig,
         options: BrowserstackOptions,
-        caps: Capabilities.RequestedMultiremoteCapabilities,
+        caps: Capabilities.RequestedMultiRemoteCapabilities,
     ) {
         const browserNames = Object.keys(caps)
         for (let i = 0; i < browserNames.length; i++) {
@@ -173,7 +173,7 @@ class AiHandler {
                     this.updateCaps(authResult, options, caps)
 
                 } else if (isMultiremote) {
-                    this.handleMultiRemoteSetup(authResult, config, browserStackConfig, options, caps as unknown as Capabilities.RequestedMultiremoteCapabilities)
+                    this.handleMultiRemoteSetup(authResult, config, browserStackConfig, options, caps as unknown as Capabilities.RequestedMultiRemoteCapabilities)
                 }
             }
 
@@ -217,12 +217,14 @@ class AiHandler {
     async selfHeal(options: BrowserstackOptions, caps: Capabilities.ResolvedTestrunnerCapabilities, browser: WebdriverIO.Browser) {
         try {
 
-            const multiRemoteBrowsers = Object.keys(caps).filter(e => Object.keys(browser).includes(e))
+            // WebdriverIO v10 has no named instance properties; getInstance works in v9 and v10
+            const multiRemoteBrowser = browser as unknown as WebdriverIO.MultiRemoteBrowser
+            const multiRemoteBrowsers = isMultiRemoteBrowser(multiRemoteBrowser)
+                ? Object.keys(caps).filter(e => multiRemoteBrowser.instances.includes(e))
+                : []
             if (multiRemoteBrowsers.length > 0) {
                 for (let i = 0; i < multiRemoteBrowsers.length; i++) {
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const remoteBrowser = (browser as any)[multiRemoteBrowsers[i]]
-                    await this.handleSelfHeal(options, remoteBrowser)
+                    await this.handleSelfHeal(options, multiRemoteBrowser.getInstance(multiRemoteBrowsers[i]))
                 }
             } else {
                 await this.handleSelfHeal(options, browser)

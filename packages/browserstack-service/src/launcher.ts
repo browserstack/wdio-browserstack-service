@@ -26,7 +26,8 @@ import {
     BROWSERSTACK_OBSERVABILITY,
     WDIO_NAMING_PREFIX,
     BROWSERSTACK_TEST_REPORTING,
-    TEST_REPORTING_PROJECT_NAME
+    TEST_REPORTING_PROJECT_NAME,
+    DEFAULT_APPIUM_3_VERSION
 } from './constants.js'
 import {
     launchTestSession,
@@ -50,7 +51,9 @@ import {
     isValidEnabledValue,
     isMultiRemoteCaps,
     coerceStringBooleans,
-    validateSkipAppOverride
+    validateSkipAppOverride,
+    getWdioMajorVersion,
+    setDefaultAppiumVersion
 } from './util.js'
 import CrashReporter from './crash-reporter.js'
 import { initWdioConfigPath, isAutoCaptureLogsDisabled, publishAutoCaptureDisabled } from './configCapture.js'
@@ -182,7 +185,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                     }
                 })
         } else if (typeof capabilities === 'object') {
-            Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+            Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                 if (!(caps.capabilities as WebdriverIO.Capabilities)['bstack:options']) {
                     if (isBStackSession(this._config)) {
                         const extensionCaps = Object.keys(caps.capabilities).filter((cap) => cap.includes(':'))
@@ -426,6 +429,8 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 this._updateCaps(capabilities as Capabilities.TestrunnerCapabilities, 'app', app.app)
             }
         }
+
+        this._setDefaultAppiumVersion(capabilities as Capabilities.TestrunnerCapabilities)
 
         /**
          * buildIdentifier in service options will take precedence over specified in capabilities
@@ -916,9 +921,40 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 })
                 .forEach(strip)
         } else {
-            Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+            Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                 strip(caps.capabilities as WebdriverIO.Capabilities)
             })
+        }
+    }
+
+    /**
+     * WebdriverIO 10 supports Appium 3 only, but App Automate uses Appium 1.22.0 when no version
+     * is set. Set a default Appium 3 version for App Automate sessions on WebdriverIO 10.
+     */
+    _setDefaultAppiumVersion(capabilities: Capabilities.TestrunnerCapabilities) {
+        if (!this.browserStackConfig.appAutomate) {
+            return
+        }
+        const wdioMajor = getWdioMajorVersion()
+        if (!wdioMajor || wdioMajor < 10) {
+            return
+        }
+
+        const capabilityList = Array.isArray(capabilities)
+            ? capabilities.flatMap((c) => {
+                if ('alwaysMatch' in c) {
+                    return c.alwaysMatch as WebdriverIO.Capabilities
+                }
+                if (Object.values(c).length > 0 && Object.values(c).every(c => typeof c === 'object' && c.capabilities)) {
+                    return Object.values(c).map((o) => o.capabilities) as WebdriverIO.Capabilities[]
+                }
+                return c as WebdriverIO.Capabilities
+            })
+            : Object.values(capabilities as Capabilities.RequestedMultiRemoteCapabilities).map((o) => o.capabilities as WebdriverIO.Capabilities)
+
+        const updated = capabilityList.filter((capability) => setDefaultAppiumVersion(capability)).length
+        if (updated) {
+            BStackLogger.info(`WebdriverIO ${wdioMajor} needs Appium 3. Set appiumVersion to ${DEFAULT_APPIUM_3_VERSION} in ${updated} capabilities. Set bstack:options.appiumVersion to use a different version.`)
         }
     }
 
@@ -983,7 +1019,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                         }
                     })
             } else if (typeof capabilities === 'object') {
-                Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+                Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                     if (
                         validateCapsWithNonBstackA11y(
                             (caps.capabilities as WebdriverIO.Capabilities).browserName,
@@ -1108,7 +1144,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                     }
                 })
         } else if (typeof capabilities === 'object') {
-            Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+            Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                 if (!(caps.capabilities as WebdriverIO.Capabilities)['bstack:options']) {
                     const extensionCaps = Object.keys(caps.capabilities).filter((cap) => cap.includes(':'))
                     if (extensionCaps.length) {

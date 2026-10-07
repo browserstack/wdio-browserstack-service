@@ -614,6 +614,51 @@ describe('afterHook', () => {
             expect(insightsHandler['_tests']).toEqual({ 'test title': { finishedAt: '2020-01-01T00:00:00.000Z', } })
             expect(insightsHandler['getRunData']).toBeCalledTimes(1)
         })
+
+        describe('tests affected by a failed hook', () => {
+            const hookError = new Error('login failed')
+            const failedHook = (title: string) => {
+                const suite = { title: 'suite', tests: [] as unknown[], suites: [] as unknown[] }
+                suite.tests.push({ title: 'passed before the hook', state: 'passed', parent: suite })
+                suite.tests.push({ title: 'affected', parent: suite })
+                return { title, parent: 'suite', ctx: { test: { parent: suite } } } as any
+            }
+            const affectedRunData = () => vi.mocked(insightsHandler['getRunData']).mock.calls
+                .filter(([test]) => (test as { title: string }).title === 'affected')
+
+            beforeEach(() => {
+                insightsHandler['_tests'] = {}
+                vi.spyOn(insightsHandler.listener, 'testFinished').mockImplementation(() => {})
+            })
+
+            it('reports them as skipped by default', async () => {
+                await insightsHandler.afterHook(failedHook('"before all" hook for "a"'), { passed: false, error: hookError } as any)
+
+                expect(affectedRunData()).toEqual([[expect.objectContaining({ title: 'affected' }), 'TestRunSkipped']])
+            })
+
+            it('reports them as failed with the hook error when Mocha fails them', async () => {
+                await insightsHandler.afterHook(failedHook('"before all" hook for "a"'), { passed: false, error: hookError } as any, true)
+
+                const [[, eventType, result]] = affectedRunData()
+                expect(eventType).toBe('TestRunFinished')
+                expect(result).toEqual(expect.objectContaining({ passed: false }))
+                expect(result.error.message).toBe('Test skipped due to failure in hook ""before all" hook for "a"": login failed')
+                expect(insightsHandler.listener.testFinished).toHaveBeenCalledTimes(1)
+            })
+
+            it('reports them as failed after a failed beforeEach hook', async () => {
+                await insightsHandler.afterHook(failedHook('"before each" hook for "a"'), { passed: false, error: hookError } as any, true)
+
+                expect(affectedRunData()[0][1]).toBe('TestRunFinished')
+            })
+
+            it('still reports them as skipped after a failed afterEach hook, which Mocha does not fail', async () => {
+                await insightsHandler.afterHook(failedHook('"after each" hook for "a"'), { passed: false, error: hookError } as any, true)
+
+                expect(affectedRunData()[0][1]).toBe('TestRunSkipped')
+            })
+        })
     })
 
     describe('cucumber', () => {

@@ -118,6 +118,14 @@ describe('onPrepare', () => {
         expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('BrowserStack credential mismatch'))
     })
 
+    it('sets the default Appium version for the capabilities', async () => {
+        const service = new BrowserstackLauncher({ testObservability: false } as any, caps, config)
+        const appiumSpy = vi.spyOn(service, '_setDefaultAppiumVersion')
+        await service.onPrepare(config, caps)
+
+        expect(appiumSpy).toHaveBeenCalledWith(caps)
+    })
+
     it('should not try to upload app is app is undefined', async () => {
         const service = new BrowserstackLauncher({ testObservability: false } as any, caps, config)
         await service.onPrepare(config, caps)
@@ -927,6 +935,101 @@ describe('constructor', () => {
             expect(caps).toEqual([{}])
         })
         spy.mockImplementation(() => true)
+    })
+})
+
+describe('_setDefaultAppiumVersion', () => {
+    const config = {
+        user: 'foobaruser',
+        key: '12345678901234567890',
+        capabilities: []
+    }
+    const appCaps = () => [{ 'appium:app': 'bs://app', 'bstack:options': { deviceName: 'Pixel 8' } }]
+
+    // BrowserStackConfig is a singleton, so restore its flag after each test
+    let restoreAppAutomate: (() => void) | undefined
+    let wdioMajorSpy: ReturnType<typeof vi.spyOn<typeof utils, 'getWdioMajorVersion'>>
+
+    beforeEach(() => {
+        wdioMajorSpy = vi.spyOn(utils, 'getWdioMajorVersion')
+    })
+
+    const launcherFor = (appAutomate: boolean, wdioMajor?: number) => {
+        const service = new BrowserstackLauncher({} as any, [{}], config)
+        const previous = service.browserStackConfig.appAutomate
+        restoreAppAutomate = () => { service.browserStackConfig.appAutomate = previous }
+        service.browserStackConfig.appAutomate = appAutomate
+        wdioMajorSpy.mockReturnValue(wdioMajor)
+        return service
+    }
+
+    afterEach(() => {
+        restoreAppAutomate?.()
+        wdioMajorSpy.mockRestore()
+    })
+
+    it('sets Appium 3 for App Automate on WebdriverIO 10', () => {
+        const caps: any = appCaps()
+        launcherFor(true, 10)._setDefaultAppiumVersion(caps)
+
+        expect(caps[0]['bstack:options'].appiumVersion).toBe('3.3.0')
+    })
+
+    it('does not set a version on WebdriverIO 9', () => {
+        const caps: any = appCaps()
+        launcherFor(true, 9)._setDefaultAppiumVersion(caps)
+
+        expect(caps[0]['bstack:options'].appiumVersion).toBeUndefined()
+    })
+
+    it('does not set a version when the WebdriverIO version is unknown', () => {
+        const caps: any = appCaps()
+        launcherFor(true, undefined)._setDefaultAppiumVersion(caps)
+
+        expect(caps[0]['bstack:options'].appiumVersion).toBeUndefined()
+    })
+
+    it('does not set a version for Automate sessions', () => {
+        const caps: any = [{ browserName: 'chrome', 'bstack:options': {} }]
+        launcherFor(false, 10)._setDefaultAppiumVersion(caps)
+
+        expect(caps[0]['bstack:options'].appiumVersion).toBeUndefined()
+    })
+
+    it('keeps the appiumVersion that the user set', () => {
+        const caps: any = [{ 'appium:app': 'bs://app', 'bstack:options': { appiumVersion: '3.5.2' } }]
+        launcherFor(true, 10)._setDefaultAppiumVersion(caps)
+
+        expect(caps[0]['bstack:options'].appiumVersion).toBe('3.5.2')
+    })
+
+    it('sets the version in alwaysMatch capabilities', () => {
+        const caps: any = [{ alwaysMatch: { 'appium:app': 'bs://app' } }]
+        launcherFor(true, 10)._setDefaultAppiumVersion(caps)
+
+        expect(caps[0].alwaysMatch['bstack:options'].appiumVersion).toBe('3.3.0')
+    })
+
+    it('sets the version for each multiremote instance', () => {
+        const caps: any = {
+            android: { capabilities: { 'appium:app': 'bs://app' } },
+            ios: { capabilities: { 'appium:app': 'bs://app', 'bstack:options': { appiumVersion: '3.5.2' } } }
+        }
+        launcherFor(true, 10)._setDefaultAppiumVersion(caps)
+
+        expect(caps.android.capabilities['bstack:options'].appiumVersion).toBe('3.3.0')
+        expect(caps.ios.capabilities['bstack:options'].appiumVersion).toBe('3.5.2')
+    })
+
+    it('sets the version for each instance of a parallel multiremote capability', () => {
+        const caps: any = [{
+            android: { capabilities: { 'appium:app': 'bs://app' } },
+            ios: { capabilities: { 'appium:app': 'bs://app' } }
+        }]
+        launcherFor(true, 10)._setDefaultAppiumVersion(caps)
+
+        expect(caps[0].android.capabilities['bstack:options'].appiumVersion).toBe('3.3.0')
+        expect(caps[0].ios.capabilities['bstack:options'].appiumVersion).toBe('3.3.0')
     })
 })
 

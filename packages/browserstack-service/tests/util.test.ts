@@ -165,6 +165,16 @@ describe('getBrowserCapabilities', () => {
             .toEqual(browser.browserA.capabilities as any)
     })
 
+    it('should get multiremote browser capabilities with the WebdriverIO v10 flag', () => {
+        const instances: Record<string, unknown> = { browserA: { capabilities: { browser: 'browser' } } }
+        const browser = {
+            isMultiRemote: true,
+            getInstance: vi.fn().mockImplementation((browserName: string) => instances[browserName]),
+        } as unknown as WebdriverIO.MultiRemoteBrowser
+        expect(getBrowserCapabilities(browser, {}, 'browserA'))
+            .toEqual({ browser: 'browser' } as any)
+    })
+
     it('should handle null multiremote browser capabilities', () => {
         const browser = {
             isMultiremote: true,
@@ -219,6 +229,35 @@ describe('getBrowserCapabilities', () => {
         } as unknown as WebdriverIO.MultiRemoteBrowser
         expect(getBrowserCapabilities(browser, { browserB: {} } as any, 'browserB'))
             .toEqual({})
+    })
+})
+
+describe('isMultiRemoteBrowser', () => {
+    it('detects the WebdriverIO v10 isMultiRemote flag', () => {
+        expect(utils.isMultiRemoteBrowser({ isMultiRemote: true })).toBe(true)
+    })
+
+    it('detects the WebdriverIO v9 isMultiremote flag', () => {
+        expect(utils.isMultiRemoteBrowser({ isMultiremote: true })).toBe(true)
+    })
+
+    it('returns false for a single browser', () => {
+        expect(utils.isMultiRemoteBrowser({ isMultiRemote: false })).toBe(false)
+        expect(utils.isMultiRemoteBrowser({ isMultiremote: false })).toBe(false)
+        expect(utils.isMultiRemoteBrowser({})).toBe(false)
+        expect(utils.isMultiRemoteBrowser(undefined)).toBe(false)
+    })
+})
+
+describe('commandScopeOptions', () => {
+    // WebdriverIO v10 throws on a boolean third argument to overwriteCommand,
+    // and v9 treats any truthy third argument as "attach to element".
+    it('attaches element commands with an options object', () => {
+        expect(utils.commandScopeOptions(true)).toEqual({ attachToElement: true })
+    })
+
+    it('passes no options for browser commands', () => {
+        expect(utils.commandScopeOptions(false)).toBeUndefined()
     })
 })
 
@@ -554,15 +593,24 @@ describe('getCloudProvider', () => {
     it('return Browserstack if test being run on browserstack', () => {
         expect(getCloudProvider({ options: { hostname: 'hub.browserstack.com' } })).toEqual('browserstack')
     })
+    // WebdriverIO v10 multiremote: no instance properties, only getInstance()
+    const multiRemote = (children: Record<string, object>) => ({
+        isMultiRemote: true,
+        instances: Object.keys(children),
+        getInstance: (name: string) => children[name]
+    }) as unknown as WebdriverIO.MultiRemoteBrowser
+
     it('return Browserstack if test being run on browserstack with multiremote', () => {
-        const browser = {
-            isMultiremote: true,
-            instances: ['browserA'],
-            browserA: {
-                options: { hostname: 'hub.browserstack.com' }
-            }
-        } as unknown as WebdriverIO.MultiRemoteBrowser
+        const browser = multiRemote({
+            browserA: { options: { hostname: 'localhost' } },
+            browserB: { options: { hostname: 'hub.browserstack.com' } }
+        })
         expect(getCloudProvider(browser)).toEqual('browserstack')
+    })
+
+    it('return unknown_grid if no multiremote instance is on browserstack', () => {
+        const browser = multiRemote({ browserA: { options: { hostname: 'localhost' } } })
+        expect(getCloudProvider(browser)).toEqual('unknown_grid')
     })
 })
 

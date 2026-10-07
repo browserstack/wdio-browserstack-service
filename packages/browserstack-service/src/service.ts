@@ -6,12 +6,17 @@ import {
     isBrowserstackCapability,
     getParentSuiteName,
     isBrowserstackSession,
+    isMultiRemoteBrowser,
     patchConsoleLogs,
     isTrue,
     isFalse,
     getUniqueIdentifier,
     getHookType,
-    isBrowserstackExecutorScript
+    isBrowserstackExecutorScript,
+    getWdioMajorVersion,
+    mochaFailsHookAffectedTests,
+    createHookAffectedTestError,
+    overwriteBrowsingContextCommand
 } from './util.js'
 import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from './types.js'
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
@@ -35,7 +40,7 @@ import PerformanceTester from './instrumentation/performance/performance-tester.
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import { EVENTS } from './instrumentation/performance/constants.js'
 import { BrowserstackCLI } from './cli/index.js'
-import { drainSkipReports, markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
+import { drainSkipReports, markTestStarted, reportSuiteFailed, reportSuiteSkipped } from './cli/skipReporter.js'
 import { CLIUtils } from './cli/cliUtils.js'
 
 import { _fetch as fetch } from './fetchWrapper.js'
@@ -56,6 +61,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     private _sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
     private _failReasons: string[] = []
     private _hookFailReasons: string[] = []
+    private _failHookAffectedTests?: boolean
     private _pureTestFailReasons: string[] = []
     private _scenariosThatRan: string[] = []
     private _lastScenarioName?: string  // Track last scenario for preferScenarioName feature
@@ -144,7 +150,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     _updateCaps (fn: (caps: WebdriverIO.Capabilities) => void) {
-        const multiRemoteCap = this._caps as Capabilities.RequestedMultiremoteCapabilities
+        const multiRemoteCap = this._caps as Capabilities.RequestedMultiRemoteCapabilities
 
         if (multiRemoteCap.capabilities) {
             return Object.entries(multiRemoteCap).forEach(([, caps]) => fn(caps.capabilities as WebdriverIO.Capabilities))
@@ -268,7 +274,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 }
             }
 
-            if (this._browser.isMultiremote) {
+            if (isMultiRemoteBrowser(this._browser)) {
                 const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
                 Object.keys(this._caps).forEach((browserName) => {
                     patchBidiExecutorRouting(() => multiRemoteBrowser.getInstance(browserName), browserName)
@@ -498,6 +504,15 @@ export default class BrowserstackService implements Services.ServiceInstance {
         await this._accessibilityHandler?.beforeHook(test as Frameworks.Test, context, this._insightsHandler?.getCurrentHook()?.uuid)
     }
 
+    /**
+     * true when Mocha fails the tests that a failed before/beforeEach hook skipped
+     * (Mocha 12, WebdriverIO 10). Read once: the WebdriverIO version comes from the file system.
+     */
+    private get failHookAffectedTests(): boolean {
+        this._failHookAffectedTests ??= mochaFailsHookAffectedTests(this._config, getWdioMajorVersion())
+        return this._failHookAffectedTests
+    }
+
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'afterHook' })
     async afterHook(test: Frameworks.Test | CucumberHook, context: unknown, result: Frameworks.TestResult) {
         // The Mocha hook window is closed — clear the tracker (see beforeHook).
@@ -548,13 +563,16 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 const hookType = getHookType((test as Frameworks.Test).title)
                 const suite = (test as Frameworks.Test).ctx?.test?.parent
                 if (result && !result.passed && ['BEFORE_ALL', 'BEFORE_EACH', 'AFTER_EACH'].includes(hookType) && suite) {
-                    await reportSuiteSkipped(framework, suite)
+                    // Mocha 12 (WebdriverIO 10) fails these tests after a before/beforeEach hook
+                    await (hookType !== 'AFTER_EACH' && this.failHookAffectedTests
+                        ? reportSuiteFailed(framework, suite, createHookAffectedTestError((test as Frameworks.Test).title, result.error))
+                        : reportSuiteSkipped(framework, suite))
                 }
             }
             return
         }
 
-        await this._insightsHandler?.afterHook(test, result)
+        await this._insightsHandler?.afterHook(test, result, this.failHookAffectedTests)
         await this._accessibilityHandler?.afterHook()
     }
 
@@ -1185,7 +1203,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             failureReason = hasReasons ? this._failReasons.join('\n') : undefined
         }
 
-        if (!this._browser.isMultiremote) {
+        if (!isMultiRemoteBrowser(this._browser)) {
             BStackLogger.info(`Update (reloaded) job with sessionId ${oldSessionId}, ${sessionStatus}`)
         } else {
             const browserName = (this._browser as unknown as WebdriverIO.MultiRemoteBrowser).instances.filter(
@@ -1254,7 +1272,22 @@ export default class BrowserstackService implements Services.ServiceInstance {
             return originalExecute(script, ...args)
         })
 
-        browser.overwriteCommand('executeAsync', async (originalExecuteAsync, script, ...args) => {
+        // WebdriverIO v10: `execute` on a browsing context (from browser.url() or newWindow()) does not
+        // go through the browser overwrite. Executor commands act on the session, not on one context.
+        overwriteBrowsingContextCommand(browser, 'execute', async (originalExecute: (...args: unknown[]) => unknown, script: string, ...args: Parameters<WebdriverIO.Browser['executeScript']>[1]) => {
+            if (isBrowserstackExecutorScript(script)) {
+                return browser.executeScript(script, args)
+            }
+            return originalExecute(script, ...args)
+        })
+
+        // WebdriverIO v10 removed executeAsync; only v9 has the command to overwrite.
+        if (typeof (browser as { executeAsync?: unknown }).executeAsync !== 'function') {
+            return
+        }
+
+        // @ts-expect-error executeAsync is in the WebdriverIO v9 types only
+        browser.overwriteCommand('executeAsync', async (originalExecuteAsync: (...args: unknown[]) => unknown, script: string, ...args: Parameters<WebdriverIO.Browser['executeAsyncScript']>[1]) => {
             if (isBrowserstackExecutorScript(script)) {
                 return browser.executeAsyncScript(script, args)
             }
@@ -1267,7 +1300,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             return Promise.resolve()
         }
 
-        if (!this._browser.isMultiremote) {
+        if (!isMultiRemoteBrowser(this._browser)) {
             return action(this._browser.sessionId)
         }
 
@@ -1400,7 +1433,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
         const cmd = { action, ...(args ? { arguments: args } : {}) }
         const script = `browserstack_executor: ${JSON.stringify(cmd)}`
 
-        if (this._browser.isMultiremote) {
+        if (isMultiRemoteBrowser(this._browser)) {
             const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
             return Promise.all(Object.keys(this._caps).map(async (browserName) => {
                 const browser = multiRemoteBrowser.getInstance(browserName)

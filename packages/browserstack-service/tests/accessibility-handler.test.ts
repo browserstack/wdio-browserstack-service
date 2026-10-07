@@ -9,6 +9,7 @@ import AccessibilityHandler from '../src/accessibility-handler.js'
 import type { BrowserstackConfig, BrowserstackOptions } from '../src/types.js'
 import type { Options } from '@wdio/types'
 import * as utils from '../src/util.js'
+import accessibilityScripts from '../src/scripts/accessibility-scripts.js'
 import type { Capabilities } from '@wdio/types'
 import * as bstackLogger from '../src/bstackLogger.js'
 
@@ -53,14 +54,20 @@ describe('shouldSkipScanForBidiWindowCommand (SDK-5047)', () => {
         expect(skip({ isBidi: true }, {})).toBe(false)
     })
 
+    // WebdriverIO v10 multiremote: no instance properties, only getInstance()
+    const multiRemote = (children: Record<string, object>) => ({
+        instances: Object.keys(children),
+        getInstance: (name: string) => children[name]
+    })
+
     it('skips for window commands when any multiremote child instance is BiDi', () => {
-        const multi = { instances: ['chromeA', 'chromeB'], chromeA: { isBidi: false }, chromeB: { isBidi: true } }
+        const multi = multiRemote({ chromeA: { isBidi: false }, chromeB: { isBidi: true } })
         expect(skip(multi, { name: 'getWindowHandle', class: 'Browser' })).toBe(true)
         expect(skip(multi, { name: 'switchToWindow', class: 'Browser' })).toBe(true)
     })
 
     it('does not skip on multiremote when no child instance is BiDi', () => {
-        const multi = { instances: ['chromeA', 'chromeB'], chromeA: { isBidi: false }, chromeB: {} }
+        const multi = multiRemote({ chromeA: { isBidi: false }, chromeB: {} })
         expect(skip(multi, { name: 'getWindowHandle', class: 'Browser' })).toBe(false)
     })
 })
@@ -481,6 +488,83 @@ describe('scans ahead of the first test (config-level hooks)', () => {
         await handler.before('session-multi')
 
         expect(AccessibilityHandler['_a11yScanSessionMap']['session-multi']).toBeUndefined()
+    })
+
+    it('skips multiremote with the WebdriverIO v10 flag', async () => {
+        const handler = handlerFor('mocha')
+        handler['_browser'] = { ...browser, isMultiremote: false, isMultiRemote: true } as any
+
+        await handler.before('session-multi-v10')
+
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session-multi-v10']).toBeUndefined()
+    })
+
+    it('wraps element commands with an options object and browser commands without one', async () => {
+        const handler = handlerFor('mocha')
+        const overwriteCommand = vi.fn()
+        handler['_browser'] = { ...browser, overwriteCommand } as any
+        const savedCommands = accessibilityScripts.commandsToWrap
+        accessibilityScripts.commandsToWrap = [{ name: 'click', class: 'Element' }, { name: 'url', class: 'Browser' }] as any
+
+        try {
+            await handler.before('session-wrap')
+        } finally {
+            accessibilityScripts.commandsToWrap = savedCommands
+        }
+
+        expect(overwriteCommand).toHaveBeenCalledWith('click', expect.any(Function), { attachToElement: true })
+        expect(overwriteCommand).toHaveBeenCalledWith('url', expect.any(Function), undefined)
+    })
+
+    // WebdriverIO 10: browser.url() and browser.newWindow() return a browsing context with its own
+    // commands, which a browser-level overwriteCommand does not reach
+    it('also wraps browser commands on WebdriverIO 10 browsing contexts, and scans that context', async () => {
+        const handler = handlerFor('mocha')
+        const overwriteCommand = vi.fn()
+        handler['_browser'] = { ...browser, overwriteCommand, browsingContexts: vi.fn() } as any
+        handler['_sessionId'] = 'session-context'
+        const savedCommands = accessibilityScripts.commandsToWrap
+        accessibilityScripts.commandsToWrap = [{ name: 'click', class: 'Element' }, { name: 'refresh', class: 'Browser' }] as any
+
+        try {
+            await handler.before('session-context')
+        } finally {
+            accessibilityScripts.commandsToWrap = savedCommands
+        }
+
+        expect(overwriteCommand).toHaveBeenCalledWith('refresh', expect.any(Function), { attachToBrowsingContext: true })
+        expect(overwriteCommand).not.toHaveBeenCalledWith('click', expect.any(Function), { attachToBrowsingContext: true })
+
+        const contextOverwrite = overwriteCommand.mock.calls
+            .find(([name, , options]) => name === 'refresh' && options?.attachToBrowsingContext)?.[1] as Function
+        vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        const context = { contextId: 'tab-2', execute: vi.fn() }
+        const original = vi.fn().mockResolvedValue('refreshed')
+
+        await expect(contextOverwrite.call(context, original, 'arg')).resolves.toBe('refreshed')
+
+        expect(original).toHaveBeenCalledTimes(1)
+        expect(original).toHaveBeenCalledWith('arg')
+        // performA11yScan(isAppAutomate, browser, ...): the scan runs on the context, not on the browser
+        expect(scanSpy.mock.calls.at(-1)?.[1]).toBe(context)
+    })
+
+    it('does not wrap browsing context commands on WebdriverIO 9', async () => {
+        const handler = handlerFor('mocha')
+        const overwriteCommand = vi.fn()
+        handler['_browser'] = { ...browser, overwriteCommand } as any
+        const savedCommands = accessibilityScripts.commandsToWrap
+        accessibilityScripts.commandsToWrap = [{ name: 'refresh', class: 'Browser' }] as any
+
+        try {
+            await handler.before('session-v9')
+        } finally {
+            accessibilityScripts.commandsToWrap = savedCommands
+        }
+
+        expect(overwriteCommand).toHaveBeenCalledTimes(1)
+        expect(overwriteCommand).toHaveBeenCalledWith('refresh', expect.any(Function), undefined)
     })
 
     // Stateless rule: parentless only when neither a framework hook run nor a test can own it.
