@@ -85,17 +85,17 @@
     "@types/node": "^20.1.0",
     "@types/tar": "^7.0.87",
     "@types/yauzl": "^2.10.3",
-    "@wdio/cli": "^10.0.0",
-    "@wdio/globals": "^10.0.0",
+    "@wdio/cli": "^10.0.1",
+    "@wdio/globals": "^10.0.1",
     "@wdio/logger": "^10.0.0",
-    "@wdio/reporter": "^10.0.0",
-    "@wdio/types": "^10.0.0",
+    "@wdio/reporter": "^10.0.1",
+    "@wdio/types": "^10.0.1",
     "esbuild": "^0.27.2",
     "rimraf": "^6.0.1",
     "ts-proto": "^2.7.5",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4",
-    "webdriverio": "^10.0.0"
+    "webdriverio": "^10.0.1"
   },
   "publishConfig": {
     "access": "public"
