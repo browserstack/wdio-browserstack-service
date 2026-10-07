@@ -17,7 +17,7 @@ import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from 
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
 import InsightsHandler from './insights-handler.js'
 import TestReporter from './reporter.js'
-import { awaitCliTestFinishesOnFailure, claimCliTestFinish, registerCliTestFinisher } from './cli/earlyTestFinish.js'
+import { awaitCliTestFinishesOnFailure, claimCliTestFinish, cliTestAttemptKey, registerCliTestFinisher } from './cli/earlyTestFinish.js'
 import { DEFAULT_OPTIONS, NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import AccessibilityHandler from './accessibility-handler.js'
@@ -79,7 +79,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
      * past the mocha timeout, the NEXT test's INIT_TEST overwrites the slot before the hung test's
      * afterTest POST fires, so the POST would carry the wrong (next) test's uuid and the binary
      * would close the wrong test_run — orphaning the hung one. We snapshot each test's uuid here,
-     * keyed by the same identity the legacy `_tests` map uses, and at afterTest we restore the
+     * keyed per attempt (cliTestAttemptKey over the identity the legacy `_tests` map uses), and at afterTest we restore the
      * finishing test's minted uuid onto the tracked instance before the POST so it closes the
      * correct test_run. The finishing identity is `originalTest` (already snapshotted pre-await by
      * the testFnWrapper, so it is the timed-out runnable's own identity, not the next test's).
@@ -601,6 +601,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'beforeTest' })
     async beforeTest (test: Frameworks.Test) {
         this._currentTest = test
+        // mocha's live runnable for this attempt; read before any await, since the suite's
+        // shared context moves on to the next runnable
+        const runnable = test.ctx?.test
         let suiteTitle = this._suiteTitle
 
         if (test.fullName) {
@@ -619,9 +622,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
             const uuid = TestFramework.getState(TestFramework.getTrackedInstance(), TestFrameworkConstants.KEY_TEST_UUID)
             // snapshot this test's freshly-minted uuid keyed by its identity, so a later
             // afterTest can restore it even after a subsequent INIT_TEST has overwritten the single
-            // mutable tracked-instance slot. Keyed exactly like the legacy `_tests` map.
+            // mutable tracked-instance slot. Keyed per attempt, so a retried attempt keeps its own.
             if (this._config.framework === 'mocha' && uuid) {
-                this._cliTestUuids.set(getUniqueIdentifier(test, this._config.framework), uuid as string)
+                this._cliTestUuids.set(this.cliAttemptKey(test), uuid as string)
             }
             // this test reports its own finish (incl. runtime `this.skip()`), so the
             // skip reporter must never re-report it from onTestSkip
@@ -630,7 +633,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // the test times out, mocha reports the failure to the reporter first and the reporter
             // reports it (see cli/earlyTestFinish.ts).
             if (this._config.framework === 'mocha') {
-                registerCliTestFinisher(getUniqueIdentifier(test, this._config.framework), (result) => this.finishCliTest(test, result))
+                registerCliTestFinisher(this.cliAttemptKey(test), (result) => this.finishCliTest(test, result), runnable)
             }
             this._insightsHandler?.setTestData(test, uuid)
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
@@ -660,10 +663,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         if (BrowserstackCLI.getInstance().isRunning()) {
-            if (this._config.framework === 'mocha' && !claimCliTestFinish(getUniqueIdentifier(test, this._config.framework))) {
-                // SDK-7843: the test timed out, and the reporter already reported its failure when
-                // mocha did; reporting it again here would arrive after after() anyway.
-                BStackLogger.debug(`afterTest: '${getUniqueIdentifier(test, this._config.framework)}' was already reported when mocha failed it`)
+            if (this._config.framework === 'mocha' && !claimCliTestFinish(this.cliAttemptKey(test))) {
+                // SDK-7843: the test timed out, and its failure was already reported when mocha
+                // failed it; reporting it again here would arrive after after() anyway.
+                BStackLogger.debug(`afterTest: '${this.cliAttemptKey(test)}' was already reported when mocha failed it`)
                 return
             }
             await this.finishCliTest(test, results)
@@ -687,21 +690,40 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // pre-await by the testFnWrapper — so restore THAT test's minted uuid onto the tracked
         // instance so the POST carries it and the binary closes the correct test_run. Without
         // this, the finish would carry the next test's uuid and orphan the finishing one.
+        let resolvedUuid: string | undefined
         if (this._config.framework === 'mocha') {
-            const identifier = getUniqueIdentifier(test, this._config.framework)
-            const resolvedUuid = this._cliTestUuids.get(identifier)
-            if (resolvedUuid) {
-                const trackedInstance = TestFramework.getTrackedInstance()
-                if (trackedInstance) {
-                    TestFramework.setState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID, resolvedUuid)
-                }
-                // Clean up so the per-worker map does not grow across the run.
-                this._cliTestUuids.delete(identifier)
-            }
+            const key = this.cliAttemptKey(test)
+            resolvedUuid = this._cliTestUuids.get(key)
+            // Clean up so the per-worker map does not grow across the run.
+            this._cliTestUuids.delete(key)
         }
+        /** Put this test's uuid on the tracked instance; returns another test's uuid it replaced. */
+        const pinUuid = (): unknown => {
+            const trackedInstance = TestFramework.getTrackedInstance()
+            if (!resolvedUuid || !trackedInstance) {
+                return undefined
+            }
+            const current = TestFramework.getState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID)
+            TestFramework.setState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID, resolvedUuid)
+            return current && current !== resolvedUuid ? current : undefined
+        }
+        pinUuid()
         await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result: results })
+        // SDK-7843: when this finish was started on failure, mocha moved on during the await
+        // above, and the next test's INIT_TEST may have taken the slot. Pin this test's uuid again
+        // for its TEST/POST, then hand the slot back to the test now running.
+        const displacedUuid = pinUuid()
         await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result: results, suiteTitle: this._suiteTitle })
+        const trackedInstance = TestFramework.getTrackedInstance()
+        if (displacedUuid && trackedInstance && TestFramework.getState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID) === resolvedUuid) {
+            TestFramework.setState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID, displacedUuid)
+        }
         await this.reportBailSkippedTests(test, results)
+    }
+
+    /** One attempt of a mocha test; see cliTestAttemptKey. */
+    private cliAttemptKey(test: Frameworks.Test): string {
+        return cliTestAttemptKey(getUniqueIdentifier(test, this._config.framework), (test as { _currentRetry?: number })._currentRetry)
     }
 
     /**
@@ -786,15 +808,12 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 } catch (skipDrainErr) {
                     BStackLogger.debug(`Exception draining skip reports in after(): ${util.format(skipDrainErr)}`)
                 }
-                // SDK-7843: a test that timed out was reported by the reporter when mocha failed it,
-                // which can still be in flight. Wait for it before the flush below (its TEST/POST is
-                // deferred into that stash) and before EXECUTE/POST, which marks the session status
-                // from the results recorded so far.
-                try {
-                    await awaitCliTestFinishesOnFailure()
-                } catch (finishErr) {
-                    BStackLogger.debug(`Exception awaiting failed-test finishes in after(): ${util.format(finishErr)}`)
-                }
+                // SDK-7843: a test that timed out is finished when mocha failed it (or here, from
+                // mocha's runnable, when no reporter is registered), and that finish can still be in
+                // flight. Wait for it before the flush below (its TEST/POST is deferred into that
+                // stash) and before EXECUTE/POST, which marks the session status from the results
+                // recorded so far. Every finish catches its own error, so this cannot reject.
+                await awaitCliTestFinishesOnFailure()
                 // Flush a test-finish event deferred past the after-each hook window — the last
                 // test of the worker has no next-test boundary to trigger the flush. Must run
                 // before worker teardown so the event isn't dropped.

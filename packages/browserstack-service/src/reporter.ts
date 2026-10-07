@@ -5,7 +5,7 @@ import WDIOReporter from '@wdio/reporter'
 import type { Options, Frameworks } from '@wdio/types'
 import { BrowserstackCLI } from './cli/index.js'
 import { reportSkippedTest, resolveSpecFile } from './cli/skipReporter.js'
-import { finishCliTestOnFailure } from './cli/earlyTestFinish.js'
+import { cliTestAttemptKey, finishCliTestOnFailure } from './cli/earlyTestFinish.js'
 import * as url from 'node:url'
 
 import { v4 as uuidv4 } from 'uuid'
@@ -162,7 +162,8 @@ class _TestReporter extends WDIOReporter {
             return
         }
         const attempts = testStats.retries ?? 0
-        finishCliTestOnFailure(`${testStats.parent} - ${testStats.title}`, {
+        // `retries` is this test's retry count so far, i.e. the attempt mocha just failed
+        finishCliTestOnFailure(cliTestAttemptKey(`${testStats.parent} - ${testStats.title}`, attempts), {
             passed: false,
             error: testStats.error,
             duration: testStats._duration,
