@@ -255,6 +255,18 @@ export class CLIUtils {
         const browserStackBinaryUrl =
             process.env.BROWSERSTACK_BINARY_URL || null
 
+        const fallbackToBinaryUrl = async (reason: unknown) => {
+            logger.warn(
+                `update_cli request failed (${reason}); falling back to BROWSERSTACK_BINARY_URL`,
+            )
+            const fallbackBinaryPath = await this.downloadLatestBinary(
+                browserStackBinaryUrl as string,
+                cliDir,
+            )
+            PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
+            return fallbackBinaryPath
+        }
+
         let response
         try {
             response = await this.requestToUpdateCLI(queryParams, config)
@@ -263,22 +275,25 @@ export class CLIUtils {
             // localizes the API hosts — so it always targets the production api host. On an internal
             // staging run (BROWSERSTACK_STAGING_ENV) the staging creds are rejected there (401). If an
             // explicit binary URL was supplied, use it so the run is not blocked on this call. Opt-in
-            // only: with no BROWSERSTACK_BINARY_URL the error propagates exactly as before, so
-            // production behaviour is unchanged.
+            // only: with no BROWSERSTACK_BINARY_URL behaviour is exactly as before.
+            const statusCode = (err as { response?: { statusCode?: number } })?.response?.statusCode
             if (!isNullOrEmpty(browserStackBinaryUrl)) {
-                const status = (err as { response?: { statusCode?: number } })?.response?.statusCode ?? (err as Error)?.message
-                logger.warn(
-                    `update_cli request failed (${status}); falling back to BROWSERSTACK_BINARY_URL`,
-                )
-                const fallbackBinaryPath = await this.downloadLatestBinary(
-                    browserStackBinaryUrl as string,
-                    cliDir,
-                )
-                PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
-                return fallbackBinaryPath
+                return fallbackToBinaryUrl(statusCode ?? (err as Error)?.message)
             }
             PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
+            if (statusCode !== undefined) {
+                // A non-2xx reply used to be returned as a body without `updated_cli_version`,
+                // which kept the existing binary — preserve that.
+                return existingCliPath
+            }
             throw err
+        }
+
+        // A successful update_cli reply always carries `updated_cli_version` and `url`; a body
+        // with neither is an error payload, so honour the explicit binary URL here too.
+        if (!isNullOrEmpty(browserStackBinaryUrl) &&
+            !nestedKeyValue(response, ['updated_cli_version']) && !nestedKeyValue(response, ['url'])) {
+            return fallbackToBinaryUrl(JSON.stringify(response))
         }
 
         if (nestedKeyValue(response, ['updated_cli_version'])) {
@@ -456,6 +471,12 @@ export class CLIUtils {
         )
         const jsonResponse = await response.json()
         logger.debug(`response ${JSON.stringify(jsonResponse)}`)
+        if (!response.ok) {
+            throw Object.assign(
+                new Error(`update_cli request failed with status ${response.status}`),
+                { response: { statusCode: response.status, body: jsonResponse } },
+            )
+        }
         return jsonResponse
     }
 

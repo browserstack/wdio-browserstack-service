@@ -496,6 +496,71 @@ describe('CLIUtils', () => {
         })
     })
 
+    describe('checkAndUpdateCli update_cli 401 (SDK-6948)', () => {
+        const mockCliDir = '/mock/cli/dir'
+        const mockExistingPath = '/mock/cli/dir/binary-existing'
+        const config = { user: 'testuser', key: 'testkey' } as Options.Testrunner
+        const savedBinaryUrl = process.env.BROWSERSTACK_BINARY_URL
+        const savedFetch = global.fetch
+
+        beforeEach(() => {
+            vi.spyOn(PerformanceTester, 'start').mockImplementation(() => {})
+            vi.spyOn(PerformanceTester, 'end').mockImplementation(() => {})
+            vi.spyOn(CLIUtils, 'runShellCommand').mockResolvedValue('1.0.0')
+            vi.spyOn(CLIUtils, 'isBinaryBusy').mockReturnValue(false)
+            global.fetch = vi.fn().mockResolvedValue({
+                ok: false,
+                status: 401,
+                json: vi.fn().mockResolvedValue({ message: 'Unauthorized' })
+            })
+        })
+
+        afterEach(() => {
+            global.fetch = savedFetch
+            if (savedBinaryUrl === undefined) {
+                delete process.env.BROWSERSTACK_BINARY_URL
+            } else {
+                process.env.BROWSERSTACK_BINARY_URL = savedBinaryUrl
+            }
+            vi.restoreAllMocks()
+        })
+
+        it('falls back to BROWSERSTACK_BINARY_URL when update_cli answers 401 with a JSON body', async () => {
+            process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
+            const download = vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue('/mock/cli/dir/binary-fallback')
+
+            const result = await CLIUtils.checkAndUpdateCli('', mockCliDir, config)
+
+            expect(result).toBe('/mock/cli/dir/binary-fallback')
+            expect(download).toHaveBeenCalledWith('https://example.com/staging-binary.zip', mockCliDir)
+        })
+
+        it('keeps the existing binary on a 401 when BROWSERSTACK_BINARY_URL is unset (unchanged behaviour)', async () => {
+            delete process.env.BROWSERSTACK_BINARY_URL
+            const download = vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue('/should/not/be/used')
+
+            const result = await CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, config)
+
+            expect(result).toBe(mockExistingPath)
+            expect(download).not.toHaveBeenCalled()
+        })
+
+        it('falls back when a 2xx body has neither url nor updated_cli_version', async () => {
+            process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
+            global.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: vi.fn().mockResolvedValue({ message: 'Unauthorized' })
+            })
+            const download = vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue('/mock/cli/dir/binary-fallback')
+
+            const result = await CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, config)
+
+            expect(result).toBe('/mock/cli/dir/binary-fallback')
+            expect(download).toHaveBeenCalledWith('https://example.com/staging-binary.zip', mockCliDir)
+        })
+    })
+
     describe('setupCliPath', () => {
         const mockConfig = {} as Options.Testrunner
 
@@ -562,6 +627,7 @@ describe('CLIUtils', () => {
 
             // Mock fetch to return a mock response
             global.fetch = vi.fn().mockResolvedValue({
+                ok: true,
                 json: vi.fn().mockResolvedValue({ status: 'success' })
             })
         })
@@ -578,6 +644,7 @@ describe('CLIUtils', () => {
 
             const mockJsonResponse = { updated_cli_version: '2.0.0' }
             global.fetch = vi.fn().mockResolvedValue({
+                ok: true,
                 json: vi.fn().mockResolvedValue(mockJsonResponse)
             })
 
@@ -601,12 +668,25 @@ describe('CLIUtils', () => {
         it('returns response from fetch', async () => {
             const mockResponse = { updated_cli_version: '2.0.0' }
             global.fetch = vi.fn().mockResolvedValue({
+                ok: true,
                 json: vi.fn().mockResolvedValue(mockResponse)
             })
 
             const result = await CLIUtils.requestToUpdateCLI({}, mockConfig)
 
             expect(result).toEqual(mockResponse)
+        })
+
+        it('rejects with the status code on a non-2xx reply (SDK-6948)', async () => {
+            global.fetch = vi.fn().mockResolvedValue({
+                ok: false,
+                status: 401,
+                json: vi.fn().mockResolvedValue({ message: 'Unauthorized' })
+            })
+
+            await expect(CLIUtils.requestToUpdateCLI({}, mockConfig))
+                .rejects
+                .toMatchObject({ response: { statusCode: 401, body: { message: 'Unauthorized' } } })
         })
 
         it('handles errors from fetch', async () => {
