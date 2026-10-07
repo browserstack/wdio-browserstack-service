@@ -633,7 +633,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // the test times out, mocha reports the failure to the reporter first and the reporter
             // reports it (see cli/earlyTestFinish.ts).
             if (this._config.framework === 'mocha') {
-                registerCliTestFinisher(this.cliAttemptKey(test), (result) => this.finishCliTest(test, result), runnable)
+                registerCliTestFinisher(this.cliAttemptKey(test), (result) => this.finishCliTest(test, result, runnable), runnable)
             }
             this._insightsHandler?.setTestData(test, uuid)
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
@@ -680,10 +680,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
     /**
      * Report a mocha test's finish on the CLI flow: its result, its TEST/POST, and the bail cascade.
-     * Called exactly once per test, from afterTest or (when the test timed out) from the reporter
-     * when mocha failed it (SDK-7843).
+     * Called exactly once per test, from afterTest or (when the test timed out) when mocha failed
+     * it (SDK-7843). That second path runs after mocha has moved on, so it passes the runnable
+     * captured in beforeTest; the suite's shared `test.ctx.test` then points at a hook or the next test.
      */
-    private async finishCliTest(test: Frameworks.Test, results: Frameworks.TestResult) {
+    private async finishCliTest(test: Frameworks.Test, results: Frameworks.TestResult, runnable?: unknown) {
         // the CLI test-finish reads test_uuid from the single mutable per-worker
         // tracked instance, which a later INIT_TEST may have overwritten with the NEXT test's
         // uuid. `test` is `originalTest` — already the correct (timed-out) identity, snapshotted
@@ -707,18 +708,18 @@ export default class BrowserstackService implements Services.ServiceInstance {
             TestFramework.setState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID, resolvedUuid)
             return current && current !== resolvedUuid ? current : undefined
         }
-        pinUuid()
+        const displacedFirst = pinUuid()
         await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result: results })
         // SDK-7843: when this finish was started on failure, mocha moved on during the await
         // above, and the next test's INIT_TEST may have taken the slot. Pin this test's uuid again
         // for its TEST/POST, then hand the slot back to the test now running.
-        const displacedUuid = pinUuid()
+        const displacedUuid = pinUuid() ?? displacedFirst
         await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result: results, suiteTitle: this._suiteTitle })
         const trackedInstance = TestFramework.getTrackedInstance()
         if (displacedUuid && trackedInstance && TestFramework.getState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID) === resolvedUuid) {
             TestFramework.setState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID, displacedUuid)
         }
-        await this.reportBailSkippedTests(test, results)
+        await this.reportBailSkippedTests(test, results, runnable)
     }
 
     /** One attempt of a mocha test; see cliTestAttemptKey. */
@@ -736,8 +737,8 @@ export default class BrowserstackService implements Services.ServiceInstance {
      * runnable state for that case, otherwise the cascade fires on the first attempt and reports
      * tests as skipped that the retry then actually runs.
      */
-    private hasRetryPending(test: Frameworks.Test, results: Frameworks.TestResult): boolean {
-        const mochaTest = test.ctx?.test as { currentRetry?: () => number, retries?: () => number } | undefined
+    private hasRetryPending(test: Frameworks.Test, results: Frameworks.TestResult, runnable?: unknown): boolean {
+        const mochaTest = (runnable ?? test.ctx?.test) as { currentRetry?: () => number, retries?: () => number } | undefined
         if (typeof mochaTest?.currentRetry === 'function' && typeof mochaTest.retries === 'function') {
             if (mochaTest.currentRetry() < mochaTest.retries()) {
                 return true
@@ -756,18 +757,19 @@ export default class BrowserstackService implements Services.ServiceInstance {
      * it is handed to one mocha instance. Cascading across them is still correct: bail aborts that
      * whole runner, so those tests do not run either.
      */
-    private async reportBailSkippedTests(test: Frameworks.Test, results: Frameworks.TestResult) {
+    private async reportBailSkippedTests(test: Frameworks.Test, results: Frameworks.TestResult, runnable?: unknown) {
         if (!this._mochaBail || results.passed || results.skipped) {
             return
         }
         try {
             // inside the boundary: hasRetryPending reaches into mocha's own runnable, which this
             // SDK does not own
-            if (this.hasRetryPending(test, results)) {
+            if (this.hasRetryPending(test, results, runnable)) {
                 return
             }
             const framework = BrowserstackCLI.getInstance().getTestFramework()
-            let suite = test.ctx?.test?.parent
+            const mochaTest: typeof test.ctx = runnable ?? test.ctx?.test
+            let suite = mochaTest?.parent
             if (!framework || !suite) {
                 return
             }

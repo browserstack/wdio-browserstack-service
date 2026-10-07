@@ -50,12 +50,26 @@ export function registerCliTestFinisher(key: string, finisher: CliTestFinisher, 
     finishers.set(key, { finisher, runnable })
 }
 
+/** The failure mocha recorded on an attempt's runnable (it keeps no error object on it). */
+function failureFromRunnable(runnable: MochaRunnable): Frameworks.TestResult {
+    const ms = typeof runnable.timeout === 'function' ? runnable.timeout() : undefined
+    const error = new Error(runnable.timedOut && ms ? `Timeout of ${ms}ms exceeded.` : 'Test failed before its afterTest ran.')
+    return { passed: false, error, duration: runnable.duration ?? 0, retries: { attempts: 0, limit: 0 }, exception: error.message, status: 'failed' }
+}
+
 /**
- * afterTest: claim the finish. Returns false only when it was already reported on failure (the
- * test timed out), in which case afterTest must not report it again. A test that was never
- * registered still belongs to afterTest.
+ * afterTest: claim the finish. Returns false when the attempt is reported on failure instead —
+ * already by the reporter, or now, because mocha already failed it (a timed-out test whose body
+ * finished late, with no reporter registered). wdio's result for such a body says only whether
+ * the body threw, not that mocha timed it out. In both cases afterTest must not report it.
+ * A normal failure is untouched: its afterTest runs before mocha marks the runnable failed.
+ * A test that was never registered still belongs to afterTest.
  */
 export function claimCliTestFinish(key: string): boolean {
+    const runnable = finishers.get(key)?.runnable
+    if (runnable?.state === 'failed') {
+        finishCliTestOnFailure(key, failureFromRunnable(runnable))
+    }
     finishers.delete(key)
     return !reportedOnFailure.delete(key)
 }
@@ -87,12 +101,9 @@ export function finishCliTestOnFailure(key: string, result: Frameworks.TestResul
  */
 export async function awaitCliTestFinishesOnFailure(): Promise<void> {
     for (const [key, { runnable }] of [...finishers]) {
-        if (runnable?.state !== 'failed') {
-            continue
+        if (runnable?.state === 'failed') {
+            finishCliTestOnFailure(key, failureFromRunnable(runnable))
         }
-        const ms = typeof runnable.timeout === 'function' ? runnable.timeout() : undefined
-        const error = new Error(runnable.timedOut && ms ? `Timeout of ${ms}ms exceeded.` : 'Test failed before its afterTest ran.')
-        finishCliTestOnFailure(key, { passed: false, error, duration: runnable.duration ?? 0, retries: { attempts: 0, limit: 0 }, exception: error.message, status: 'failed' })
     }
     while (inFlight.size > 0) {
         await Promise.all([...inFlight])

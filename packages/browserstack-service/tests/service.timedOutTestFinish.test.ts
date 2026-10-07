@@ -8,7 +8,7 @@ import TestFramework from '../src/cli/frameworks/testFramework.js'
 import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { AutomationFrameworkState } from '../src/cli/states/automationFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
-import { cliTestAttemptKey, finishCliTestOnFailure, resetCliTestFinishers } from '../src/cli/earlyTestFinish.js'
+import { awaitCliTestFinishesOnFailure, cliTestAttemptKey, finishCliTestOnFailure, resetCliTestFinishers } from '../src/cli/earlyTestFinish.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
@@ -155,7 +155,7 @@ describe('service — a timed-out mocha test is finished when mocha fails it (SD
         // the reporter starts the finish; mocha (no bail) moves on to the next test during its LOG_REPORT send
         expect(finishCliTestOnFailure('Suite - times out', failed)).toBe(true)
         await service.beforeTest(next)
-        await new Promise((resolve) => setTimeout(resolve, 100))
+        await awaitCliTestFinishesOnFailure()
 
         expect(testPosts()).toEqual([`${TestFrameworkState.TEST}/${HookState.POST} passed=false times out uuid-1`])
         // and the slot is handed back to the test now running
@@ -200,5 +200,41 @@ describe('service — a timed-out mocha test is finished when mocha fails it (SD
         await service.afterTest(makeTest('unseen'), undefined as never, { passed: true } as Frameworks.TestResult)
 
         expect(testPosts()).toHaveLength(1)
+    })
+
+    it('without a reporter, a timed-out test whose body finishes late is still reported failed', async () => {
+        const service = makeService()
+        const runnable = { state: undefined as string | undefined, timedOut: false, timeout: () => 10000, duration: 0 }
+        const test = makeTest('times out then succeeds', { ctx: { test: runnable } })
+        await service.beforeTest(test)
+        events.length = 0
+
+        // mocha times it out (no reporter hears it); the body then succeeds, so wdio's late
+        // afterTest says passed — before after() runs
+        Object.assign(runnable, { state: 'failed', timedOut: true, duration: 10001 })
+        await service.afterTest(test, undefined as never, { passed: true } as Frameworks.TestResult)
+        await service.after(1)
+
+        expect(testPosts()).toEqual([`${TestFrameworkState.TEST}/${HookState.POST} passed=false times out then succeeds uuid-1`])
+    })
+
+    it('runs the bail cascade from the runnable it captured, not the hook mocha moved on to', async () => {
+        const service = makeService()
+        const root: { title: string, tests: unknown[], suites: unknown[] } = { title: '', tests: [], suites: [] }
+        const suite = { title: 'Suite', parent: root, tests: [] as unknown[], suites: [] }
+        root.suites.push(suite)
+        suite.tests.push({ title: 'dropped by bail', parent: suite, state: undefined, file: '/spec.js', body: '' })
+        // final attempt of a test under `retries: 1`
+        const ctx = { test: { parent: suite, currentRetry: () => 1, retries: () => 1 } as unknown }
+        const test = makeTest('times out on last attempt', { ctx, _currentRetry: 1 })
+        await service.beforeTest(test)
+        events.length = 0
+
+        // mocha fails it and moves on to an afterEach hook, which inherits the suite's retries
+        ctx.test = { parent: suite, currentRetry: () => 0, retries: () => 1 }
+        expect(finishCliTestOnFailure(cliTestAttemptKey('Suite - times out on last attempt', 1), failed)).toBe(true)
+        await service.after(1)
+
+        expect(events.some((e) => e.includes('skipped dropped by bail'))).toBe(true)
     })
 })
