@@ -114,4 +114,15 @@ describe('SDK-7843 — a mocha test finish is reported exactly once, by whicheve
         expect(finisher).not.toHaveBeenCalled()
         expect(claimCliTestFinish('Suite - still running')).toBe(true)
     })
+
+    it('a late afterTest of an attempt mocha already failed reports the failure instead (no reporter)', async () => {
+        const finisher = vi.fn().mockResolvedValue(undefined)
+        registerCliTestFinisher('Suite - times out', finisher, { state: 'failed', timedOut: true, duration: 10002, timeout: () => 10000 })
+
+        expect(claimCliTestFinish('Suite - times out')).toBe(false)
+        await awaitCliTestFinishesOnFailure()
+
+        expect(finisher).toHaveBeenCalledOnce()
+        expect((finisher.mock.calls[0][0] as Frameworks.TestResult).passed).toBe(false)
+    })
 })

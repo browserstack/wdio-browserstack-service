@@ -139,4 +139,22 @@ describe('service — a timed-out mocha test is finished when mocha fails it (SD
             `${TestFrameworkState.TEST}/${HookState.POST} passed=false flaky #1`
         ])
     })
+
+    it('without a reporter, a timed-out test whose body finishes late is still reported failed', async () => {
+        const service = makeService()
+        const runnable = { state: undefined as string | undefined, timedOut: false, timeout: () => 10000, duration: 0 }
+        const test = { title: 'times out then succeeds', parent: 'Suite', ctx: { test: runnable } } as unknown as Frameworks.Test
+        await service.beforeTest(test)
+        events.length = 0
+
+        // mocha times it out (no reporter hears it); the body then succeeds, so wdio's late
+        // afterTest says passed — before after() runs
+        Object.assign(runnable, { state: 'failed', timedOut: true, duration: 10001 })
+        await service.afterTest(test, undefined as never, { passed: true } as Frameworks.TestResult)
+        await service.after(1)
+
+        expect(events.filter((e) => e.startsWith(`${TestFrameworkState.TEST}/${HookState.POST}`))).toEqual([
+            `${TestFrameworkState.TEST}/${HookState.POST} passed=false times out then succeeds #0`
+        ])
+    })
 })
