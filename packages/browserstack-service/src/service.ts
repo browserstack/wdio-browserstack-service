@@ -17,6 +17,7 @@ import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from 
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
 import InsightsHandler from './insights-handler.js'
 import TestReporter from './reporter.js'
+import { awaitCliTestFinishesOnFailure, claimCliTestFinish, registerCliTestFinisher } from './cli/earlyTestFinish.js'
 import { DEFAULT_OPTIONS, NOT_ALLOWED_KEYS_IN_CAPS, PERF_MEASUREMENT_ENV } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import AccessibilityHandler from './accessibility-handler.js'
@@ -625,6 +626,12 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // this test reports its own finish (incl. runtime `this.skip()`), so the
             // skip reporter must never re-report it from onTestSkip
             markTestStarted(getUniqueIdentifier(test, this._config.framework))
+            // SDK-7843: this test's finish is owed from here on. Normally afterTest reports it; if
+            // the test times out, mocha reports the failure to the reporter first and the reporter
+            // reports it (see cli/earlyTestFinish.ts).
+            if (this._config.framework === 'mocha') {
+                registerCliTestFinisher(getUniqueIdentifier(test, this._config.framework), (result) => this.finishCliTest(test, result))
+            }
             this._insightsHandler?.setTestData(test, uuid)
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
             return
@@ -653,33 +660,48 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         if (BrowserstackCLI.getInstance().isRunning()) {
-            // the CLI test-finish reads test_uuid from the single mutable per-worker
-            // tracked instance, which a later INIT_TEST may have overwritten with the NEXT test's
-            // uuid. `test` is `originalTest` — already the correct (timed-out) identity, snapshotted
-            // pre-await by the testFnWrapper — so restore THAT test's minted uuid onto the tracked
-            // instance so the POST carries it and the binary closes the correct test_run. Without
-            // this, the finish would carry the next test's uuid and orphan the finishing one.
-            if (this._config.framework === 'mocha') {
-                const identifier = getUniqueIdentifier(test, this._config.framework)
-                const resolvedUuid = this._cliTestUuids.get(identifier)
-                if (resolvedUuid) {
-                    const trackedInstance = TestFramework.getTrackedInstance()
-                    if (trackedInstance) {
-                        TestFramework.setState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID, resolvedUuid)
-                    }
-                    // Clean up so the per-worker map does not grow across the run.
-                    this._cliTestUuids.delete(identifier)
-                }
+            if (this._config.framework === 'mocha' && !claimCliTestFinish(getUniqueIdentifier(test, this._config.framework))) {
+                // SDK-7843: the test timed out, and the reporter already reported its failure when
+                // mocha did; reporting it again here would arrive after after() anyway.
+                BStackLogger.debug(`afterTest: '${getUniqueIdentifier(test, this._config.framework)}' was already reported when mocha failed it`)
+                return
             }
-            await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result: results })
-            await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result: results, suiteTitle: this._suiteTitle })
-            await this.reportBailSkippedTests(test, results)
+            await this.finishCliTest(test, results)
             return
         }
 
         await this._accessibilityHandler?.afterTest(this._suiteTitle, test)
         await this._insightsHandler?.afterTest(test, results)
         await this._percyHandler?.afterTest()
+    }
+
+    /**
+     * Report a mocha test's finish on the CLI flow: its result, its TEST/POST, and the bail cascade.
+     * Called exactly once per test, from afterTest or (when the test timed out) from the reporter
+     * when mocha failed it (SDK-7843).
+     */
+    private async finishCliTest(test: Frameworks.Test, results: Frameworks.TestResult) {
+        // the CLI test-finish reads test_uuid from the single mutable per-worker
+        // tracked instance, which a later INIT_TEST may have overwritten with the NEXT test's
+        // uuid. `test` is `originalTest` — already the correct (timed-out) identity, snapshotted
+        // pre-await by the testFnWrapper — so restore THAT test's minted uuid onto the tracked
+        // instance so the POST carries it and the binary closes the correct test_run. Without
+        // this, the finish would carry the next test's uuid and orphan the finishing one.
+        if (this._config.framework === 'mocha') {
+            const identifier = getUniqueIdentifier(test, this._config.framework)
+            const resolvedUuid = this._cliTestUuids.get(identifier)
+            if (resolvedUuid) {
+                const trackedInstance = TestFramework.getTrackedInstance()
+                if (trackedInstance) {
+                    TestFramework.setState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID, resolvedUuid)
+                }
+                // Clean up so the per-worker map does not grow across the run.
+                this._cliTestUuids.delete(identifier)
+            }
+        }
+        await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result: results })
+        await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result: results, suiteTitle: this._suiteTitle })
+        await this.reportBailSkippedTests(test, results)
     }
 
     /**
@@ -763,6 +785,15 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     await drainSkipReports()
                 } catch (skipDrainErr) {
                     BStackLogger.debug(`Exception draining skip reports in after(): ${util.format(skipDrainErr)}`)
+                }
+                // SDK-7843: a test that timed out was reported by the reporter when mocha failed it,
+                // which can still be in flight. Wait for it before the flush below (its TEST/POST is
+                // deferred into that stash) and before EXECUTE/POST, which marks the session status
+                // from the results recorded so far.
+                try {
+                    await awaitCliTestFinishesOnFailure()
+                } catch (finishErr) {
+                    BStackLogger.debug(`Exception awaiting failed-test finishes in after(): ${util.format(finishErr)}`)
                 }
                 // Flush a test-finish event deferred past the after-each hook window — the last
                 // test of the worker has no next-test boundary to trigger the flush. Must run

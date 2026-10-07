@@ -5,6 +5,7 @@ import WDIOReporter from '@wdio/reporter'
 import type { Options, Frameworks } from '@wdio/types'
 import { BrowserstackCLI } from './cli/index.js'
 import { reportSkippedTest, resolveSpecFile } from './cli/skipReporter.js'
+import { finishCliTestOnFailure } from './cli/earlyTestFinish.js'
 import * as url from 'node:url'
 
 import { v4 as uuidv4 } from 'uuid'
@@ -147,6 +148,28 @@ class _TestReporter extends WDIOReporter {
         default:
             return false
         }
+    }
+
+    /**
+     * SDK-7843: mocha emits `fail` for a timed-out test while its body and wdio's `afterTest` are
+     * still pending, and with `bail` (or on the worker's last test) `after()` runs before that
+     * `afterTest`. On the CLI flow, report the failure now, from mocha's own result, so `after()`
+     * marks the session and closes the test with it. A normal failure is already reported by
+     * `afterTest` before mocha's `fail`, so this is a no-op for it.
+     */
+    onTestFail(testStats: TestStats) {
+        if (this._config?.framework !== 'mocha' || !BrowserstackCLI.getInstance().isRunning()) {
+            return
+        }
+        const attempts = testStats.retries ?? 0
+        finishCliTestOnFailure(`${testStats.parent} - ${testStats.title}`, {
+            passed: false,
+            error: testStats.error,
+            duration: testStats._duration,
+            retries: { attempts, limit: attempts },
+            exception: testStats.error?.message ?? '',
+            status: 'failed'
+        })
     }
 
     async onTestEnd(testStats: TestStats) {
