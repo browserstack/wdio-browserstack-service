@@ -1148,10 +1148,16 @@ export function getLtsSessionId(): string {
  * BrowserStack so session marking and Automate <-> TRA linking work there. A dotted value (full
  * host) or an unset/blank variable leaves the production-only host checks unchanged. The env value is
  * trimmed and the hostname compared case-insensitively (shared rule across SDKs).
+ * `BROWSERSTACK_ENV` (trimmed, lowercased) of staging/stag/preprod/pre-prod also selects the bsstag
+ * hosts, matching node-agent constants and the binary's getEnvironmentUrl.
  */
+const BSTAG_BROWSERSTACK_ENVS = ['staging', 'stag', 'preprod', 'pre-prod']
+
 export function isStagingEnvBsstagHost(hostname: string): boolean {
     const stagingEnv = process.env.BROWSERSTACK_STAGING_ENV?.trim()
-    if (!stagingEnv || stagingEnv.includes('.')) {
+    const namedStagingEnv = Boolean(stagingEnv) && !stagingEnv!.includes('.')
+    const browserstackEnv = process.env.BROWSERSTACK_ENV?.trim().toLowerCase() || ''
+    if (!namedStagingEnv && !BSTAG_BROWSERSTACK_ENVS.includes(browserstackEnv)) {
         return false
     }
     const host = hostname.toLowerCase()

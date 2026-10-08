@@ -568,6 +568,11 @@ describe('getCloudProvider', () => {
 
 describe('SDK-6948 BROWSERSTACK_STAGING_ENV bsstag host recognition', () => {
     const originalStagingEnv = process.env.BROWSERSTACK_STAGING_ENV
+    const originalBrowserstackEnv = process.env.BROWSERSTACK_ENV
+
+    beforeEach(() => {
+        delete process.env.BROWSERSTACK_ENV
+    })
     const stagingConfig = { user: 'foo', key: 'a'.repeat(20), hostname: 'hub-k8s.bsstag.com' } as any
 
     afterEach(() => {
@@ -575,6 +580,11 @@ describe('SDK-6948 BROWSERSTACK_STAGING_ENV bsstag host recognition', () => {
             delete process.env.BROWSERSTACK_STAGING_ENV
         } else {
             process.env.BROWSERSTACK_STAGING_ENV = originalStagingEnv
+        }
+        if (originalBrowserstackEnv === undefined) {
+            delete process.env.BROWSERSTACK_ENV
+        } else {
+            process.env.BROWSERSTACK_ENV = originalBrowserstackEnv
         }
     })
 
@@ -618,6 +628,28 @@ describe('SDK-6948 BROWSERSTACK_STAGING_ENV bsstag host recognition', () => {
         process.env.BROWSERSTACK_STAGING_ENV = ' k8s '
         expect(utils.isStagingEnvBsstagHost('HUB-K8S.BSSTAG.COM')).toBe(true)
         expect(getCloudProvider({ options: { hostname: 'Hub-K8s.BsStag.com' } } as any)).toEqual('browserstack')
+    })
+
+    it.each(['staging', 'stag', 'preprod', 'pre-prod', ' PreProd '])('treats bsstag hosts as browserstack for BROWSERSTACK_ENV=%j', (env) => {
+        delete process.env.BROWSERSTACK_STAGING_ENV
+        process.env.BROWSERSTACK_ENV = env
+        expect(utils.isStagingEnvBsstagHost('hub-preprod.bsstag.com')).toBe(true)
+        expect(getCloudProvider({ options: { hostname: 'hub-preprod.bsstag.com' } } as any)).toEqual('browserstack')
+        expect(utils.isBrowserstackInfra({ ...stagingConfig, hostname: 'hub-preprod.bsstag.com' })).toBe(true)
+    })
+
+    it.each(['production', 'prod', ''])('keeps prod behaviour for BROWSERSTACK_ENV=%j', (env) => {
+        delete process.env.BROWSERSTACK_STAGING_ENV
+        process.env.BROWSERSTACK_ENV = env
+        expect(utils.isStagingEnvBsstagHost('hub-preprod.bsstag.com')).toBe(false)
+        expect(getCloudProvider({ options: { hostname: 'hub-preprod.bsstag.com' } } as any)).toEqual('unknown_grid')
+    })
+
+    it('rejects look-alike hosts for BROWSERSTACK_ENV=staging', () => {
+        delete process.env.BROWSERSTACK_STAGING_ENV
+        process.env.BROWSERSTACK_ENV = 'staging'
+        expect(utils.isStagingEnvBsstagHost('evilbsstag.com')).toBe(false)
+        expect(utils.isStagingEnvBsstagHost('hub.bsstag.com.attacker.io')).toBe(false)
     })
 
     it('treats a blank BROWSERSTACK_STAGING_ENV as unset', () => {
