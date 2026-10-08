@@ -15,6 +15,7 @@ import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
 import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
 import { AutomationFrameworkState } from '../src/cli/states/automationFrameworkState.js'
+import APIUtils from '../src/cli/apiUtils.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
@@ -457,6 +458,19 @@ describe('_printSessionURL', () => {
         expect(isBrowserstackSessionSpy).toHaveBeenCalled()
     })
 
+    it('logs at debug instead of throwing when the session REST reply has no automation_session (SDK-6948)', async () => {
+        browser.isMultiremote = false
+        service['_browser'] = browser
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
+        const debugSpy = vi.spyOn(bstackLogger.BStackLogger, 'debug')
+        vi.mocked(fetch).mockReturnValueOnce(Promise.resolve(Response.json({ message: 'Unauthorized' }, { status: 401 })))
+
+        await expect(service._printSessionURL()).resolves.toBeUndefined()
+        expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Could not fetch Browserstack session URL (401)'))
+        expect(logInfoSpy).not.toHaveBeenCalledWith(expect.stringContaining('session: '))
+    })
+
     describe('if cant print', () => {
         describe('no browser object', () => {
             const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
@@ -720,6 +734,58 @@ describe('before', () => {
 
         expect(service['_failReasons']).toEqual([])
         expect(service['_sessionBaseUrl']).toEqual('https://api.browserstack.com/automate-turboscale/v1/sessions')
+    })
+
+    it('uses the GRR/staging api host applied by the CLI for the session base url (SDK-6948)', () => {
+        const original = APIUtils.BROWSERSTACK_AUTOMATE_API_URL
+        APIUtils.BROWSERSTACK_AUTOMATE_API_URL = 'https://apik8s.bsstag.com'
+        try {
+            const service = new BrowserstackService({} as any, [{}] as any, {
+                user: 'foo',
+                key: 'bar',
+                capabilities: {}
+            })
+            service.before(service['_config'] as any, [], browser)
+
+            expect(service['_sessionBaseUrl']).toEqual('https://apik8s.bsstag.com/automate/sessions')
+        } finally {
+            APIUtils.BROWSERSTACK_AUTOMATE_API_URL = original
+        }
+    })
+
+    it('uses the GRR app-automate host for the App Automate session base url (SDK-6948)', () => {
+        const original = APIUtils.BROWSERSTACK_AA_API_CLOUD_URL
+        APIUtils.BROWSERSTACK_AA_API_CLOUD_URL = 'https://api-cloud-k8s.bsstag.com'
+        try {
+            const service = new BrowserstackService({} as any, [{}] as any, {
+                user: 'foo',
+                key: 'bar',
+                capabilities: {}
+            })
+            vi.spyOn(service as any, '_isAppAutomate').mockReturnValue(true)
+            service.before(service['_config'] as any, [], browser)
+
+            expect(service['_sessionBaseUrl']).toEqual('https://api-cloud-k8s.bsstag.com/app-automate/sessions')
+        } finally {
+            APIUtils.BROWSERSTACK_AA_API_CLOUD_URL = original
+        }
+    })
+
+    it('uses the GRR automate host for the TurboScale session base url (SDK-6948)', () => {
+        const original = APIUtils.BROWSERSTACK_AUTOMATE_API_URL
+        APIUtils.BROWSERSTACK_AUTOMATE_API_URL = 'https://api-eu.browserstack.com'
+        try {
+            const service = new BrowserstackService({ turboScale: true } as any, {}, {
+                user: 'foo',
+                key: 'bar',
+                capabilities: {}
+            })
+            service.before(service['_config'] as any, [], browser)
+
+            expect(service['_sessionBaseUrl']).toEqual('https://api-eu.browserstack.com/automate-turboscale/v1/sessions')
+        } finally {
+            APIUtils.BROWSERSTACK_AUTOMATE_API_URL = original
+        }
     })
 
     it('should overwrite execute command to route browserstack_executor via executeScript', async () => {
