@@ -38,6 +38,8 @@ export default class WdioMochaTestFramework extends TestFramework {
     // WebDriver command logs follow the hook or test that started last, even after it finished, as legacy's
     // current test did: a hook names its hook run, a test (null) the test.
     private commandLogHook: Record<string, unknown> | null = null
+    // The last test that ran: a skip report moves the tracked instance to the skipped test, never this.
+    private commandLogTest: TestFrameworkInstance | null = null
     // Legacy's beforeTest ran its own work (annotation, accessibility) before it registered the test, so
     // commands from a test's start-up dropped; the observers of TEST/PRE are that start-up here.
     private holdCommandLogs = false
@@ -70,7 +72,7 @@ export default class WdioMochaTestFramework extends TestFramework {
             return
         }
 
-        const instance = this.resolveInstance(testFrameworkState, hookState, args)
+        const instance = this.commandLogTestInstance(testFrameworkState, hookState, args) ?? this.resolveInstance(testFrameworkState, hookState, args)
         if (instance === null) {
             logger.error(`trackEvent: instance not found for testFrameworkState=${testFrameworkState} hookState=${hookState}`)
             return
@@ -125,6 +127,7 @@ export default class WdioMochaTestFramework extends TestFramework {
                 }
             } else if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.PRE && args.skipReport !== true) {
                 this.commandLogHook = null
+                this.commandLogTest = instance
                 this.holdCommandLogs = true
             }
             logger.debug(`trackEvent: tracked instance data=${JSON.stringify(Object.fromEntries(instance.getAllData()))}`)
@@ -331,6 +334,15 @@ export default class WdioMochaTestFramework extends TestFramework {
         instance.updateMultipleEntries({
             [TestFrameworkConstants.KEY_TEST_LOGS]: entries,
         })
+    }
+
+    /** A command log outside any hook goes to the last test that ran, in LOG state, as console logs do. */
+    private commandLogTestInstance(testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
+        if (testFrameworkState !== TestFrameworkState.LOG || args.commandLog !== true || this.commandLogHook || !this.commandLogTest) {
+            return null
+        }
+        this.updateInstanceState(this.commandLogTest, testFrameworkState, hookState)
+        return this.commandLogTest
     }
 
     /** The hook started last and not yet finished: a hook's POST pops it from the started list. */

@@ -74,7 +74,10 @@ describe('mocha WebDriver command logs follow the hook or test that started last
     const consoleLog = { kind: TestFrameworkConstants.KIND_LOG, message: 'hello', level: 'info', timestamp: 't' }
     let state: Record<string, unknown>
     let framework: WdioMochaTestFramework
-    const instance = { getCurrentTestState: () => TestFrameworkState.LOG, updateMultipleEntries: vi.fn(), getAllData: () => new Map() } as any
+    const instance = {
+        getCurrentTestState: () => TestFrameworkState.LOG, getCurrentHookState: () => HookState.POST, updateMultipleEntries: vi.fn(), getAllData: () => new Map(),
+        setLastTestState: vi.fn(), setLastHookState: vi.fn(), setCurrentTestState: vi.fn(), setCurrentHookState: vi.fn(),
+    } as any
 
     const startHook = (key: string, hookId: string) => {
         const started = state[TestFrameworkConstants.KEY_HOOKS_STARTED] as Map<string, unknown[]>
@@ -143,6 +146,19 @@ describe('mocha WebDriver command logs follow the hook or test that started last
         await event(TestFrameworkState.TEST, HookState.PRE, { test: { title: 't' } })
         await event(TestFrameworkState.LOG, HookState.POST, { logEntry: { ...http }, commandLog: true })
         expect(loadLogEntries.mock.calls.map(([, , , logEntry, commandLog]) => [logEntry.kind, commandLog])).toEqual([['TEST_LOG', false], ['HTTP', true]])
+    })
+
+    it('keeps a command log outside any hook on the last test that ran, never a skip report\'s test', async () => {
+        const ran = { ...instance, setCurrentTestState: vi.fn() }
+        const skipped = { ...instance }
+        vi.mocked(framework.resolveInstance).mockReturnValueOnce(ran).mockReturnValue(skipped)
+        await event(TestFrameworkState.TEST, HookState.PRE, { test: { title: 'ran' } })
+        await event(TestFrameworkState.INIT_TEST, HookState.PRE, { test: { title: 'skipped' } })
+        await event(TestFrameworkState.TEST, HookState.PRE, { test: { title: 'skipped' }, skipReport: true })
+        const loadLogEntries = vi.spyOn(framework, 'loadLogEntries')
+        await event(TestFrameworkState.LOG, HookState.POST, { logEntry: { ...http }, commandLog: true })
+        expect(loadLogEntries.mock.calls[0][0]).toBe(ran)
+        expect(ran.setCurrentTestState).toHaveBeenCalledWith(TestFrameworkState.LOG)
     })
 
     it('leaves a console log in a hook exactly as before', async () => {
