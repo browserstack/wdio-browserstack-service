@@ -64,6 +64,10 @@ describe.each([
 describe('cucumber WebDriver command logs', () => {
     const commandLog = { logEntry: { kind: 'TEST_SCREENSHOT', message: 'b64', timestamp: 't' }, commandLog: true }
 
+    it('reports HTTP command logs', () => {
+        expect(new WdioCucumberTestFramework(['WebdriverIO-cucumber'], { 'WebdriverIO-cucumber': '9.0.0' }, 'bin-1').capturesHttpCommandLogs()).toBe(true)
+    })
+
     it('drops command logs until a scenario has started, then attributes them as before', async () => {
         const framework = new WdioCucumberTestFramework(['WebdriverIO-cucumber'], { 'WebdriverIO-cucumber': '9.0.0' }, 'bin-1')
         const resolveInstance = vi.spyOn(framework as never, 'resolveInstance').mockReturnValue(null as never)

@@ -35,6 +35,10 @@ export default class WdioMochaTestFramework extends TestFramework {
     static KEY_HOOK_LAST_STARTED = 'test_hook_last_started'
     static KEY_HOOK_LAST_FINISHED = 'test_hook_last_finished'
 
+    // WebDriver command logs follow the hook or test that started last, even after it finished, as legacy's
+    // current test did: a hook names its hook run, a test (null) the test.
+    private commandLogHook: Record<string, unknown> | null = null
+
     /**
    * Constructor for the TestFramework
    * @param {Array} testFrameworks - List of Test frameworks
@@ -43,6 +47,10 @@ export default class WdioMochaTestFramework extends TestFramework {
   */
     constructor(testFrameworks: string[], testFrameworkVersions: Record<string, string>, binSessionId: string) {
         super(testFrameworks, testFrameworkVersions, binSessionId)
+    }
+
+    capturesHttpCommandLogs() {
+        return true
     }
 
     /**
@@ -105,6 +113,11 @@ export default class WdioMochaTestFramework extends TestFramework {
             // test_hooks_started forever (never popped).
             if (CLIUtils.matchHookRegex(testFrameworkState.toString().split('.')[1])) {
                 await this.trackHookEvents(instance, testFrameworkState, hookState, args)
+                if (hookState === HookState.PRE) {
+                    this.commandLogHook = WdioMochaTestFramework.openHook(instance) ?? null
+                }
+            } else if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.PRE && args.skipReport !== true) {
+                this.commandLogHook = null
             }
             logger.debug(`trackEvent: tracked instance data=${JSON.stringify(Object.fromEntries(instance.getAllData()))}`)
         } catch (error) {
@@ -280,12 +293,12 @@ export default class WdioMochaTestFramework extends TestFramework {
         logRecord.level = level
         logRecord.timestamp = timestamp
 
-        // The instance is already in LOG here, so a WebDriver command log names the open hook itself: the
-        // binary keys an entry to a hook run only by a hook state.
-        const openHook = commandLog ? WdioMochaTestFramework.openHook(instance) : undefined
-        if (openHook) {
-            logRecord[TestFrameworkConstants.KEY_HOOK_ID] = openHook[TestFrameworkConstants.KEY_HOOK_ID]
-            logRecord.testFrameworkState = openHook.key
+        // The instance is already in LOG here, so a WebDriver command log names its hook itself: the binary
+        // keys an entry to a hook run only by a hook state.
+        const commandLogHook = commandLog ? this.commandLogHook : null
+        if (commandLogHook) {
+            logRecord[TestFrameworkConstants.KEY_HOOK_ID] = commandLogHook[TestFrameworkConstants.KEY_HOOK_ID]
+            logRecord.testFrameworkState = commandLogHook.key
         }
 
         // Attach to the suitable hook

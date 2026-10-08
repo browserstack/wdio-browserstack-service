@@ -68,47 +68,72 @@ describe('SDK-4177 — loadLogEntries must not relabel a log that carries its ow
     })
 })
 
-describe('loadLogEntries — WebDriver command logs name the open hook', () => {
+describe('mocha WebDriver command logs follow the hook or test that started last', () => {
     const screenshot = { kind: TestFrameworkConstants.KIND_SCREENSHOT, message: 'b64', timestamp: 't' }
+    const http = { kind: 'HTTP', message: '{}', timestamp: 't' }
     const consoleLog = { kind: TestFrameworkConstants.KIND_LOG, message: 'hello', level: 'info', timestamp: 't' }
     let state: Record<string, unknown>
-    const instance = { getCurrentTestState: () => TestFrameworkState.LOG, updateMultipleEntries: vi.fn() } as any
+    let framework: WdioMochaTestFramework
+    const instance = { getCurrentTestState: () => TestFrameworkState.LOG, updateMultipleEntries: vi.fn(), getAllData: () => new Map() } as any
 
-    // The instance's real shapes: hooks started is a Map of key -> started-and-not-finished hooks
     const startHook = (key: string, hookId: string) => {
         const started = state[TestFrameworkConstants.KEY_HOOKS_STARTED] as Map<string, unknown[]>
         started.set(key, [...(started.get(key) ?? []), { key, [TestFrameworkConstants.KEY_HOOK_ID]: hookId, [TestFrameworkConstants.KEY_HOOK_LOGS]: [] }])
         state[WdioMochaTestFramework.KEY_HOOK_LAST_STARTED] = key
     }
     const finishHook = (key: string) => (state[TestFrameworkConstants.KEY_HOOKS_STARTED] as Map<string, unknown[]>).get(key)!.pop()
+    const event = (testFrameworkState: State, hookState: State, args: Record<string, unknown> = {}) => framework.trackEvent(testFrameworkState, hookState, args)
     const load = (logEntry: Record<string, unknown>, commandLog: boolean) =>
-        WdioMochaTestFramework.prototype.loadLogEntries.call(WdioMochaTestFramework.prototype, instance, TestFrameworkState.LOG, HookState.POST, { ...logEntry }, commandLog)
+        framework.loadLogEntries(instance, TestFrameworkState.LOG, HookState.POST, { ...logEntry }, commandLog)
     const testLogs = () => state[TestFrameworkConstants.KEY_TEST_LOGS] as Record<string, unknown>[]
 
     beforeEach(() => {
-        state = { [TestFrameworkConstants.KEY_HOOKS_STARTED]: new Map(), [TestFrameworkConstants.KEY_TEST_LOGS]: [] }
+        state = { [TestFrameworkConstants.KEY_HOOKS_STARTED]: new Map(), [TestFrameworkConstants.KEY_HOOKS_FINISHED]: new Map(), [TestFrameworkConstants.KEY_TEST_LOGS]: [] }
         vi.spyOn(TestFramework, 'getState').mockImplementation((_i, key) => state[key as string])
+        framework = new WdioMochaTestFramework(['WebdriverIO-mocha'], { 'WebdriverIO-mocha': '9.0.0' }, 'bin')
+        vi.spyOn(framework, 'resolveInstance').mockReturnValue(instance)
+        vi.spyOn(framework, 'runHooks').mockResolvedValue(undefined)
+        vi.spyOn(framework, 'trackHookEvents').mockImplementation(async (_i, testFrameworkState, hookState) => {
+            const key = testFrameworkState.toString().split('.')[1]
+            if (hookState === HookState.PRE) {
+                startHook(key, `${key}-uuid`)
+            } else {
+                finishHook(key)
+            }
+        })
+        vi.spyOn(framework as never, 'getTestData').mockResolvedValue({} as never)
     })
 
     afterEach(() => {
         vi.restoreAllMocks()
     })
 
-    it('stamps the open hook\'s id and state on a command log', () => {
-        startHook('BEFORE_EACH', 'hook-uuid')
-        load(screenshot, true)
-        expect(testLogs()[0]).toMatchObject({ kind: 'TEST_SCREENSHOT', [TestFrameworkConstants.KEY_HOOK_ID]: 'hook-uuid', testFrameworkState: 'BEFORE_EACH' })
+    it('reports HTTP command logs', () => {
+        expect(framework.capturesHttpCommandLogs()).toBe(true)
     })
 
-    it('leaves a command log on the test once the hook has finished, and in the test body', () => {
-        startHook('BEFORE_EACH', 'hook-uuid')
-        finishHook('BEFORE_EACH')
+    it('stamps a command log in a hook with that hook\'s id and state, even after the hook finished', async () => {
+        await event(TestFrameworkState.AFTER_ALL, HookState.PRE, { test: {} })
+        load(http, true)
+        await event(TestFrameworkState.AFTER_ALL, HookState.POST, { test: {} })
+        load(http, true)
+        expect(testLogs().map(l => [l[TestFrameworkConstants.KEY_HOOK_ID], l.testFrameworkState])).toEqual([['AFTER_ALL-uuid', 'AFTER_ALL'], ['AFTER_ALL-uuid', 'AFTER_ALL']])
+    })
+
+    it('leaves a command log on the test once a test has started, and a skip report never takes it', async () => {
+        await event(TestFrameworkState.BEFORE_EACH, HookState.PRE, { test: {} })
+        await event(TestFrameworkState.BEFORE_EACH, HookState.POST, { test: {} })
+        await event(TestFrameworkState.TEST, HookState.PRE, { test: { title: 't' } })
+        load(screenshot, true)
+        await event(TestFrameworkState.AFTER_EACH, HookState.PRE, { test: {} })
+        await event(TestFrameworkState.TEST, HookState.PRE, { test: { title: 'skipped' }, skipReport: true })
         load(screenshot, true)
         expect(testLogs()[0]).toEqual({ kind: 'TEST_SCREENSHOT', message: Buffer.from('b64'), level: undefined, timestamp: 't' })
+        expect(testLogs()[1]).toMatchObject({ [TestFrameworkConstants.KEY_HOOK_ID]: 'AFTER_EACH-uuid', testFrameworkState: 'AFTER_EACH' })
     })
 
-    it('leaves a console log in an open hook exactly as before', () => {
-        startHook('BEFORE_EACH', 'hook-uuid')
+    it('leaves a console log in a hook exactly as before', async () => {
+        await event(TestFrameworkState.BEFORE_EACH, HookState.PRE, { test: {} })
         load(consoleLog, false)
         expect(testLogs()[0]).toEqual({ kind: 'TEST_LOG', message: Buffer.from('hello'), level: 'info', timestamp: 't' })
     })

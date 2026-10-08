@@ -760,6 +760,19 @@ describe('TestHubModule — WebDriver command logs', () => {
         expect(framework.trackEvent).not.toHaveBeenCalled()
     })
 
+    it('sends no HTTP log when LogCreated events are off for the run (accessibility only), as legacy\'s listener did', async () => {
+        delete process.env.BROWSERSTACK_OBSERVABILITY
+        process.env.BROWSERSTACK_ACCESSIBILITY = 'true'
+        try {
+            register(true)
+            await run(title, { value: 'StackDemo' })
+            await run(screenshot, { value: 'b64' })
+            expect(logEntries().map(e => e.kind)).toEqual(['TEST_SCREENSHOT'])
+        } finally {
+            delete process.env.BROWSERSTACK_ACCESSIBILITY
+        }
+    })
+
     it('never throws out of a listener when the framework fails', async () => {
         register(true)
         framework.trackEvent.mockRejectedValue(new Error('track blew up'))

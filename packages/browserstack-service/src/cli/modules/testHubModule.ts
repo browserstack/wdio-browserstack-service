@@ -146,7 +146,7 @@ export default class TestHubModule extends BaseModule {
                     commandLog: true,
                 })
             }
-            if (!testFramework.capturesHttpCommandLogs() || !this.seenCommands.has(this.commandKey(browser, result))) {
+            if (!testFramework.capturesHttpCommandLogs() || !shouldProcessEventForTesthub('LogCreated') || !this.seenCommands.has(this.commandKey(browser, result))) {
                 return
             }
             const httpResponse = { path: result.endpoint, method: result.method, body: result.body, response: result.result }
