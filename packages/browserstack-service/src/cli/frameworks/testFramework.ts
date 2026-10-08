@@ -73,11 +73,6 @@ export default class TestFramework {
         return this.testFrameworks
     }
 
-    /** Whether WebDriver HTTP command logs are reported for this framework; screenshots always are. */
-    capturesHttpCommandLogs() {
-        return false
-    }
-
     /**
    * Track an event
    * @param {TestFrameworkState} testFrameworkState

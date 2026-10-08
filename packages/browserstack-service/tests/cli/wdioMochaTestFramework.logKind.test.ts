@@ -111,10 +111,6 @@ describe('mocha WebDriver command logs follow the hook or test that started last
         vi.restoreAllMocks()
     })
 
-    it('reports HTTP command logs', () => {
-        expect(framework.capturesHttpCommandLogs()).toBe(true)
-    })
-
     it('stamps a command log in a hook with that hook\'s id and state, even after the hook finished', async () => {
         await event(TestFrameworkState.AFTER_ALL, HookState.PRE, { test: {} })
         load(http, true)

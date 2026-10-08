@@ -111,10 +111,6 @@ export default class WdioJasmineTestFramework extends TestFramework {
         return WdioJasmineTestFramework.#hookState(getHookType(String(hookTitle ?? '').toLowerCase())) ?? TestFrameworkState.NONE
     }
 
-    capturesHttpCommandLogs() {
-        return true
-    }
-
     setTestHubModule(testHub: TestHubModule | null | undefined) {
         this.#testHub = testHub ?? null
     }

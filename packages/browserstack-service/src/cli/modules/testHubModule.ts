@@ -104,7 +104,7 @@ export default class TestHubModule extends BaseModule {
     }
 
     /**
-     * WebDriver command logs: screenshots for every framework, HTTP command logs for frameworks that opt in.
+     * WebDriver command logs: screenshots and HTTP command logs.
      * The framework attributes each entry; `commandLog: true` tells it the entry came from here.
      */
     onDriverCreated(args: Record<string, unknown>) {
@@ -114,13 +114,11 @@ export default class TestHubModule extends BaseModule {
                 return
             }
             this.commandLogBrowsers.add(browser)
-            if (this.testFramework?.capturesHttpCommandLogs()) {
-                browser.on('command', (command: WebDriverCommand) => {
-                    if (shouldProcessEventForTesthub('')) {
-                        this.seenCommands.add(this.commandKey(browser, command))
-                    }
-                })
-            }
+            browser.on('command', (command: WebDriverCommand) => {
+                if (shouldProcessEventForTesthub('')) {
+                    this.seenCommands.add(this.commandKey(browser, command))
+                }
+            })
             browser.on('result', (result: WebDriverCommand) => {
                 if (shouldProcessEventForTesthub('')) {
                     void this.onCommandResult(browser, result)
@@ -146,7 +144,7 @@ export default class TestHubModule extends BaseModule {
                     commandLog: true,
                 })
             }
-            if (!testFramework.capturesHttpCommandLogs() || !shouldProcessEventForTesthub('LogCreated') || !this.seenCommands.has(this.commandKey(browser, result))) {
+            if (!shouldProcessEventForTesthub('LogCreated') || !this.seenCommands.has(this.commandKey(browser, result))) {
                 return
             }
             const httpResponse = { path: result.endpoint, method: result.method, body: result.body, response: result.result }

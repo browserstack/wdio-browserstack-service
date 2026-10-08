@@ -124,10 +124,6 @@ export default class WdioCucumberTestFramework extends TestFramework {
         logger.debug('WdioCucumberTestFramework: constructed')
     }
 
-    capturesHttpCommandLogs() {
-        return true
-    }
-
     /**
      * Feature bookkeeping. Raises no framework state — cucumber has no feature-level wire event,
      * and `beforeSuite`/`afterSuite` are not part of its WDIO surface.

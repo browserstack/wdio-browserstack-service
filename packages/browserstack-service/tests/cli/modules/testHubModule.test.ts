@@ -647,15 +647,15 @@ describe('TestHubModule — WebDriver command logs', () => {
     const screenshot = { method: 'GET', endpoint: '/session/:sessionId/screenshot', body: {} }
     let module: TestHubModule
     let browser: EventEmitter & { sessionId: string }
-    let framework: { trackEvent: Mock, capturesHttpCommandLogs: Mock }
+    let framework: { trackEvent: Mock }
     const logEntries = () => framework.trackEvent.mock.calls.map(([state, hook, args]) => {
         expect([state, hook]).toEqual([TestFrameworkState.LOG, HookState.POST])
         expect(args.commandLog).toBe(true)
         return args.logEntry
     })
 
-    const register = (httpLogs: boolean) => {
-        framework = { trackEvent: vi.fn().mockResolvedValue(undefined), capturesHttpCommandLogs: vi.fn().mockReturnValue(httpLogs) }
+    const register = () => {
+        framework = { trackEvent: vi.fn().mockResolvedValue(undefined) }
         module.setTestFramework(framework as unknown as TestFramework)
         module.onDriverCreated({ browser })
     }
@@ -682,26 +682,14 @@ describe('TestHubModule — WebDriver command logs', () => {
         expect(AutomationFramework.registerObserver).toHaveBeenCalledWith(expect.anything(), HookState.POST, expect.any(Function))
     })
 
-    it('sends a paired HTTP log when the framework opts in, in the legacy message shape', async () => {
-        register(true)
+    it('sends a paired HTTP log in the legacy message shape', async () => {
+        register()
         await run(title, { value: 'StackDemo' })
         expect(logEntries()).toEqual([{ kind: 'HTTP', message: JSON.stringify({ path: title.endpoint, method: 'GET', body: {}, response: { value: 'StackDemo' } }), timestamp: expect.any(String) }])
     })
 
-    it('sends no HTTP log, and listens for no command, when the framework does not opt in', async () => {
-        register(false)
-        await run(title, { value: 'StackDemo' })
-        expect(browser.listenerCount('command')).toBe(0)
-        expect(framework.trackEvent).not.toHaveBeenCalled()
-    })
-
-    it('sends a screenshot for every framework, then the HTTP log when opted in', async () => {
-        register(false)
-        await run(screenshot, { value: 'b64' })
-        expect(logEntries()).toEqual([{ kind: 'TEST_SCREENSHOT', message: 'b64', timestamp: expect.any(String) }])
-
-        browser = Object.assign(new EventEmitter(), { sessionId: 's1' })
-        register(true)
+    it('sends the screenshot, then its HTTP log', async () => {
+        register()
         await run(screenshot, { value: 'b64' })
         expect(logEntries().map(e => e.kind)).toEqual(['TEST_SCREENSHOT', 'HTTP'])
     })
@@ -712,13 +700,13 @@ describe('TestHubModule — WebDriver command logs', () => {
         } else {
             process.env.BS_TESTOPS_ALLOW_SCREENSHOTS = allow
         }
-        register(false)
+        register()
         await run(screenshot, { value: 'b64' })
-        expect(framework.trackEvent).not.toHaveBeenCalled()
+        expect(logEntries().map(e => e.kind)).toEqual(['HTTP'])
     })
 
     it('pairs on the live session id, so a reload pairs its own commands and never an earlier session\'s', async () => {
-        register(true)
+        register()
         browser.emit('command', { ...title })
         browser.sessionId = 's2'
         browser.emit('result', { ...title, result: { value: 'old' } })
@@ -730,7 +718,7 @@ describe('TestHubModule — WebDriver command logs', () => {
     })
 
     it('pairs every result of concurrent same-key commands', async () => {
-        register(true)
+        register()
         browser.emit('command', { ...title })
         browser.emit('command', { ...title })
         browser.emit('result', { ...title, result: { value: 'a' } })
@@ -740,7 +728,7 @@ describe('TestHubModule — WebDriver command logs', () => {
     })
 
     it('registers once per browser, so a reload never doubles the logs', async () => {
-        register(true)
+        register()
         module.onDriverCreated({ browser })
         await run(title, { value: 'StackDemo' })
         expect(browser.listenerCount('result')).toBe(1)
@@ -749,12 +737,12 @@ describe('TestHubModule — WebDriver command logs', () => {
 
     it('registers nothing, and later sends nothing, when no product reports events', async () => {
         delete process.env.BROWSERSTACK_OBSERVABILITY
-        register(true)
+        register()
         expect(browser.listenerCount('result')).toBe(0)
 
         process.env.BROWSERSTACK_OBSERVABILITY = 'true'
         browser = Object.assign(new EventEmitter(), { sessionId: 's1' })
-        register(true)
+        register()
         delete process.env.BROWSERSTACK_OBSERVABILITY
         await run(title, { value: 'StackDemo' })
         expect(framework.trackEvent).not.toHaveBeenCalled()
@@ -764,7 +752,7 @@ describe('TestHubModule — WebDriver command logs', () => {
         delete process.env.BROWSERSTACK_OBSERVABILITY
         process.env.BROWSERSTACK_ACCESSIBILITY = 'true'
         try {
-            register(true)
+            register()
             await run(title, { value: 'StackDemo' })
             await run(screenshot, { value: 'b64' })
             expect(logEntries().map(e => e.kind)).toEqual(['TEST_SCREENSHOT'])
@@ -774,7 +762,7 @@ describe('TestHubModule — WebDriver command logs', () => {
     })
 
     it('never throws out of a listener when the framework fails', async () => {
-        register(true)
+        register()
         framework.trackEvent.mockRejectedValue(new Error('track blew up'))
         await expect(run(screenshot, { value: 'b64' })).resolves.toBeUndefined()
         expect(BStackLogger.error).toHaveBeenCalledWith(expect.stringContaining('track blew up'))

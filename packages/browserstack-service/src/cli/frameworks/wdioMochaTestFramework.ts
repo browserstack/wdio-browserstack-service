@@ -54,10 +54,6 @@ export default class WdioMochaTestFramework extends TestFramework {
         super(testFrameworks, testFrameworkVersions, binSessionId)
     }
 
-    capturesHttpCommandLogs() {
-        return true
-    }
-
     /**
      * Find instance and track any state for the test framework
      * @param {TestFrameworkState} testFrameworkState
