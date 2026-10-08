@@ -132,6 +132,19 @@ describe('mocha WebDriver command logs follow the hook or test that started last
         expect(testLogs()[1]).toMatchObject({ [TestFrameworkConstants.KEY_HOOK_ID]: 'AFTER_EACH-uuid', testFrameworkState: 'AFTER_EACH' })
     })
 
+    it('drops command logs from a test\'s start-up, as legacy did before it registered the test', async () => {
+        vi.mocked(framework.runHooks).mockImplementation(async (_i, testFrameworkState, hookState) => {
+            if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.PRE) {
+                await event(TestFrameworkState.LOG, HookState.POST, { logEntry: { ...http }, commandLog: true })
+                await event(TestFrameworkState.LOG, HookState.POST, { logEntry: { ...consoleLog } })
+            }
+        })
+        const loadLogEntries = vi.spyOn(framework, 'loadLogEntries')
+        await event(TestFrameworkState.TEST, HookState.PRE, { test: { title: 't' } })
+        await event(TestFrameworkState.LOG, HookState.POST, { logEntry: { ...http }, commandLog: true })
+        expect(loadLogEntries.mock.calls.map(([, , , logEntry, commandLog]) => [logEntry.kind, commandLog])).toEqual([['TEST_LOG', false], ['HTTP', true]])
+    })
+
     it('leaves a console log in a hook exactly as before', async () => {
         await event(TestFrameworkState.BEFORE_EACH, HookState.PRE, { test: {} })
         load(consoleLog, false)

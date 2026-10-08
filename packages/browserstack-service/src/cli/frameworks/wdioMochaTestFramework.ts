@@ -38,6 +38,9 @@ export default class WdioMochaTestFramework extends TestFramework {
     // WebDriver command logs follow the hook or test that started last, even after it finished, as legacy's
     // current test did: a hook names its hook run, a test (null) the test.
     private commandLogHook: Record<string, unknown> | null = null
+    // Legacy's beforeTest ran its own work (annotation, accessibility) before it registered the test, so
+    // commands from a test's start-up dropped; the observers of TEST/PRE are that start-up here.
+    private holdCommandLogs = false
 
     /**
    * Constructor for the TestFramework
@@ -62,6 +65,10 @@ export default class WdioMochaTestFramework extends TestFramework {
     async trackEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown> = {}) {
         logger.info(`trackEvent: testFrameworkState=${testFrameworkState} hookState=${hookState}`)
         await super.trackEvent(testFrameworkState, hookState, args)
+        if (testFrameworkState === TestFrameworkState.LOG && args.commandLog === true && this.holdCommandLogs) {
+            logger.debug('trackEvent: command log during a test\'s start-up dropped')
+            return
+        }
 
         const instance = this.resolveInstance(testFrameworkState, hookState, args)
         if (instance === null) {
@@ -118,13 +125,21 @@ export default class WdioMochaTestFramework extends TestFramework {
                 }
             } else if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.PRE && args.skipReport !== true) {
                 this.commandLogHook = null
+                this.holdCommandLogs = true
             }
             logger.debug(`trackEvent: tracked instance data=${JSON.stringify(Object.fromEntries(instance.getAllData()))}`)
         } catch (error) {
             logger.error(`trackEvent: Error in tracking events: ${error} hookState=${hookState} testFrameworkState=${testFrameworkState}`)
         }
         args.instance = instance
-        await this.runHooks(instance, testFrameworkState, hookState, args)
+        const releasesCommandLogs = testFrameworkState === TestFrameworkState.TEST && hookState === HookState.PRE && args.skipReport !== true
+        try {
+            await this.runHooks(instance, testFrameworkState, hookState, args)
+        } finally {
+            if (releasesCommandLogs) {
+                this.holdCommandLogs = false
+            }
+        }
     }
 
     /**
