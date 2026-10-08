@@ -502,8 +502,12 @@ describe('CLIUtils', () => {
         const config = { user: 'testuser', key: 'testkey' } as Options.Testrunner
         const savedBinaryUrl = process.env.BROWSERSTACK_BINARY_URL
         const savedFetch = global.fetch
+        const savedProxy = { http: process.env.HTTP_PROXY, https: process.env.HTTPS_PROXY }
 
         beforeEach(() => {
+            // _fetch routes through undici's ProxyAgent when a proxy var is set, bypassing global.fetch
+            delete process.env.HTTP_PROXY
+            delete process.env.HTTPS_PROXY
             vi.spyOn(PerformanceTester, 'start').mockImplementation(() => {})
             vi.spyOn(PerformanceTester, 'end').mockImplementation(() => {})
             vi.spyOn(CLIUtils, 'runShellCommand').mockResolvedValue('1.0.0')
@@ -517,6 +521,8 @@ describe('CLIUtils', () => {
 
         afterEach(() => {
             global.fetch = savedFetch
+            if (savedProxy.http !== undefined) { process.env.HTTP_PROXY = savedProxy.http }
+            if (savedProxy.https !== undefined) { process.env.HTTPS_PROXY = savedProxy.https }
             if (savedBinaryUrl === undefined) {
                 delete process.env.BROWSERSTACK_BINARY_URL
             } else {
@@ -533,6 +539,7 @@ describe('CLIUtils', () => {
 
             expect(result).toBe('/mock/cli/dir/binary-fallback')
             expect(download).toHaveBeenCalledWith('https://example.com/staging-binary.zip', mockCliDir)
+            expect(global.fetch).toHaveBeenCalledTimes(1)
         })
 
         it('keeps the existing binary on a 401 when BROWSERSTACK_BINARY_URL is unset (unchanged behaviour)', async () => {
@@ -543,6 +550,7 @@ describe('CLIUtils', () => {
 
             expect(result).toBe(mockExistingPath)
             expect(download).not.toHaveBeenCalled()
+            expect(global.fetch).toHaveBeenCalledTimes(1)
         })
 
         it('falls back when a 2xx body has neither url nor updated_cli_version', async () => {
@@ -558,6 +566,38 @@ describe('CLIUtils', () => {
 
             expect(result).toBe('/mock/cli/dir/binary-fallback')
             expect(download).toHaveBeenCalledWith('https://example.com/staging-binary.zip', mockCliDir)
+            expect(global.fetch).toHaveBeenCalledTimes(1)
+        })
+
+        it('returns an empty path on a 401 with no cached binary and no BROWSERSTACK_BINARY_URL', async () => {
+            delete process.env.BROWSERSTACK_BINARY_URL
+            const download = vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue('/should/not/be/used')
+
+            const result = await CLIUtils.checkAndUpdateCli('', mockCliDir, config)
+
+            expect(result).toBe('')
+            expect(download).not.toHaveBeenCalled()
+            expect(global.fetch).toHaveBeenCalledTimes(1)
+        })
+
+        it('propagates a rejected fallback download and still closes the span', async () => {
+            process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
+            const downloadErr = new Error('download failed')
+            vi.spyOn(CLIUtils, 'downloadLatestBinary').mockRejectedValue(downloadErr)
+
+            await expect(CLIUtils.checkAndUpdateCli('', mockCliDir, config)).rejects.toBe(downloadErr)
+            expect(PerformanceTester.end).toHaveBeenCalledTimes(1)
+            expect(PerformanceTester.end).toHaveBeenCalledWith(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
+        })
+
+        it('treats an empty BROWSERSTACK_BINARY_URL as unset', async () => {
+            process.env.BROWSERSTACK_BINARY_URL = ''
+            const download = vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue('/should/not/be/used')
+
+            const result = await CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, config)
+
+            expect(result).toBe(mockExistingPath)
+            expect(download).not.toHaveBeenCalled()
         })
     })
 
@@ -621,9 +661,13 @@ describe('CLIUtils', () => {
             user: 'testuser',
             key: 'testkey'
         } as Options.Testrunner
+        const savedProxy = { http: process.env.HTTP_PROXY, https: process.env.HTTPS_PROXY }
 
         beforeEach(() => {
             vi.resetAllMocks()
+            // _fetch routes through undici's ProxyAgent when a proxy var is set, bypassing global.fetch
+            delete process.env.HTTP_PROXY
+            delete process.env.HTTPS_PROXY
 
             // Mock fetch to return a mock response
             global.fetch = vi.fn().mockResolvedValue({
@@ -633,6 +677,8 @@ describe('CLIUtils', () => {
         })
 
         afterEach(() => {
+            if (savedProxy.http !== undefined) { process.env.HTTP_PROXY = savedProxy.http }
+            if (savedProxy.https !== undefined) { process.env.HTTPS_PROXY = savedProxy.https }
             vi.clearAllMocks()
         })
 
@@ -687,6 +733,20 @@ describe('CLIUtils', () => {
             await expect(CLIUtils.requestToUpdateCLI({}, mockConfig))
                 .rejects
                 .toMatchObject({ response: { statusCode: 401, body: { message: 'Unauthorized' } } })
+            expect(global.fetch).toHaveBeenCalledTimes(1)
+        })
+
+        it('keeps the status code when a non-2xx reply has a non-JSON body (SDK-6948)', async () => {
+            global.fetch = vi.fn().mockResolvedValue({
+                ok: false,
+                status: 502,
+                json: vi.fn().mockRejectedValue(new SyntaxError('Unexpected token <'))
+            })
+
+            await expect(CLIUtils.requestToUpdateCLI({}, mockConfig))
+                .rejects
+                .toMatchObject({ response: { statusCode: 502, body: null } })
+            expect(global.fetch).toHaveBeenCalledTimes(1)
         })
 
         it('handles errors from fetch', async () => {
