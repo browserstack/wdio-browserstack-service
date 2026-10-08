@@ -77,7 +77,6 @@ describe('service.after() — skip drain must precede the deferred-finish flush 
             _hookFailReasons: [],
             _insightsHandler: undefined,
             _percyHandler: undefined,
-            _cliTestUuids: new Map(),
             saveWorkerData: vi.fn()
         }
     }

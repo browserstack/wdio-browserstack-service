@@ -1,20 +1,18 @@
 import path from 'node:path'
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, vi, afterEach } from 'vitest'
 
 import TestReporter from '../src/reporter.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
-import * as earlyTestFinish from '../src/cli/earlyTestFinish.js'
+import WdioMochaTestFramework from '../src/cli/frameworks/wdioMochaTestFramework.js'
+import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
+import { HookState } from '../src/cli/states/hookState.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 
 vi.mock('@wdio/reporter', () => import(path.join(process.cwd(), '__mocks__', '@wdio/reporter')))
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
-vi.mock('../src/cli/earlyTestFinish.js', async (importOriginal) => ({
-    ...(await importOriginal<typeof earlyTestFinish>()),
-    finishCliTestOnFailure: vi.fn().mockReturnValue(true)
-}))
 vi.spyOn(bstackLogger.BStackLogger, 'logToFile').mockImplementation(() => {})
 
-describe('reporter onTestFail — hands mocha\'s failure to the CLI finish (SDK-7843)', () => {
+describe('reporter onTestFail — sends mocha\'s failure through the CLI test events (SDK-7843)', () => {
     const timeout = new Error('Timeout of 300000ms exceeded. The execution in the test took too long.')
     const testStats = { title: 'should navigate via bottom nav', parent: 'Smoke: Home Navigation', error: timeout, _duration: 300004, retries: 0 }
 
@@ -23,50 +21,55 @@ describe('reporter onTestFail — hands mocha\'s failure to the CLI finish (SDK-
         ;(reporter as unknown as { _config: unknown })._config = { framework }
         return reporter
     }
-
-    beforeEach(() => {
-        vi.mocked(earlyTestFinish.finishCliTestOnFailure).mockClear()
-    })
+    const mockCli = (isRunning: boolean) => {
+        const trackEvent = vi.fn().mockResolvedValue(undefined)
+        vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({ isRunning: () => isRunning, getTestFramework: () => ({ trackEvent }) } as never)
+        return trackEvent
+    }
 
     afterEach(() => {
         vi.restoreAllMocks()
     })
 
-    it('reports a mocha failure on the CLI flow under the same identity the service registered', () => {
-        vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({ isRunning: () => true } as never)
+    it('sends LOG_REPORT/POST then TEST/POST with mocha\'s result, under the test\'s identity', async () => {
+        const trackEvent = mockCli(true)
 
-        makeReporter('mocha').onTestFail(testStats as never)
+        await makeReporter('mocha').onTestFail(testStats as never)
 
-        expect(earlyTestFinish.finishCliTestOnFailure).toHaveBeenCalledWith(
-            'Smoke: Home Navigation - should navigate via bottom nav',
-            expect.objectContaining({ passed: false, error: timeout, duration: 300004, status: 'failed', exception: timeout.message })
-        )
+        const result = expect.objectContaining({ passed: false, error: timeout, duration: 300004, status: 'failed', exception: timeout.message })
+        expect(trackEvent.mock.calls.map(([state, hook]) => `${String(state)}/${String(hook)}`)).toEqual([
+            `${TestFrameworkState.LOG_REPORT}/${HookState.POST}`,
+            `${TestFrameworkState.TEST}/${HookState.POST}`
+        ])
+        for (const [, , args] of trackEvent.mock.calls) {
+            expect(args).toEqual(expect.objectContaining({ result, fromMochaFail: true }))
+            expect(WdioMochaTestFramework.attemptKey(args.test)).toBe('Smoke: Home Navigation - should navigate via bottom nav')
+        }
     })
 
-    it('does nothing on the classic flow, which sets the session status from after(result)', () => {
-        vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({ isRunning: () => false } as never)
+    it('names a retried attempt the way the service\'s afterTest does', async () => {
+        const trackEvent = mockCli(true)
 
-        makeReporter('mocha').onTestFail(testStats as never)
+        await makeReporter('mocha').onTestFail({ ...testStats, retries: 1 } as never)
 
-        expect(earlyTestFinish.finishCliTestOnFailure).not.toHaveBeenCalled()
+        expect(WdioMochaTestFramework.attemptKey(trackEvent.mock.calls[0][2].test)).toBe('Smoke: Home Navigation - should navigate via bottom nav (retry 1)')
+        expect(WdioMochaTestFramework.attemptKey({ title: testStats.title, parent: testStats.parent, _currentRetry: 1 } as never))
+            .toBe('Smoke: Home Navigation - should navigate via bottom nav (retry 1)')
     })
 
-    it('does nothing for other frameworks, whose afterTest is not run after after()', () => {
-        vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({ isRunning: () => true } as never)
+    it('does nothing on the classic flow, which sets the session status from after(result)', async () => {
+        const trackEvent = mockCli(false)
 
-        makeReporter('cucumber').onTestFail(testStats as never)
+        await makeReporter('mocha').onTestFail(testStats as never)
 
-        expect(earlyTestFinish.finishCliTestOnFailure).not.toHaveBeenCalled()
+        expect(trackEvent).not.toHaveBeenCalled()
     })
 
-    it('reports a retried attempt under that attempt\'s key', () => {
-        vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({ isRunning: () => true } as never)
+    it('does nothing for other frameworks, whose afterTest is not run after after()', async () => {
+        const trackEvent = mockCli(true)
 
-        makeReporter('mocha').onTestFail({ ...testStats, retries: 1 } as never)
+        await makeReporter('cucumber').onTestFail(testStats as never)
 
-        expect(earlyTestFinish.finishCliTestOnFailure).toHaveBeenCalledWith(
-            'Smoke: Home Navigation - should navigate via bottom nav (retry 1)',
-            expect.objectContaining({ passed: false })
-        )
+        expect(trackEvent).not.toHaveBeenCalled()
     })
 })
