@@ -259,7 +259,17 @@ export class CLIUtils {
                 logger.warn(
                     `update_cli request failed (${reason}); falling back to BROWSERSTACK_BINARY_URL`,
                 )
-                return this.downloadLatestBinary(browserStackBinaryUrl as string, cliDir)
+                try {
+                    return await this.downloadLatestBinary(browserStackBinaryUrl as string, cliDir)
+                } catch (downloadErr) {
+                    if (isNullOrEmpty(existingCliPath)) {
+                        throw downloadErr
+                    }
+                    logger.warn(
+                        `BROWSERSTACK_BINARY_URL download failed (${util.format(downloadErr)}); using cached binary ${existingCliPath}`,
+                    )
+                    return existingCliPath
+                }
             }
 
             let response
@@ -283,9 +293,9 @@ export class CLIUtils {
                 throw err
             }
 
-            // A successful update_cli reply always carries `updated_cli_version` and `url`; a body
-            // with neither is an error payload, so honour the explicit binary URL here too.
-            if (!isNullOrEmpty(browserStackBinaryUrl) &&
+            // A 2xx reply with neither `updated_cli_version` nor `url` means there is nothing to update:
+            // keep a cached binary, and only fetch from the explicit binary URL when there is none.
+            if (!isNullOrEmpty(browserStackBinaryUrl) && isNullOrEmpty(existingCliPath) &&
                 !nestedKeyValue(response, ['updated_cli_version']) && !nestedKeyValue(response, ['url'])) {
                 return await fallbackToBinaryUrl(JSON.stringify(response))
             }

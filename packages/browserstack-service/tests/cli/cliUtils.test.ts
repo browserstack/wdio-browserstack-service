@@ -553,7 +553,23 @@ describe('CLIUtils', () => {
             expect(global.fetch).toHaveBeenCalledTimes(1)
         })
 
-        it('falls back when a 2xx body has neither url nor updated_cli_version', async () => {
+        it('keeps the cached binary when a 2xx body has neither url nor updated_cli_version', async () => {
+            process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
+            global.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: vi.fn().mockResolvedValue({ success: true })
+            })
+            const download = vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue('/should/not/be/used')
+
+            const result = await CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, config)
+
+            expect(result).toBe(mockExistingPath)
+            expect(download).not.toHaveBeenCalled()
+            expect(global.fetch).toHaveBeenCalledTimes(1)
+        })
+
+        it('falls back when a 2xx body has neither url nor updated_cli_version and no binary is cached', async () => {
             process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
             global.fetch = vi.fn().mockResolvedValue({
                 ok: true,
@@ -562,11 +578,21 @@ describe('CLIUtils', () => {
             })
             const download = vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue('/mock/cli/dir/binary-fallback')
 
-            const result = await CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, config)
+            const result = await CLIUtils.checkAndUpdateCli('', mockCliDir, config)
 
             expect(result).toBe('/mock/cli/dir/binary-fallback')
             expect(download).toHaveBeenCalledWith('https://example.com/staging-binary.zip', mockCliDir)
             expect(global.fetch).toHaveBeenCalledTimes(1)
+        })
+
+        it('uses the cached binary when the fallback download fails', async () => {
+            process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
+            vi.spyOn(CLIUtils, 'downloadLatestBinary').mockRejectedValue(new Error('download failed'))
+
+            const result = await CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, config)
+
+            expect(result).toBe(mockExistingPath)
+            expect(PerformanceTester.end).toHaveBeenCalledTimes(1)
         })
 
         it('returns an empty path on a 401 with no cached binary and no BROWSERSTACK_BINARY_URL', async () => {
