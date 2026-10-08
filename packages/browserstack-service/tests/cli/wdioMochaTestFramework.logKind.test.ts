@@ -69,40 +69,47 @@ describe('SDK-4177 — loadLogEntries must not relabel a log that carries its ow
 })
 
 describe('loadLogEntries — WebDriver command logs name the open hook', () => {
-    let testLogs: unknown[]
-    let openHook: Record<string, unknown> | null
-    const instance = { getCurrentTestState: () => TestFrameworkState.LOG, updateMultipleEntries: vi.fn() } as any
     const screenshot = { kind: TestFrameworkConstants.KIND_SCREENSHOT, message: 'b64', timestamp: 't' }
     const consoleLog = { kind: TestFrameworkConstants.KIND_LOG, message: 'hello', level: 'info', timestamp: 't' }
+    let state: Record<string, unknown>
+    const instance = { getCurrentTestState: () => TestFrameworkState.LOG, updateMultipleEntries: vi.fn() } as any
+
+    // The instance's real shapes: hooks started is a Map of key -> started-and-not-finished hooks
+    const startHook = (key: string, hookId: string) => {
+        const started = state[TestFrameworkConstants.KEY_HOOKS_STARTED] as Map<string, unknown[]>
+        started.set(key, [...(started.get(key) ?? []), { key, [TestFrameworkConstants.KEY_HOOK_ID]: hookId, [TestFrameworkConstants.KEY_HOOK_LOGS]: [] }])
+        state[WdioMochaTestFramework.KEY_HOOK_LAST_STARTED] = key
+    }
+    const finishHook = (key: string) => (state[TestFrameworkConstants.KEY_HOOKS_STARTED] as Map<string, unknown[]>).get(key)!.pop()
+    const load = (logEntry: Record<string, unknown>, commandLog: boolean) =>
+        WdioMochaTestFramework.prototype.loadLogEntries.call(WdioMochaTestFramework.prototype, instance, TestFrameworkState.LOG, HookState.POST, { ...logEntry }, commandLog)
+    const testLogs = () => state[TestFrameworkConstants.KEY_TEST_LOGS] as Record<string, unknown>[]
 
     beforeEach(() => {
-        testLogs = []
-        openHook = { key: 'BEFORE_EACH', [TestFrameworkConstants.KEY_HOOK_ID]: 'hook-uuid', [TestFrameworkConstants.KEY_HOOK_LOGS]: [] }
-        vi.spyOn(TestFramework, 'getState').mockReturnValue(testLogs)
-        vi.spyOn(WdioMochaTestFramework, 'lastActiveHook').mockImplementation(() => openHook)
+        state = { [TestFrameworkConstants.KEY_HOOKS_STARTED]: new Map(), [TestFrameworkConstants.KEY_TEST_LOGS]: [] }
+        vi.spyOn(TestFramework, 'getState').mockImplementation((_i, key) => state[key as string])
     })
 
     afterEach(() => {
         vi.restoreAllMocks()
     })
 
-    const load = (logEntry: Record<string, unknown>, commandLog: boolean) =>
-        WdioMochaTestFramework.prototype.loadLogEntries.call(WdioMochaTestFramework.prototype, instance, TestFrameworkState.LOG, HookState.POST, { ...logEntry }, commandLog)
-    const hookLogs = () => openHook![TestFrameworkConstants.KEY_HOOK_LOGS] as Record<string, unknown>[]
-
     it('stamps the open hook\'s id and state on a command log', () => {
+        startHook('BEFORE_EACH', 'hook-uuid')
         load(screenshot, true)
-        expect(hookLogs()[0]).toMatchObject({ kind: 'TEST_SCREENSHOT', [TestFrameworkConstants.KEY_HOOK_ID]: 'hook-uuid', testFrameworkState: 'BEFORE_EACH' })
+        expect(testLogs()[0]).toMatchObject({ kind: 'TEST_SCREENSHOT', [TestFrameworkConstants.KEY_HOOK_ID]: 'hook-uuid', testFrameworkState: 'BEFORE_EACH' })
     })
 
-    it('leaves a console log in the open hook exactly as before', () => {
+    it('leaves a command log on the test once the hook has finished, and in the test body', () => {
+        startHook('BEFORE_EACH', 'hook-uuid')
+        finishHook('BEFORE_EACH')
+        load(screenshot, true)
+        expect(testLogs()[0]).toEqual({ kind: 'TEST_SCREENSHOT', message: Buffer.from('b64'), level: undefined, timestamp: 't' })
+    })
+
+    it('leaves a console log in an open hook exactly as before', () => {
+        startHook('BEFORE_EACH', 'hook-uuid')
         load(consoleLog, false)
-        expect(hookLogs()[0]).toEqual({ kind: 'TEST_LOG', message: Buffer.from('hello'), level: 'info', timestamp: 't' })
-    })
-
-    it('leaves a command log in the test body on the test', () => {
-        openHook = null
-        load(screenshot, true)
-        expect(testLogs[0]).toEqual({ kind: 'TEST_SCREENSHOT', message: Buffer.from('b64'), level: undefined, timestamp: 't' })
+        expect(testLogs()[0]).toEqual({ kind: 'TEST_LOG', message: Buffer.from('hello'), level: 'info', timestamp: 't' })
     })
 })

@@ -280,14 +280,16 @@ export default class WdioMochaTestFramework extends TestFramework {
         logRecord.level = level
         logRecord.timestamp = timestamp
 
-        // Attach to the suitable hook
-        const lastActiveHook = WdioMochaTestFramework.lastActiveHook(instance, WdioMochaTestFramework.KEY_HOOK_LAST_STARTED)
         // The instance is already in LOG here, so a WebDriver command log names the open hook itself: the
         // binary keys an entry to a hook run only by a hook state.
-        if (commandLog && lastActiveHook) {
-            logRecord[TestFrameworkConstants.KEY_HOOK_ID] = lastActiveHook[TestFrameworkConstants.KEY_HOOK_ID]
-            logRecord.testFrameworkState = lastActiveHook.key
+        const openHook = commandLog ? WdioMochaTestFramework.openHook(instance) : undefined
+        if (openHook) {
+            logRecord[TestFrameworkConstants.KEY_HOOK_ID] = openHook[TestFrameworkConstants.KEY_HOOK_ID]
+            logRecord.testFrameworkState = openHook.key
         }
+
+        // Attach to the suitable hook
+        const lastActiveHook = WdioMochaTestFramework.lastActiveHook(instance, WdioMochaTestFramework.KEY_HOOK_LAST_STARTED)
         if (lastActiveHook) {
             const hookLogs = lastActiveHook[TestFrameworkConstants.KEY_HOOK_LOGS] as unknown[]
             hookLogs.push(logRecord)
@@ -301,6 +303,13 @@ export default class WdioMochaTestFramework extends TestFramework {
         instance.updateMultipleEntries({
             [TestFrameworkConstants.KEY_TEST_LOGS]: entries,
         })
+    }
+
+    /** The hook started last and not yet finished: a hook's POST pops it from the started list. */
+    static openHook(instance: TestFrameworkInstance): Record<string, unknown> | undefined {
+        const key = TestFramework.getState(instance, WdioMochaTestFramework.KEY_HOOK_LAST_STARTED) as string | undefined
+        const started = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOKS_STARTED) as Map<string, Record<string, unknown>[]> | undefined
+        return key && started instanceof Map ? started.get(key)?.at(-1) : undefined
     }
 
     /**
