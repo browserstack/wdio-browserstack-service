@@ -472,7 +472,7 @@ export default class TestHubModule extends BaseModule {
                 const logData: LogCreatedEventRequest_LogEntry = {
                     testFrameworkName,
                     testFrameworkVersion,
-                    testFrameworkState,
+                    testFrameworkState: (logEntry.testFrameworkState as string | undefined) ?? testFrameworkState,
                     uuid: logEntry[TestFrameworkConstants.KEY_HOOK_ID] || TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID),
                     kind: logEntry.kind as string,
                     message: logEntry.message as Uint8Array,

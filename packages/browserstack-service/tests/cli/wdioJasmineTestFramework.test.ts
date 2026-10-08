@@ -352,20 +352,27 @@ describe('WdioJasmineTestFramework', () => {
 
     const commandLog = (logEntry: Record<string, unknown>) =>
         framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry, commandLog: true })
+    // The service's beforeTest and beforeHook name the spec WDIO's jasmine adapter last started
+    const serviceNames = (state: State, fullName?: string) =>
+        framework.trackEvent(state, HookState.PRE, { test: fullName === undefined ? {} : { fullName, description: 'x' } })
+    const spec = (title: string) => testStats({ uid: title, title, fullTitle: `Nested outer ${title}` })
 
     it('keeps a screenshot entry\'s kind on the log path', async () => {
         reporterTestStart(testStats(), context())
+        await serviceNames(TestFrameworkState.INIT_TEST, 'Nested outer outer passing test')
         await commandLog({ kind: 'TEST_SCREENSHOT', message: 'b64', timestamp: 't', level: 'INFO' })
         await drain()
         expect(logSends[0].entries[0].kind).toBe('TEST_SCREENSHOT')
     })
 
-    it('sends a command log to the last started spec, even inside an all-hook or after the spec ended', async () => {
+    it('sends a command log to the spec the service last named, even inside an all-hook after it ended', async () => {
         const first = testStats()
         const uuid = reporterTestStart(first, context())
+        await serviceNames(TestFrameworkState.INIT_TEST, first.fullTitle)
         reporterTestEnd({ ...first, state: 'passed', end: new Date() }, context())
         const after = hookStats('"after all" hook')
         reporterHookStart(after, context())
+        await serviceNames(TestFrameworkState.AFTER_ALL, first.fullTitle)
         const message = JSON.stringify({ path: '/session/:sessionId/title', method: 'GET', body: {}, response: { value: 'StackDemo' } })
         await commandLog({ kind: 'HTTP', message, timestamp: 't' })
         reporterLog({ level: 'INFO', message: 'console in hook', timestamp: 't2', kind: 'TEST_LOG' })
@@ -379,27 +386,38 @@ describe('WdioJasmineTestFramework', () => {
         expect(logSends[1].entries[0]).toHaveProperty('hook_id')
     })
 
-    it('drops command logs before the first spec, even inside an all-hook', async () => {
-        reporterHookStart(hookStats('"before all" hook'), context())
-        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 't' })
+    it('keeps a command after trailing pending and excluded specs on the last spec that ran a hook or test', async () => {
+        const ran = reporterTestStart(spec('ran'), context())
+        await serviceNames(TestFrameworkState.INIT_TEST, 'Nested outer ran')
+        reporterTestEnd({ ...spec('ran'), state: 'passed', end: new Date() }, context())
+        for (const title of ['xit', 'excluded']) {
+            reporterTestStart(spec(title), context())
+            reporterTestEnd({ ...spec(title), state: 'skipped', end: new Date() }, context())
+        }
+        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 'teardown' })
         await drain()
-        expect(logSends).toHaveLength(0)
+        expect(logSends.map(l => l.data.test_uuid)).toEqual([ran])
     })
 
-    it('drops command logs after an <unknown test> until the next spec, while console logs keep the last spec', async () => {
-        const first = testStats()
-        reporterTestStart(first, context())
-        reporterTestEnd({ ...first, state: 'passed', end: new Date() }, context())
-        framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { source: 'reporter', unknownTest: true })
-        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 't1' })
-        reporterLog({ level: 'INFO', message: 'console', timestamp: 't2', kind: 'TEST_LOG' })
-        const second = reporterTestStart(testStats({ uid: 'second', title: 'second', fullTitle: 'Nested outer second' }), context())
-        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 't3' })
+    it('resolves a hook\'s copy of the current spec by full name', async () => {
+        reporterTestStart(spec('a'), context())
+        const b = reporterTestStart(spec('b'), context())
+        await serviceNames(TestFrameworkState.BEFORE_EACH, 'Nested outer b')
+        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 't' })
         await drain()
+        expect(logSends.map(l => l.data.test_uuid)).toEqual([b])
+    })
 
-        expect(logSends.map(l => l.entries[0].timestamp)).toEqual(['t2', 't3'])
-        expect(logSends[1].data.test_uuid).toBe(second)
-        expect(dispatches.filter(d => d.state === TestFrameworkState.TEST && d.hook === HookState.PRE)).toHaveLength(2)
+    it('drops command logs before the first spec, and for a name no spec was minted under', async () => {
+        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 'no-hook-yet' })
+        reporterHookStart(hookStats('"before all" hook'), context())
+        await serviceNames(TestFrameworkState.BEFORE_ALL)
+        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 'empty-copy' })
+        reporterTestStart(testStats(), context())
+        await serviceNames(TestFrameworkState.BEFORE_ALL, '<unknown test>')
+        await commandLog({ kind: 'HTTP', message: '{}', timestamp: 'unknown-test' })
+        await drain()
+        expect(logSends).toHaveLength(0)
     })
 
     it('maps the WDIO hookName to the hook-type key, and nothing else', () => {

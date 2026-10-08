@@ -92,7 +92,7 @@ export default class WdioMochaTestFramework extends TestFramework {
             } else if (testFrameworkState === TestFrameworkState.LOG) {
                 const logEntry = args.logEntry as Record<string, unknown>
                 logEntry.uuid = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOK_ID)
-                this.loadLogEntries(instance, testFrameworkState, hookState, logEntry)
+                this.loadLogEntries(instance, testFrameworkState, hookState, logEntry, args.commandLog === true)
             } else if (testFrameworkState === TestFrameworkState.LOG_REPORT && hookState === HookState.POST) {
                 logger.info('trackEvent: load test results')
                 this.loadTestResult(instance, args)
@@ -266,7 +266,7 @@ export default class WdioMochaTestFramework extends TestFramework {
      * @param hookState HookState
      * @param args Additional arguments (level, message, etc.)
      */
-    loadLogEntries(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, logEntry: Record<string, unknown>) {
+    loadLogEntries(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, logEntry: Record<string, unknown>, commandLog = false) {
         const logRecord: Record<string, unknown> = {}
         const { level, message, timestamp, kind } = logEntry
 
@@ -282,6 +282,12 @@ export default class WdioMochaTestFramework extends TestFramework {
 
         // Attach to the suitable hook
         const lastActiveHook = WdioMochaTestFramework.lastActiveHook(instance, WdioMochaTestFramework.KEY_HOOK_LAST_STARTED)
+        // The instance is already in LOG here, so a WebDriver command log names the open hook itself: the
+        // binary keys an entry to a hook run only by a hook state.
+        if (commandLog && lastActiveHook) {
+            logRecord[TestFrameworkConstants.KEY_HOOK_ID] = lastActiveHook[TestFrameworkConstants.KEY_HOOK_ID]
+            logRecord.testFrameworkState = lastActiveHook.key
+        }
         if (lastActiveHook) {
             const hookLogs = lastActiveHook[TestFrameworkConstants.KEY_HOOK_LOGS] as unknown[]
             hookLogs.push(logRecord)

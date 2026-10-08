@@ -58,6 +58,14 @@ export default class WdioJasmineTestFramework extends TestFramework {
     static KEY_HOOK_FAILURE_TYPE = 'hook_failure_type'
     static KEY_HOOK_FAILURE_REASON = 'hook_failure_reason'
 
+    static #commandLogTargetStates = new Set<State>([
+        TestFrameworkState.INIT_TEST,
+        TestFrameworkState.TEST,
+        TestFrameworkState.BEFORE_ALL,
+        TestFrameworkState.BEFORE_EACH,
+        TestFrameworkState.AFTER_EACH,
+        TestFrameworkState.AFTER_ALL,
+    ])
     static #hookTypes = new Map([
         ['beforeAll', 'BEFORE_ALL'],
         ['afterAll', 'AFTER_ALL'],
@@ -75,9 +83,11 @@ export default class WdioJasmineTestFramework extends TestFramework {
     #hookInstances = new Map<string, TestFrameworkInstance>()
     #openHook: TestFrameworkInstance | null = null
     #lastSpec: TestFrameworkInstance | null = null
-    // The spec WebDriver command logs attach to: the last started spec, even inside an all-hook or after it
-    // ended, unset by a `<unknown test>` (the runner's last spec then has no uuid, so its commands drop).
-    #commandLogSpec: TestFrameworkInstance | null = null
+    // WebDriver command logs go to the spec the service's latest beforeTest/beforeHook named, resolved by
+    // fullName when the command fires. A pending or excluded spec runs neither hook, so it never takes them;
+    // a name with no minted spec (`<unknown test>`, or none before the first spec) drops them.
+    #commandLogFullName: string | undefined
+    #specsByFullNameMinted = new Map<string, TestFrameworkInstance>()
     #queue: Promise<void> = Promise.resolve()
     #pendingEvents = 0
 
@@ -124,6 +134,9 @@ export default class WdioJasmineTestFramework extends TestFramework {
             this.#log(args.logEntry as Record<string, unknown>, args.commandLog === true)
             return
         }
+        if (hookState === HookState.PRE && WdioJasmineTestFramework.#commandLogTargetStates.has(testFrameworkState)) {
+            this.#commandLogFullName = (args.test as { fullName?: string } | undefined)?.fullName
+        }
         try {
             await this.#queue
             if (testFrameworkState !== TestFrameworkState.INIT_TEST && testFrameworkState !== TestFrameworkState.TEST) {
@@ -157,11 +170,7 @@ export default class WdioJasmineTestFramework extends TestFramework {
     #trackReporterEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
         const context = args.context as JasmineSuiteContext
         if (testFrameworkState === TestFrameworkState.TEST) {
-            if (hookState === HookState.PRE && args.unknownTest === true) {
-                this.#enqueue('UNKNOWN_TEST', async () => {
-                    this.#commandLogSpec = null
-                })
-            } else if (hookState === HookState.PRE) {
+            if (hookState === HookState.PRE) {
                 args.testUuid = this.#testStarted(args.testStats as TestStats, context)
             } else {
                 this.#testEnded(args.testStats as TestStats, context)
@@ -196,13 +205,13 @@ export default class WdioJasmineTestFramework extends TestFramework {
             })
             this.#specInstances.set(testStats.uid, instance)
             this.#specsByFullName.set(fullTitle, instance)
+            this.#specsByFullNameMinted.set(fullTitle, instance)
             // Registered synchronously: the service's beforeTest for this spec may read it before the queue runs.
             TestFramework.setTrackedInstance(instance.getContext(), instance)
 
             const args = { test: this.#specArg(testStats, context), suiteTitle: this.#suiteTitle(testStats) }
             this.#enqueue('TEST/PRE', async () => {
                 this.#lastSpec = instance
-                this.#commandLogSpec = instance
                 await this.#toTestHub(instance, TestFrameworkState.TEST, HookState.PRE, args)
             })
             return TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) as string
@@ -361,15 +370,21 @@ export default class WdioJasmineTestFramework extends TestFramework {
 
     /**
      * Console logs: an open beforeAll/afterAll wins, else the last-started spec, even after it ended.
-     * WebDriver command logs (HTTP, screenshots) always go to the command-log spec, as legacy did.
+     * WebDriver command logs (HTTP, screenshots) go to the command-log spec, as legacy did.
      */
     #log(logEntry: Record<string, unknown> | undefined, commandLog = false) {
         try {
             if (!logEntry || !shouldProcessEventForTesthub('LogCreated')) {
                 return
             }
+            const commandLogSpec = commandLog && this.#commandLogFullName !== undefined
+                ? this.#specsByFullNameMinted.get(this.#commandLogFullName)
+                : undefined
+            if (commandLog && !commandLogSpec) {
+                return
+            }
             this.#enqueue('LOG/POST', async () => {
-                const instance = commandLog ? this.#commandLogSpec : (this.#openHook ?? this.#lastSpec)
+                const instance = commandLog ? commandLogSpec : (this.#openHook ?? this.#lastSpec)
                 if (!instance) {
                     return
                 }

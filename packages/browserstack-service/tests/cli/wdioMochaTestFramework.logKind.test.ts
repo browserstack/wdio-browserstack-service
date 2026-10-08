@@ -67,3 +67,42 @@ describe('SDK-4177 — loadLogEntries must not relabel a log that carries its ow
         expect(load({ message: 'hello', timestamp: '2020-01-01T00:00:00.000Z' }).kind).toBe('TEST_LOG')
     })
 })
+
+describe('loadLogEntries — WebDriver command logs name the open hook', () => {
+    let testLogs: unknown[]
+    let openHook: Record<string, unknown> | null
+    const instance = { getCurrentTestState: () => TestFrameworkState.LOG, updateMultipleEntries: vi.fn() } as any
+    const screenshot = { kind: TestFrameworkConstants.KIND_SCREENSHOT, message: 'b64', timestamp: 't' }
+    const consoleLog = { kind: TestFrameworkConstants.KIND_LOG, message: 'hello', level: 'info', timestamp: 't' }
+
+    beforeEach(() => {
+        testLogs = []
+        openHook = { key: 'BEFORE_EACH', [TestFrameworkConstants.KEY_HOOK_ID]: 'hook-uuid', [TestFrameworkConstants.KEY_HOOK_LOGS]: [] }
+        vi.spyOn(TestFramework, 'getState').mockReturnValue(testLogs)
+        vi.spyOn(WdioMochaTestFramework, 'lastActiveHook').mockImplementation(() => openHook)
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    const load = (logEntry: Record<string, unknown>, commandLog: boolean) =>
+        WdioMochaTestFramework.prototype.loadLogEntries.call(WdioMochaTestFramework.prototype, instance, TestFrameworkState.LOG, HookState.POST, { ...logEntry }, commandLog)
+    const hookLogs = () => openHook![TestFrameworkConstants.KEY_HOOK_LOGS] as Record<string, unknown>[]
+
+    it('stamps the open hook\'s id and state on a command log', () => {
+        load(screenshot, true)
+        expect(hookLogs()[0]).toMatchObject({ kind: 'TEST_SCREENSHOT', [TestFrameworkConstants.KEY_HOOK_ID]: 'hook-uuid', testFrameworkState: 'BEFORE_EACH' })
+    })
+
+    it('leaves a console log in the open hook exactly as before', () => {
+        load(consoleLog, false)
+        expect(hookLogs()[0]).toEqual({ kind: 'TEST_LOG', message: Buffer.from('hello'), level: 'info', timestamp: 't' })
+    })
+
+    it('leaves a command log in the test body on the test', () => {
+        openHook = null
+        load(screenshot, true)
+        expect(testLogs[0]).toEqual({ kind: 'TEST_SCREENSHOT', message: Buffer.from('b64'), level: undefined, timestamp: 't' })
+    })
+})

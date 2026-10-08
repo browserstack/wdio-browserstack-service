@@ -621,6 +621,26 @@ describe('TestHubModule', () => {
         })
     })
 })
+describe('TestHubModule — sendLogCreatedEvent per-entry state', () => {
+    it('sends an entry that names its own hook state in that state, and every other entry in the instance\'s', async () => {
+        const logCreatedEvent = vi.fn().mockResolvedValue(undefined)
+        vi.mocked(GrpcClient.getInstance).mockReturnValue({ logCreatedEvent } as any)
+        vi.mocked(TestFramework.getState).mockReturnValue('test-uuid')
+        const instance = {
+            getContext: () => ({ getId: () => 'ctx', getThreadId: () => 1, getProcessId: () => 2 }),
+            getAllData: () => new Map(),
+            getCurrentTestState: () => TestFrameworkState.LOG,
+            getCurrentHookState: () => HookState.POST,
+        }
+        await new TestHubModule({}).sendLogCreatedEvent({ instance, logEntries: [
+            { kind: 'TEST_SCREENSHOT', message: 'a', timestamp: 't', [TestFrameworkConstants.KEY_HOOK_ID]: 'hook-uuid', testFrameworkState: 'BEFORE_EACH' },
+            { kind: 'TEST_LOG', message: 'b', timestamp: 't' },
+        ] })
+        const logs = logCreatedEvent.mock.calls[0][0].logs
+        expect(logs.map((l: Record<string, unknown>) => [l.testFrameworkState, l.uuid])).toEqual([['BEFORE_EACH', 'hook-uuid'], ['LOG', 'test-uuid']])
+    })
+})
+
 describe('TestHubModule — WebDriver command logs', () => {
     const settle = () => new Promise(resolve => setImmediate(resolve))
     const title = { method: 'GET', endpoint: '/session/:sessionId/title', body: {} }
