@@ -28,7 +28,6 @@ interface SessionData {
     appliedName?: string // last name successfully PUT for this session, for de-duping
     testResults: Map<string, TestResult> // testName -> TestResult
     scenariosRan: number // non-skipped cucumber scenarios, for preferScenarioName
-    testsRan?: number // non-skipped mocha tests — legacy's `_specsRan` for the ignoreHooksStatus arm
     hookFailures?: TestResult[] // failed mocha hooks; folded into the verdict in onAfterExecute
     ignoreHooksStatus?: boolean
     lastScenarioName?: string
@@ -40,6 +39,8 @@ export default class AutomateModule extends BaseModule {
     logger = BStackLogger
     browserStackConfig: Options.Testrunner
     private sessionMap: Map<string, SessionData> = new Map()
+    // Worker-scoped like legacy `_specsRan`: never reset across reloadSession
+    private mochaTestsRan = 0
 
     static readonly MODULE_NAME = 'AutomateModule'
     /**
@@ -226,10 +227,7 @@ export default class AutomateModule extends BaseModule {
         // opt-out: `setSessionStatus: false` must still get the preferScenarioName rename.
         const isCucumber = this.isCucumberInstance(instace)
         if (!skipped && this.isMochaInstance(instace)) {
-            const ranData = this.sessionMap.get(sessionId)
-            if (ranData) {
-                ranData.testsRan = (ranData.testsRan ?? 0) + 1
-            }
+            this.mochaTestsRan++
         }
         if (!skipped && isCucumber) {
             const nameData = this.sessionMap.get(sessionId)
@@ -338,16 +336,16 @@ export default class AutomateModule extends BaseModule {
      * A failed mocha hook produces no test result — the tests it aborts are reported skipped,
      * which counts as passed — so the session was marked PASSED even though the run failed.
      * Legacy fails the session on any hook error unless ignoreHooksStatus is set and a test ran;
-     * `testsRan` is only final at teardown, so the verdict is decided in onAfterExecute.
+     * `mochaTestsRan` is only final at teardown, so the verdict is decided in onAfterExecute.
      */
     async onMochaHookEnd(hookKey: string, args: Record<string, unknown>) {
         try {
-            const instance = (args?.instance as TestFrameworkInstance) || TestFramework.getTrackedInstance()
-            if (!instance || !this.isMochaInstance(instance)) {
+            const instance = args.instance as TestFrameworkInstance
+            if (!this.isMochaInstance(instance)) {
                 return
             }
 
-            const result = args?.result as { passed?: boolean, skipped?: boolean, error?: Error } | undefined
+            const result = args.result as { passed?: boolean, skipped?: boolean, error?: Error } | undefined
             // this.skip() inside a hook is a deliberate skip, not a failure
             const skippedHook = result?.skipped || !!result?.error?.message?.includes('sync skip; aborting execution')
             if (!result || result.passed || skippedHook) {
@@ -360,6 +358,9 @@ export default class AutomateModule extends BaseModule {
             }
 
             const autoInstance = AutomationFramework.getTrackedInstance()
+            if (!isBrowserstackSession(AutomationFramework.getDriver(autoInstance) as WebdriverIO.Browser)) {
+                return
+            }
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
             if (!sessionId) {
                 this.logger.debug(`onMochaHookEnd: no session id resolved for ${hookKey}; nothing to mark`)
@@ -417,8 +418,8 @@ export default class AutomateModule extends BaseModule {
             try {
                 const failedTests = Array.from(sessionData.testResults.values()).filter(test => test.status === 'failed')
                 // Legacy's `ignoreHooksStatus && _specsRan` arm: hook errors are ignored only once a
-                // test actually ran; a run where every test was aborted still fails.
-                if (sessionData.hookFailures?.length && !(sessionData.ignoreHooksStatus && (sessionData.testsRan ?? 0) > 0)) {
+                // test actually ran in this worker; a run where every test was aborted still fails.
+                if (sessionData.hookFailures?.length && !(sessionData.ignoreHooksStatus && this.mochaTestsRan > 0)) {
                     failedTests.push(...sessionData.hookFailures)
                 }
                 const hasFailures = failedTests.length > 0

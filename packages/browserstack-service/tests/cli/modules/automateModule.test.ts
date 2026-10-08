@@ -921,6 +921,7 @@ describe('AutomateModule — mocha hook failures reach the session verdict', () 
         vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) =>
             key === 'framework_session_id' ? 'sess-1' : ({} as never))
         vi.mocked(TestFramework.getState).mockImplementation((instance, key) => stateFor(instance, key))
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
         vi.mocked(fetch).mockResolvedValue({ json: async () => ({ ok: true }) } as never)
     })
 
@@ -1021,6 +1022,31 @@ describe('AutomateModule — mocha hook failures reach the session verdict', () 
         await mod.onAfterExecute()
 
         expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('does not mark a non-BrowserStack session', async () => {
+        vi.mocked(isBrowserstackSession).mockReturnValue(false)
+        const mod = newModule()
+        await mod.onMochaHookEnd('BEFORE_ALL', { instance: mochaInstance, result: failing })
+        await mod.onAfterExecute()
+
+        expect(fetch).not.toHaveBeenCalled()
+    })
+
+    // Legacy `_specsRan` is worker-scoped and survives reloadSession.
+    it('keeps a post-reload session PASSED under ignoreHooksStatus when a test ran on an earlier session', async () => {
+        const mod = newModule()
+        await runTest(mod, { passed: true })
+        vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) =>
+            key === 'framework_session_id' ? 'sess-2' : ({} as never))
+        await mod.onMochaHookEnd('AFTER_ALL', { instance: mochaInstance, result: failing, ignoreHooksStatus: true })
+        await mod.onAfterExecute()
+
+        const bodies = vi.mocked(fetch).mock.calls
+            .filter(([url]) => String(url).includes('sess-2'))
+            .map(([, o]) => JSON.parse((o as { body: string }).body))
+            .filter(b => b.status !== undefined)
+        expect(bodies).toEqual([{ status: 'passed' }])
     })
 })
 
