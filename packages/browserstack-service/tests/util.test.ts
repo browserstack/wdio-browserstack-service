@@ -602,12 +602,28 @@ describe('SDK-6948 BROWSERSTACK_STAGING_ENV bsstag host recognition', () => {
         process.env.BROWSERSTACK_STAGING_ENV = 'sdk-k8s.bsstag.com'
         expect(utils.isStagingEnvBsstagHost('hub-k8s.bsstag.com')).toBe(false)
         expect(getCloudProvider({ options: { hostname: 'hub-k8s.bsstag.com' } } as any)).toEqual('unknown_grid')
+        expect(utils.isBrowserstackInfra(stagingConfig)).toBe(false)
     })
 
     it('does not treat non-bsstag hosts as browserstack for a named staging env', () => {
         process.env.BROWSERSTACK_STAGING_ENV = 'k8s'
         expect(utils.isStagingEnvBsstagHost('hub.bsstag.com.evil.example')).toBe(false)
-        expect(getCloudProvider({ options: { hostname: 'anything-saucelabs.com' } } as any)).toEqual('unknown_grid')
+        expect(utils.isStagingEnvBsstagHost('bsstag.com.attacker.io')).toBe(false)
+        expect(utils.isStagingEnvBsstagHost('evilbsstag.com')).toBe(false)
+        expect(utils.isStagingEnvBsstagHost('bsstag.com')).toBe(true)
+        expect(getCloudProvider({ options: { hostname: 'evilbsstag.com' } } as any)).toEqual('unknown_grid')
+    })
+
+    it('trims BROWSERSTACK_STAGING_ENV and matches the host case-insensitively', () => {
+        process.env.BROWSERSTACK_STAGING_ENV = ' k8s '
+        expect(utils.isStagingEnvBsstagHost('HUB-K8S.BSSTAG.COM')).toBe(true)
+        expect(getCloudProvider({ options: { hostname: 'Hub-K8s.BsStag.com' } } as any)).toEqual('browserstack')
+    })
+
+    it('treats a blank BROWSERSTACK_STAGING_ENV as unset', () => {
+        process.env.BROWSERSTACK_STAGING_ENV = '   '
+        expect(utils.isStagingEnvBsstagHost('hub-k8s.bsstag.com')).toBe(false)
+        expect(getCloudProvider({ options: { hostname: 'hub-k8s.bsstag.com' } } as any)).toEqual('unknown_grid')
     })
 })
 

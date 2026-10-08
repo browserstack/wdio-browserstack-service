@@ -248,7 +248,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // Ensure capabilities are not null in case of multiremote
 
         // Resolved here, after beforeSession's CLI bootstrap has applied the binary-supplied
-        // GRR/staging hosts (APIUtils.updateURLSForGRR); the defaults are the production hosts.
+        // GRR/staging hosts (APIUtils.updateURLSForGRR). Without the CLI, or when the config server
+        // returns the default grr_urls, these are the production hosts; for a GRR-enabled account
+        // they follow the regional api host the binary already uses to mark the session.
         this._sessionBaseUrl = `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate/sessions`
 
         if (this._isAppAutomate()) {
@@ -1345,7 +1347,14 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     headers
                 })
                 const res = response.clone()
-                browserUrl = (await res.json()).automation_session.browser_url
+                const session = (await res.json())?.automation_session
+                if (!session) {
+                    // e.g. a 401 when the classic (non-CLI) flow targets a named staging env, whose
+                    // session REST host is only known to the CLI; don't throw out of before().
+                    BStackLogger.debug(`Could not fetch Browserstack session URL (${response.status}) at ${sessionUrl}`)
+                    return
+                }
+                browserUrl = session.browser_url
             }
 
             if (!this._browser) {

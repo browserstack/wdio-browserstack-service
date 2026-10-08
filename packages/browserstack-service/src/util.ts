@@ -1146,14 +1146,16 @@ export function getLtsSessionId(): string {
  * SDK-6948: a named internal staging env (`BROWSERSTACK_STAGING_ENV` set to a bare token such as
  * `k8s`) serves its hub/cdp from `*.bsstag.com` (e.g. `hub-k8s.bsstag.com`). Treat those hosts as
  * BrowserStack so session marking and Automate <-> TRA linking work there. A dotted value (full
- * host) or an unset variable leaves the production-only host checks unchanged.
+ * host) or an unset/blank variable leaves the production-only host checks unchanged. The env value is
+ * trimmed and the hostname compared case-insensitively (shared rule across SDKs).
  */
 export function isStagingEnvBsstagHost(hostname: string): boolean {
-    const stagingEnv = process.env.BROWSERSTACK_STAGING_ENV
+    const stagingEnv = process.env.BROWSERSTACK_STAGING_ENV?.trim()
     if (!stagingEnv || stagingEnv.includes('.')) {
         return false
     }
-    return hostname === 'bsstag.com' || hostname.endsWith('.bsstag.com')
+    const host = hostname.toLowerCase()
+    return host === 'bsstag.com' || host.endsWith('.bsstag.com')
 }
 
 export function getCloudProvider(browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser): string {
