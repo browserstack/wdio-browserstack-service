@@ -1105,24 +1105,32 @@ describe('AutomateModule — jasmine session verdict', () => {
         expect(putBodies()).toEqual([['live.json', { status: 'failed', reason: 'beforeAll hook failure' }]])
     })
 
-    it('leaves a reloaded session to its onReload mark, but still names it', async () => {
-        (automateModule as any).sessionMap.set('old', { lastTestName: 'Suite A', testResults: new Map(), scenariosRan: 0 })
+    it('marks only the live session, leaving a reloaded one to its onReload mark', async () => {
+        (automateModule as any).sessionMap.set('old', { lastTestName: 'Suite A', appliedName: 'Suite A', testResults: new Map(), scenariosRan: 0 })
 
         await automateModule.onAfterExecute({ sessionVerdictInputs: inputs() })
 
-        expect(putBodies()).toEqual([
-            ['old.json', { name: 'Suite A' }],
-            ['live.json', { status: 'passed' }],
-        ])
+        expect(putBodies()).toEqual([['live.json', { status: 'passed' }]])
     })
 
-    it('marks no session status when no session is live', async () => {
+    it('marks nothing when no session is live', async () => {
         vi.mocked(AutomationFramework.getState).mockReturnValue('' as any)
-        ;(automateModule as any).sessionMap.set('old', { lastTestName: 'Suite A', testResults: new Map(), scenariosRan: 0 })
+        ;(automateModule as any).sessionMap.set('old', { lastTestName: 'Suite A', appliedName: 'Suite A', testResults: new Map(), scenariosRan: 0 })
 
         await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1 }) })
 
-        expect(putBodies()).toEqual([['old.json', { name: 'Suite A' }]])
+        expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('checks the driver only for an unregistered live session', async () => {
+        vi.mocked(isBrowserstackSession).mockReturnValue(false)
+
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs() })
+        expect(fetch).not.toHaveBeenCalled()
+
+        ;(automateModule as any).sessionMap.set('live', { lastTestName: 'Suite', appliedName: 'Suite', testResults: new Map(), scenariosRan: 0 })
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs() })
+        expect(putBodies()).toEqual([['live.json', { status: 'passed', name: 'Suite' }]])
     })
 
     it('reads ignoreHooksStatus from the worker\'s service options', async () => {

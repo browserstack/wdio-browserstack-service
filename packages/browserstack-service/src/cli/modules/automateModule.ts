@@ -398,7 +398,7 @@ export default class AutomateModule extends BaseModule {
             // The binary's config echo carries `testObservabilityOptions` empty, so read the worker's own service options
             const serviceOptions = BrowserstackCLI.getInstance().options as { testObservabilityOptions?: { ignoreHooksStatus?: boolean } }
             const ignoreHooksStatus = serviceOptions?.testObservabilityOptions?.ignoreHooksStatus === true
-            await this.markJasmineSessions(this.liveSessionId(), this.jasmineVerdict(args.sessionVerdictInputs, ignoreHooksStatus))
+            await this.markJasmineSession(this.liveSessionId(), this.jasmineVerdict(args.sessionVerdictInputs, ignoreHooksStatus))
             this.sessionMap.clear()
             return
         }
@@ -476,28 +476,23 @@ export default class AutomateModule extends BaseModule {
 
     /**
      * Jasmine: legacy `service.after()` marked only the live session, with the worker's status, the last
-     * name, and the test and hook failure reasons. A session nothing registered (a beforeAll failed before
-     * any spec ran) is still marked, and a reloaded one is left to the mark `onReload` already sent.
+     * name and the test and hook failure reasons. A session nothing registered (a beforeAll failed before
+     * any spec ran) is still marked; a reloaded one keeps the mark `onReload` already sent.
      */
-    private async markJasmineSessions(liveSessionId: string, verdict: SessionVerdict) {
+    private async markJasmineSession(liveSessionId: string, verdict: SessionVerdict) {
         const testContextOptions = this.config.testContextOptions as TestContextOptions
-        const auth = { user: this.config.userName as string, key: this.config.accessKey as string }
-        const sessionIds = new Set(this.sessionMap.keys())
-        if (liveSessionId && isBrowserstackSession(AutomationFramework.getDriver(AutomationFramework.getTrackedInstance()) as WebdriverIO.Browser)) {
-            sessionIds.add(liveSessionId)
+        if (!liveSessionId || testContextOptions.skipSessionStatus) {
+            return
         }
-
-        for (const sessionId of sessionIds) {
-            try {
-                await this.flushSessionName(sessionId)
-                if (!liveSessionId || sessionId !== liveSessionId || testContextOptions.skipSessionStatus) {
-                    continue
-                }
-                const name = testContextOptions.skipSessionName ? undefined : this.sessionMap.get(sessionId)?.lastTestName || undefined
-                await this.markSessionStatus(sessionId, verdict.status, verdict.reason, auth, name)
-            } catch (error) {
-                this.logger.error(`Failed to process session ${sessionId}: ${error}`)
-            }
+        const registered = this.sessionMap.get(liveSessionId)
+        if (!registered && !isBrowserstackSession(AutomationFramework.getDriver(AutomationFramework.getTrackedInstance()) as WebdriverIO.Browser)) {
+            return
+        }
+        const name = testContextOptions.skipSessionName ? undefined : registered?.lastTestName || undefined
+        try {
+            await this.markSessionStatus(liveSessionId, verdict.status, verdict.reason, { user: this.config.userName as string, key: this.config.accessKey as string }, name)
+        } catch (error) {
+            this.logger.error(`Failed to process session ${liveSessionId}: ${error}`)
         }
     }
 
