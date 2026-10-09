@@ -771,7 +771,8 @@ describe('before', () => {
     })
 
     it('should overwrite executeAsync command to route browserstack_executor via executeAsyncScript', async () => {
-        (browser as any).isBidi = true
+        (browser as any).isBidi = true;
+        (browser as any).executeAsync = vi.fn()
         const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
         service['_routeBidiExecutorToHttp'](browser)
 
@@ -788,6 +789,16 @@ describe('before', () => {
         const extraArg = { key: 'value' }
         await overwrite(originalExecuteAsync, 'arguments[0](1)', extraArg)
         expect(originalExecuteAsync).toHaveBeenCalledWith('arguments[0](1)', extraArg)
+    })
+
+    it('should skip the executeAsync overwrite when the browser has no executeAsync (webdriverio >= 10)', async () => {
+        (browser as any).isBidi = true
+        delete (browser as any).executeAsync
+        const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
+        service['_routeBidiExecutorToHttp'](browser)
+
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
+        expect(browser.overwriteCommand).not.toHaveBeenCalledWith('executeAsync', expect.any(Function))
     })
 
     it('should not overwrite execute command for non-BrowserStack BiDi sessions', async () => {

@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
+import { _getParamsForAppAccessibility, executeAccessibilityScript, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -565,11 +565,14 @@ export default class AccessibilityModule extends BaseModule {
                         BStackLogger.debug(util.format(results as string))
                         return (results as Record<string, unknown> | undefined)
                     }
-                    const results = await (browser as WebdriverIO.Browser).executeAsync(
+                    // webdriverio 10 removed executeAsync; the helper runs the callback-style
+                    // script through execute on every supported major.
+                    const results = await executeAccessibilityScript<Record<string, unknown> | undefined>(
+                        browser,
                         this.scriptInstance.performScan as string,
                         { 'method': commandName || '' }
                     )
-                    return (results as Record<string, unknown> | undefined)
+                    return results
                 } catch (err: unknown) {
                     this.logger.error('Accessibility Scan could not be performed : ' + err)
                     return
@@ -598,7 +601,7 @@ export default class AccessibilityModule extends BaseModule {
             }
 
             await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.SAVE_RESULTS, async () => {
-                const results: unknown = await (browser as WebdriverIO.Browser).executeAsync(accessibilityScripts.saveTestResults as string, dataForExtension)
+                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults as string, dataForExtension)
                 this.logger.debug(`save results : ${util.format(results as string)}`)
             })()
         } catch (error) {
@@ -617,7 +620,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results')
                     await this.performScanCli(browser)
-                    const results: Array<Record<string, unknown>> = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResults as string)
+                    const results = await executeAccessibilityScript<Array<Record<string, unknown>>>(browser, this.scriptInstance.getResults as string)
                     return results
                 } catch (error: unknown) {
                     this.logger.error('No accessibility results were found.')
@@ -639,7 +642,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results summary')
                     await this.performScanCli(browser)
-                    const summaryResults: Record<string, unknown> = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResultsSummary as string)
+                    const summaryResults = await executeAccessibilityScript<Record<string, unknown>>(browser, this.scriptInstance.getResultsSummary as string)
                     return summaryResults
                 } catch {
                     this.logger.error('No accessibility summary was found.')
