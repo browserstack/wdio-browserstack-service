@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, executeAccessibilityScript, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
+import { _getParamsForAppAccessibility, executeAccessibilityScript, formatString, overwriteCommandCompat, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -258,8 +258,8 @@ export default class AccessibilityModule extends BaseModule {
                     .filter((command) => command.name && command.class)
                     .forEach((command) => {
                         try {
-                            browser.overwriteCommand(
-                                // @ts-expect-error fix type
+                            overwriteCommandCompat(
+                                browser,
                                 command.name,
                                 this.commandWrapper.bind(this, command),
                                 command.class === 'Element'

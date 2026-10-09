@@ -38,7 +38,8 @@ vi.mock('../../../src/util.js', () => ({
     formatString: vi.fn().mockReturnValue('formatted-script'),
     o11yClassErrorHandler: vi.fn().mockImplementation((cls) => cls),
     isBrowserstackSession: vi.fn().mockReturnValue(true),
-    executeAccessibilityScript: vi.fn().mockResolvedValue([])
+    executeAccessibilityScript: vi.fn().mockResolvedValue([]),
+    overwriteCommandCompat: vi.fn((browser, name, fn, attachToElement) => browser.overwriteCommand(name, fn, attachToElement))
 }))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({

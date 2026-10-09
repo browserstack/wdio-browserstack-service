@@ -2528,3 +2528,41 @@ describe('getTestTags', () => {
         expect(utils.getTestTags(test as any)).toEqual(['@regression', '@smoke'])
     })
 })
+
+describe('overwriteCommandCompat', () => {
+    const fn = vi.fn()
+
+    it('passes the boolean through on webdriverio <= 9', () => {
+        const browser = { overwriteCommand: vi.fn() } as any
+        utils.overwriteCommandCompat(browser, 'click', fn, true)
+        expect(browser.overwriteCommand).toHaveBeenCalledTimes(1)
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('click', fn, true)
+    })
+
+    it('retries with an options object when webdriverio 10 rejects the boolean', () => {
+        const browser = {
+            overwriteCommand: vi.fn().mockImplementationOnce(() => {
+                throw new Error('Passing a boolean as the third argument to `overwriteCommand` was removed in WebdriverIO v10. Use `overwriteCommand(name, fn, { attachToElement: true })`.')
+            })
+        } as any
+        utils.overwriteCommandCompat(browser, 'click', fn, true)
+        expect(browser.overwriteCommand).toHaveBeenCalledTimes(2)
+        expect(browser.overwriteCommand).toHaveBeenLastCalledWith('click', fn, { attachToElement: true })
+    })
+
+    it('does not register a v10 element override for a command webdriverio 10 removed', () => {
+        const browser = {
+            overwriteCommand: vi.fn().mockImplementationOnce(() => {
+                throw new Error('Passing a boolean as the third argument to `overwriteCommand` was removed in WebdriverIO v10.')
+            })
+        } as any
+        expect(() => utils.overwriteCommandCompat(browser, 'touchAction', fn, true)).toThrow('no command to be overwritten: touchAction')
+        expect(browser.overwriteCommand).toHaveBeenCalledTimes(1)
+    })
+
+    it('rethrows any other overwriteCommand error', () => {
+        const browser = { overwriteCommand: vi.fn(() => { throw new Error('no such command') }) } as any
+        expect(() => utils.overwriteCommandCompat(browser, 'nope', fn, false)).toThrow('no such command')
+        expect(browser.overwriteCommand).toHaveBeenCalledTimes(1)
+    })
+})
