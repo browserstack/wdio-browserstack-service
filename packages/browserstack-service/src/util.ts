@@ -2119,6 +2119,34 @@ async function makeGetRequest(url: string, params: Record<string, any>, headers:
     return response
 }
 
+// Element commands webdriverio 10 dropped. An element override for a missing command is only
+// validated when the first element is created, which throws inside the user's test.
+const WDIO_V10_REMOVED_ELEMENT_COMMANDS = new Set(['touchAction'])
+
+/**
+ * `overwriteCommand(name, fn, attachToElement)` took a boolean up to webdriverio 9 and an
+ * options object from 10 on; the boolean form throws there, so retry with the object.
+ */
+export function overwriteCommandCompat(
+    browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser,
+    name: string,
+    fn: (...args: any[]) => unknown,
+    attachToElement: boolean
+) {
+    const overwrite = (browser as any).overwriteCommand.bind(browser) as (...args: unknown[]) => unknown
+    try {
+        return overwrite(name, fn, attachToElement)
+    } catch (err) {
+        if (!String(err).includes('removed in WebdriverIO v10')) {
+            throw err
+        }
+        if (attachToElement && WDIO_V10_REMOVED_ELEMENT_COMMANDS.has(name)) {
+            throw new Error(`overwriteCommand: no command to be overwritten: ${name}`)
+        }
+        return overwrite(name, fn, { attachToElement })
+    }
+}
+
 export async function executeAccessibilityScript<ReturnType>(
     browser: any,
     fnBody: string,

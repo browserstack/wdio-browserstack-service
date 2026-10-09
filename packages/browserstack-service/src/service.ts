@@ -1254,6 +1254,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
             return originalExecute(script, ...args)
         })
 
+        // executeAsync no longer exists on webdriverio >= 10
+        if (typeof (browser as unknown as { executeAsync?: unknown }).executeAsync !== 'function') {
+            return
+        }
         browser.overwriteCommand('executeAsync', async (originalExecuteAsync, script, ...args) => {
             if (isBrowserstackExecutorScript(script)) {
                 return browser.executeAsyncScript(script, args)
