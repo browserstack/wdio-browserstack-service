@@ -70,20 +70,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
     private _specsRan: boolean = false
     private _observability
     private _currentTest?: Frameworks.Test | ITestCaseHookParameter
-    /**
-     * CLI/gRPC path: map of test identity -> the test_uuid minted for it at
-     * INIT_TEST/PRE. The CLI mints a fresh uuid into a SINGLE mutable per-worker tracked instance
-     * (`trackWdioMochaInstance` overwrites `TestFramework.instances[ctxId]` wholesale on every
-     * INIT_TEST), and the gRPC test-finish reads the uuid from that single slot. When a test hangs
-     * past the mocha timeout, the NEXT test's INIT_TEST overwrites the slot before the hung test's
-     * afterTest POST fires, so the POST would carry the wrong (next) test's uuid and the binary
-     * would close the wrong test_run — orphaning the hung one. We snapshot each test's uuid here,
-     * keyed by the same identity the legacy `_tests` map uses, and at afterTest we restore the
-     * finishing test's minted uuid onto the tracked instance before the POST so it closes the
-     * correct test_run. The finishing identity is `originalTest` (already snapshotted pre-await by
-     * the testFnWrapper, so it is the timed-out runnable's own identity, not the next test's).
-     */
-    private _cliTestUuids: Map<string, string> = new Map()
     private _insightsHandler?: InsightsHandler
     private _accessibility
     private _accessibilityHandler?: AccessibilityHandler
@@ -616,17 +602,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
         if (BrowserstackCLI.getInstance().isRunning()) {
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test })
             const uuid = TestFramework.getState(TestFramework.getTrackedInstance(), TestFrameworkConstants.KEY_TEST_UUID)
-            // snapshot this test's freshly-minted uuid keyed by its identity, so a later
-            // afterTest can restore it even after a subsequent INIT_TEST has overwritten the single
-            // mutable tracked-instance slot. Keyed exactly like the legacy `_tests` map.
-            if (this._config.framework === 'mocha' && uuid) {
-                this._cliTestUuids.set(getUniqueIdentifier(test, this._config.framework), uuid as string)
-            }
             // this test reports its own finish (incl. runtime `this.skip()`), so the
             // skip reporter must never re-report it from onTestSkip
             markTestStarted(getUniqueIdentifier(test, this._config.framework))
             this._insightsHandler?.setTestData(test, uuid)
-            await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
+            await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle, bail: this._mochaBail })
             return
         }
 
@@ -653,87 +633,18 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
 
         if (BrowserstackCLI.getInstance().isRunning()) {
-            // the CLI test-finish reads test_uuid from the single mutable per-worker
-            // tracked instance, which a later INIT_TEST may have overwritten with the NEXT test's
-            // uuid. `test` is `originalTest` — already the correct (timed-out) identity, snapshotted
-            // pre-await by the testFnWrapper — so restore THAT test's minted uuid onto the tracked
-            // instance so the POST carries it and the binary closes the correct test_run. Without
-            // this, the finish would carry the next test's uuid and orphan the finishing one.
-            if (this._config.framework === 'mocha') {
-                const identifier = getUniqueIdentifier(test, this._config.framework)
-                const resolvedUuid = this._cliTestUuids.get(identifier)
-                if (resolvedUuid) {
-                    const trackedInstance = TestFramework.getTrackedInstance()
-                    if (trackedInstance) {
-                        TestFramework.setState(trackedInstance, TestFrameworkConstants.KEY_TEST_UUID, resolvedUuid)
-                    }
-                    // Clean up so the per-worker map does not grow across the run.
-                    this._cliTestUuids.delete(identifier)
-                }
-            }
+            // `test` is `originalTest`, the timed-out runnable's own identity; the CLI framework
+            // reports the finish against the instance that test started on, even when a later
+            // test has taken the tracked-instance slot, drops it if mocha's `fail` already
+            // reported it, and runs the bail cascade (SDK-7843)
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result: results })
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result: results, suiteTitle: this._suiteTitle })
-            await this.reportBailSkippedTests(test, results)
             return
         }
 
         await this._accessibilityHandler?.afterTest(this._suiteTitle, test)
         await this._insightsHandler?.afterTest(test, results)
         await this._percyHandler?.afterTest()
-    }
-
-    /**
-     * Whether this failure will be retried, in which case mocha has not dropped anything yet and
-     * the tests after it are still going to run.
-     *
-     * `results.retries` only tracks wdio's spec-file retries — `@wdio/utils` builds it as
-     * `{ attempts: 0, limit: repeatTest }` and `@wdio/mocha-framework` never feeds `mochaOpts.retries`
-     * into it, so under mocha-level retries it stays `{0, 0}` and tells us nothing. Read mocha's own
-     * runnable state for that case, otherwise the cascade fires on the first attempt and reports
-     * tests as skipped that the retry then actually runs.
-     */
-    private hasRetryPending(test: Frameworks.Test, results: Frameworks.TestResult): boolean {
-        const mochaTest = test.ctx?.test as { currentRetry?: () => number, retries?: () => number } | undefined
-        if (typeof mochaTest?.currentRetry === 'function' && typeof mochaTest.retries === 'function') {
-            if (mochaTest.currentRetry() < mochaTest.retries()) {
-                return true
-            }
-        }
-        return Boolean(results.retries && results.retries.attempts < results.retries.limit)
-    }
-
-    /**
-     * mocha's `bail` aborts the run on the first failure, so every test the spec had not reached
-     * yet is dropped without emitting any event and never appears on the dashboard. Report them
-     * as skipped — same cascade the failed-hook path uses, from the spec's root suite so sibling
-     * describes are covered too (bail kills the whole spec, not just the failing describe).
-     *
-     * The root can span more than one file when specs are grouped — `MochaAdapter` adds every spec
-     * it is handed to one mocha instance. Cascading across them is still correct: bail aborts that
-     * whole runner, so those tests do not run either.
-     */
-    private async reportBailSkippedTests(test: Frameworks.Test, results: Frameworks.TestResult) {
-        if (!this._mochaBail || results.passed || results.skipped) {
-            return
-        }
-        try {
-            // inside the boundary: hasRetryPending reaches into mocha's own runnable, which this
-            // SDK does not own
-            if (this.hasRetryPending(test, results)) {
-                return
-            }
-            const framework = BrowserstackCLI.getInstance().getTestFramework()
-            let suite = test.ctx?.test?.parent
-            if (!framework || !suite) {
-                return
-            }
-            while (suite.parent) {
-                suite = suite.parent
-            }
-            await reportSuiteSkipped(framework, suite)
-        } catch (err) {
-            BStackLogger.debug(`Failed reporting bail-skipped tests: ${err}`)
-        }
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_HOOK, { hookType: 'after' })
@@ -763,6 +674,14 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     await drainSkipReports()
                 } catch (skipDrainErr) {
                     BStackLogger.debug(`Exception draining skip reports in after(): ${util.format(skipDrainErr)}`)
+                }
+                // SDK-7843: a test that timed out is reported when mocha failed it, and that report
+                // can still be in flight; settle it before the flush below and before EXECUTE/POST,
+                // where the session status is marked from the results recorded so far
+                try {
+                    await BrowserstackCLI.getInstance().getTestFramework()?.settleTestFinishes()
+                } catch (settleErr) {
+                    BStackLogger.debug(`Exception settling test finishes in after(): ${util.format(settleErr)}`)
                 }
                 // Flush a test-finish event deferred past the after-each hook window — the last
                 // test of the worker has no next-test boundary to trigger the flush. Must run
@@ -850,12 +769,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
             } catch (sweepErr) {
                 BStackLogger.debug('Exception in sweepUnfinished during after(): ' + util.format(sweepErr))
             }
-            // The sweep closes the _tests entries, but the CLI uuid snapshots (_cliTestUuids) are
-            // only drained in afterTest — the callback that never fires for a test the sweep just
-            // handled (e.g. one that timed out). Clear them here at per-worker teardown so stale
-            // snapshots cannot leak across the worker. Safe to clear: this runs after the sweep and
-            // no further afterTest will consume them in this worker.
-            this._cliTestUuids.clear()
 
             // Track Listener cleanup
             PerformanceTester.start(EVENTS.SDK_LISTENER_WORKER_END)

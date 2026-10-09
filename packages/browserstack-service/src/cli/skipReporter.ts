@@ -128,7 +128,8 @@ export function reportSkippedTest(
     const queued: QueuedSkip = { framework, test, result, suiteTitle }
 
     // SDK-7493: only the DETACHED caller needs deferring. `immediate` is for callers wdio
-    // awaits — the hook cascade (afterHook) and the bail cascade (afterTest). Those never had
+    // awaits — the hook cascade (afterHook) and the bail cascade (afterTest; when the reporter's
+    // `fail` reported the failure, from service.after() instead, SDK-7843). Those never had
     // the interleave, because wdio holds the lifecycle open until they resolve, so nothing else
     // can claim the tracked slot underneath them. Deferring those too would be a behaviour
     // change for no benefit: their skips would move to end-of-run and their reports would no
@@ -158,7 +159,8 @@ export function reportSkippedTest(
  * suite — report each state-undefined test as skipped, recursing into nested describes.
  *
  * Reports IMMEDIATELY (SDK-7493): every caller of this — the failed-hook cascade in
- * `afterHook` and the bail cascade in `afterTest` — is awaited by wdio, so these reports
+ * `afterHook` and the bail cascade in `afterTest` (or in `after()`, for a failure the reporter's
+ * `fail` reported, SDK-7843) — is awaited by wdio, so these reports
  * cannot interleave with a live test the way the un-awaited `onTestSkip` path could. They
  * belong to the hook/test being reported, so they must not slide to end-of-run.
  */

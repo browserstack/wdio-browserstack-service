@@ -12,6 +12,7 @@ import { BStackLogger as logger } from '../cliLogger.js'
 import type { Frameworks } from '@wdio/types'
 import { getMochaTestHierarchy, getTestTags, getUniqueIdentifier, isUndefined, removeAnsiColors } from '../../util.js'
 import { TEST_ANALYTICS_ID } from '../../constants.js'
+import { reportSuiteSkipped } from '../skipReporter.js'
 
 /**
  * File-path pair sent with every test/hook event.
@@ -31,9 +32,88 @@ const resolveTestFilePaths = (filename: string | undefined) => ({
         : undefined,
 })
 
+/** mocha's live runnable of a test attempt; mocha sets `state` before it emits `fail`. */
+interface MochaRunnable {
+    state?: string
+    timedOut?: boolean
+    duration?: number
+    timeout?: () => number
+    currentRetry?: () => number
+    retries?: () => number
+    parent?: MochaSuite
+}
+
+interface MochaSuite {
+    parent?: MochaSuite
+    tests?: unknown[]
+    suites?: unknown[]
+}
+
+/** A mocha test attempt that has started (TEST/PRE) and not finished yet (SDK-7843). */
+interface TestAttempt {
+    instance: TestFrameworkInstance
+    test: Frameworks.Test
+    suiteTitle?: unknown
+    runnable?: MochaRunnable
+    /** mocha's `bail`: a failure drops every test the spec has not reached yet. */
+    bail?: boolean
+    /** Who is reporting this attempt's finish: wdio's afterTest, or the reporter's `fail`. */
+    finishingFrom?: 'afterTest' | 'fail'
+    /** Its TEST/POST has been reported. */
+    finished?: boolean
+}
+
+/** The failure mocha recorded on a runnable (it keeps no error object on it). */
+const failureFromRunnable = (runnable: MochaRunnable): Frameworks.TestResult => {
+    const ms = typeof runnable.timeout === 'function' ? runnable.timeout() : undefined
+    const error = new Error(runnable.timedOut && ms ? `Timeout of ${ms}ms exceeded.` : 'Test failed before its afterTest ran.')
+    return { passed: false, error, duration: runnable.duration ?? 0, retries: { attempts: 0, limit: 0 }, exception: error.message, status: 'failed' }
+}
+
 export default class WdioMochaTestFramework extends TestFramework {
     static KEY_HOOK_LAST_STARTED = 'test_hook_last_started'
     static KEY_HOOK_LAST_FINISHED = 'test_hook_last_finished'
+
+    /**
+     * SDK-7843: mocha test attempts that started and have not finished, keyed per attempt.
+     *
+     * wdio runs `afterTest` inside the test's own runnable, after the body. When a test hits
+     * mocha's timeout, mocha fails it (and emits `fail` to reporters) while the body and its
+     * `afterTest` are still pending; mocha then moves on, and with `bail` (or on the worker's last
+     * test) wdio runs `after()` before that `afterTest`. So a test's finish can arrive from the
+     * reporter's `fail`, from a late `afterTest` while another test holds the tracked-instance
+     * slot, or not at all before the session status is marked. Each attempt keeps the instance it
+     * started on, so its finish is reported against its own test run, once.
+     */
+    private openAttempts = new Set<TestAttempt>()
+    /**
+     * The latest attempt started under each `attemptKey`. The key holds only the immediate parent's
+     * title, so two tests in a worker can share it; the later one's TEST/PRE replaces the entry.
+     */
+    private latestAttemptByKey = new Map<string, TestAttempt>()
+    /**
+     * Attempts by the test's body. wdio hands beforeTest and afterTest separate copies of the mocha
+     * test (`{ ...context.test }`), but both carry its `fn`, so afterTest finds its own attempt even
+     * when another test with the same key has started since.
+     */
+    private attemptsByFn = new WeakMap<object, Map<number, TestAttempt>>()
+    /** The attempt a source's LOG_REPORT/POST resolved; its TEST/POST passes the same `test` object. */
+    private resolvedFinishes = new WeakMap<object, TestAttempt>()
+    private pendingFinishes = new Set<Promise<void>>()
+    /** Bail cascades of failures the reporter's `fail` reported; settleTestFinishes() runs them. */
+    private owedBailCascades: Array<{ attempt: TestAttempt, result: Frameworks.TestResult }> = []
+
+    /** One attempt of a test: mocha retries a test as a new runnable with `_currentRetry` + 1. */
+    static attemptKey(test: Frameworks.Test): string {
+        const retry = (test as { _currentRetry?: number })._currentRetry
+        const identifier = getUniqueIdentifier(test, 'mocha')
+        return retry ? `${identifier} (retry ${retry})` : identifier
+    }
+
+    private static testBody(test: Frameworks.Test): object | undefined {
+        const fn = (test as { fn?: unknown }).fn
+        return typeof fn === 'function' ? fn : undefined
+    }
 
     /**
    * Constructor for the TestFramework
@@ -52,13 +132,51 @@ export default class WdioMochaTestFramework extends TestFramework {
      * @param {*} args
   */
     async trackEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown> = {}) {
+        if (args.fromMochaFail) {
+            // the reporter's `fail` (SDK-7843): wdio does not await reporter callbacks, so keep the
+            // send visible to settleTestFinishes()
+            const work = this.trackTestEvent(testFrameworkState, hookState, args).catch((err: unknown) => {
+                logger.debug(`trackEvent: reporting a failed test failed: ${err}`)
+            })
+            this.pendingFinishes.add(work)
+            work.finally(() => this.pendingFinishes.delete(work))
+            return work
+        }
+        await this.trackTestEvent(testFrameworkState, hookState, args)
+    }
+
+    private async trackTestEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
         logger.info(`trackEvent: testFrameworkState=${testFrameworkState} hookState=${hookState}`)
+        // before any await: the reporter's `fail` must resolve to the attempt mocha just failed,
+        // before mocha starts the next test (it defers that with setImmediate)
+        const attempt = this.resolveTestAttempt(testFrameworkState, hookState, args)
         await super.trackEvent(testFrameworkState, hookState, args)
 
-        const instance = this.resolveInstance(testFrameworkState, hookState, args)
+        // Console output from wdio's `before` hook (after the service has patched console)
+        // arrives before mocha's first hook, so there is no test or hook to attach it to yet and
+        // resolveInstance cannot create one for LOG. The classic path drops such a log silently; do the same instead of
+        // printing an ERROR on every worker (SDK-7843).
+        if (testFrameworkState === TestFrameworkState.LOG && !TestFramework.getTrackedInstance()) {
+            logger.debug(`trackEvent: no test or hook started yet, dropping log for testFrameworkState=${testFrameworkState} hookState=${hookState}`)
+            return
+        }
+
+        if (attempt === null) {
+            return
+        }
+        let instance: TestFrameworkInstance | null
+        if (attempt) {
+            instance = attempt.instance
+            this.updateInstanceState(instance, testFrameworkState, hookState)
+        } else {
+            instance = this.resolveInstance(testFrameworkState, hookState, args)
+        }
         if (instance === null) {
             logger.error(`trackEvent: instance not found for testFrameworkState=${testFrameworkState} hookState=${hookState}`)
             return
+        }
+        if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.PRE && args.test) {
+            this.openTestAttempt(instance, args)
         }
 
         try {
@@ -112,6 +230,172 @@ export default class WdioMochaTestFramework extends TestFramework {
         }
         args.instance = instance
         await this.runHooks(instance, testFrameworkState, hookState, args)
+        if (attempt && testFrameworkState === TestFrameworkState.TEST) {
+            if (args.fromMochaFail) {
+                // wdio does not await the reporter's `fail`, and mocha still runs the failed test's
+                // after-hooks: the cascade's skip reports would claim the tracked slot under them
+                this.owedBailCascades.push({ attempt, result: args.result as Frameworks.TestResult })
+            } else {
+                await this.reportBailSkippedTests(attempt, args.result as Frameworks.TestResult)
+            }
+        }
+    }
+
+    /**
+     * Whether this failure will be retried, in which case mocha has not dropped anything yet and
+     * the tests after it are still going to run.
+     *
+     * `results.retries` only tracks wdio's spec-file retries — `@wdio/utils` builds it as
+     * `{ attempts: 0, limit: repeatTest }` and `@wdio/mocha-framework` never feeds `mochaOpts.retries`
+     * into it, so under mocha-level retries it stays `{0, 0}` and tells us nothing. Read mocha's own
+     * runnable state for that case, otherwise the cascade fires on the first attempt and reports
+     * tests as skipped that the retry then actually runs. The runnable is the one captured at
+     * TEST/PRE: once mocha fails a timed-out test it moves on, and the suite's shared
+     * `ctx.test` then points at a hook, which inherits the suite's `retries` (SDK-7843).
+     */
+    private hasRetryPending(runnable: MochaRunnable | undefined, results: Frameworks.TestResult): boolean {
+        if (typeof runnable?.currentRetry === 'function' && typeof runnable.retries === 'function') {
+            if (runnable.currentRetry() < runnable.retries()) {
+                return true
+            }
+        }
+        return Boolean(results.retries && results.retries.attempts < results.retries.limit)
+    }
+
+    /**
+     * mocha's `bail` aborts the run on the first failure, so every test the spec had not reached
+     * yet is dropped without emitting any event and never appears on the dashboard. Report them
+     * as skipped — same cascade the failed-hook path uses, from the spec's root suite so sibling
+     * describes are covered too (bail kills the whole spec, not just the failing describe).
+     *
+     * The root can span more than one file when specs are grouped — `MochaAdapter` adds every spec
+     * it is handed to one mocha instance. Cascading across them is still correct: bail aborts that
+     * whole runner, so those tests do not run either.
+     *
+     * Runs as part of the failed test's finish when that comes from afterTest, which wdio awaits.
+     * When it comes from the reporter's `fail`, which wdio does not await, settleTestFinishes()
+     * runs it instead: bail has already aborted the spec, and that still lands before the session
+     * status is marked and the last test finish is flushed (SDK-7843).
+     */
+    private async reportBailSkippedTests(attempt: TestAttempt, results: Frameworks.TestResult | undefined) {
+        if (!attempt.bail || !results || results.passed || results.skipped) {
+            return
+        }
+        try {
+            // inside the boundary: hasRetryPending reaches into mocha's own runnable, which this
+            // SDK does not own
+            if (this.hasRetryPending(attempt.runnable, results)) {
+                return
+            }
+            let suite = attempt.runnable?.parent
+            if (!suite) {
+                return
+            }
+            while (suite.parent) {
+                suite = suite.parent
+            }
+            await reportSuiteSkipped(this, suite)
+        } catch (err) {
+            logger.debug(`Failed reporting bail-skipped tests: ${err}`)
+        }
+    }
+
+    /** TEST/PRE: this attempt's finish is owed from here on, against this instance. */
+    private openTestAttempt(instance: TestFrameworkInstance, args: Record<string, unknown>) {
+        const test = args.test as Frameworks.Test
+        const attempt: TestAttempt = {
+            instance,
+            test,
+            suiteTitle: args.suiteTitle,
+            runnable: test.ctx?.test as MochaRunnable | undefined,
+            bail: args.bail === true
+        }
+        this.openAttempts.add(attempt)
+        this.latestAttemptByKey.set(WdioMochaTestFramework.attemptKey(test), attempt)
+        const body = WdioMochaTestFramework.testBody(test)
+        if (body) {
+            const byRetry = this.attemptsByFn.get(body) ?? new Map<number, TestAttempt>()
+            byRetry.set((test as { _currentRetry?: number })._currentRetry ?? 0, attempt)
+            this.attemptsByFn.set(body, byRetry)
+        }
+    }
+
+    /**
+     * The attempt a finish belongs to. wdio's afterTest carries the test's body, which identifies
+     * it exactly. The reporter's `fail` has only the title and parent: it is resolved (before any
+     * await, see trackTestEvent) to the latest attempt with that key, which is the one mocha just
+     * failed, and pinned so the same source's TEST/POST cannot land on a later same-named test.
+     */
+    private findTestAttempt(test: Frameworks.Test): TestAttempt | undefined {
+        const resolved = this.resolvedFinishes.get(test)
+        if (resolved) {
+            return resolved
+        }
+        const body = WdioMochaTestFramework.testBody(test)
+        if (body) {
+            return this.attemptsByFn.get(body)?.get((test as { _currentRetry?: number })._currentRetry ?? 0)
+        }
+        return this.latestAttemptByKey.get(WdioMochaTestFramework.attemptKey(test))
+    }
+
+    /**
+     * LOG_REPORT/POST and TEST/POST of a mocha test: the attempt to report against. Returns
+     * undefined for any other event, and for a test this framework never saw start (resolved as
+     * before); null to drop the event, when the attempt is already finished or another source is
+     * finishing it.
+     */
+    private resolveTestAttempt(testFrameworkState: State, hookState: State, args: Record<string, unknown>): TestAttempt | null | undefined {
+        const isFinish = hookState === HookState.POST && (testFrameworkState === TestFrameworkState.TEST || testFrameworkState === TestFrameworkState.LOG_REPORT)
+        if (!isFinish || !args.test) {
+            return undefined
+        }
+        const test = args.test as Frameworks.Test
+        const source = args.fromMochaFail ? 'fail' : 'afterTest'
+        const attempt = this.findTestAttempt(test)
+        if (!attempt) {
+            // the reporter's `fail` for a hook, or for a test that never started
+            return source === 'fail' ? null : undefined
+        }
+        if (attempt.finished || (attempt.finishingFrom && attempt.finishingFrom !== source)) {
+            logger.debug(`trackEvent: '${WdioMochaTestFramework.attemptKey(test)}' was already reported, dropping ${testFrameworkState} ${hookState} from ${source}`)
+            return null
+        }
+        attempt.finishingFrom = source
+        this.resolvedFinishes.set(test, attempt)
+        args.suiteTitle ??= attempt.suiteTitle
+        // a timed-out test whose body finished late: wdio's result says only whether the body
+        // threw, not that mocha already failed it
+        if (attempt.runnable?.state === 'failed' && (args.result as Frameworks.TestResult | undefined)?.passed) {
+            args.result = failureFromRunnable(attempt.runnable)
+        }
+        if (testFrameworkState === TestFrameworkState.TEST) {
+            attempt.finished = true
+            this.openAttempts.delete(attempt)
+        }
+        return attempt
+    }
+
+    /**
+     * Before the session status is marked and the last test finish is flushed: finish every attempt
+     * mocha already failed that nothing reported (no reporter is registered when Test Reporting,
+     * Accessibility and Percy are all off), then wait for every finish the reporter started, then
+     * run the bail cascades those finishes owe.
+     */
+    async settleTestFinishes(): Promise<void> {
+        for (const attempt of [...this.openAttempts]) {
+            if (attempt.runnable?.state === 'failed' && !attempt.finishingFrom) {
+                const result = failureFromRunnable(attempt.runnable)
+                this.resolvedFinishes.set(attempt.test, attempt)
+                await this.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: attempt.test, result, fromMochaFail: true })
+                await this.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: attempt.test, result, suiteTitle: attempt.suiteTitle, fromMochaFail: true })
+            }
+        }
+        while (this.pendingFinishes.size > 0) {
+            await Promise.all([...this.pendingFinishes])
+        }
+        for (const { attempt, result } of this.owedBailCascades.splice(0)) {
+            await this.reportBailSkippedTests(attempt, result)
+        }
     }
 
     /**
