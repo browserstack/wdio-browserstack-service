@@ -116,7 +116,7 @@ describe('AutomateModule', () => {
         // Create new instance to test observer registration (constructor registers the observers)
         new AutomateModule(mockConfig)
 
-        expect(TestFramework.registerObserver).toHaveBeenCalledTimes(5)
+        expect(TestFramework.registerObserver).toHaveBeenCalledTimes(9)
         expect(TestFramework.registerObserver).toHaveBeenCalledWith(
             TestFrameworkState.TEST,
             HookState.PRE,
@@ -139,6 +139,16 @@ describe('AutomateModule', () => {
         )
         expect(TestFramework.registerObserver).toHaveBeenCalledWith(
             TestFrameworkState.AFTER_ALL,
+            HookState.POST,
+            expect.any(Function)
+        )
+        expect(TestFramework.registerObserver).toHaveBeenCalledWith(
+            TestFrameworkState.BEFORE_EACH,
+            HookState.POST,
+            expect.any(Function)
+        )
+        expect(TestFramework.registerObserver).toHaveBeenCalledWith(
+            TestFrameworkState.AFTER_EACH,
             HookState.POST,
             expect.any(Function)
         )
@@ -857,7 +867,7 @@ describe('AutomateModule — session marking', () => {
             expect(statusBody().reason).toContain('BEFORE_ALL for Login')
         })
 
-        it('leaves wdio_mocha untouched — the identical failure records nothing', async () => {
+        it('does not record a mocha hook — mocha goes through onMochaHookEnd', async () => {
             const mod = newModule()
             await mod.onBuildLevelHookEnd('BEFORE_ALL', { instance: mochaInstance, result: failing })
             await mod.onAfterExecute()
@@ -899,6 +909,144 @@ describe('AutomateModule — session marking', () => {
 
             expect(fetch).not.toHaveBeenCalled()
         })
+    })
+})
+
+describe('AutomateModule — mocha hook failures reach the session verdict', () => {
+    const failing = { passed: false, error: new Error('before hook boom') }
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as never)
+        vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) =>
+            key === 'framework_session_id' ? 'sess-1' : ({} as never))
+        vi.mocked(TestFramework.getState).mockImplementation((instance, key) => stateFor(instance, key))
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(fetch).mockResolvedValue({ json: async () => ({ ok: true }) } as never)
+    })
+
+    const runTest = (mod: AutomateModule, result: Record<string, unknown>) => mod.onAfterTest({
+        instance: mochaInstance,
+        result,
+        test: { title: 'a test', parent: 'Suite' },
+        suiteTitle: 'Suite'
+    })
+
+    const statusBody = () => {
+        const call = vi.mocked(fetch).mock.calls.find(([, o]) =>
+            JSON.parse((o as { body: string }).body).status !== undefined)
+
+        return call ? JSON.parse((call[1] as { body: string }).body) : undefined
+    }
+
+    // The aborted tests arrive as skipped, which onAfterTest counts as passed.
+    it('marks the session failed when a before-all hook fails and its tests are skipped', async () => {
+        const mod = newModule()
+        await mod.onMochaHookEnd('BEFORE_ALL', { instance: mochaInstance, result: failing })
+        await runTest(mod, { passed: false, skipped: true })
+        await runTest(mod, { passed: false, skipped: true })
+        await mod.onAfterExecute()
+
+        expect(statusBody().status).toBe('failed')
+        expect(statusBody().reason).toBe('before hook boom')
+    })
+
+    it.each(['BEFORE_EACH', 'AFTER_EACH', 'AFTER_ALL'])('marks the session failed when a %s hook fails after a passing test', async (hookKey) => {
+        const mod = newModule()
+        await runTest(mod, { passed: true })
+        await mod.onMochaHookEnd(hookKey, { instance: mochaInstance, result: failing })
+        await mod.onAfterExecute()
+
+        expect(statusBody().status).toBe('failed')
+    })
+
+    it('does not fail the session for a this.skip() hook', async () => {
+        const mod = newModule()
+        await runTest(mod, { passed: true })
+        await mod.onMochaHookEnd('BEFORE_EACH', { instance: mochaInstance, result: { passed: false, skipped: true } })
+        await mod.onMochaHookEnd('BEFORE_EACH', { instance: mochaInstance, result: { passed: false, error: new Error('sync skip; aborting execution') } })
+        await mod.onAfterExecute()
+
+        expect(statusBody()).toEqual({ status: 'passed' })
+    })
+
+    it('records nothing when the hook passed', async () => {
+        const mod = newModule()
+        await runTest(mod, { passed: true })
+        await mod.onMochaHookEnd('BEFORE_ALL', { instance: mochaInstance, result: { passed: true } })
+        await mod.onAfterExecute()
+
+        expect(statusBody()).toEqual({ status: 'passed' })
+    })
+
+    it('ignores cucumber hooks — those go through onBuildLevelHookEnd', async () => {
+        const mod = newModule()
+        await mod.onMochaHookEnd('BEFORE_ALL', { instance: cucumberInstance, result: failing })
+        await mod.onAfterExecute()
+
+        expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('keeps the session PASSED under ignoreHooksStatus once a test has run', async () => {
+        const mod = newModule()
+        await runTest(mod, { passed: true })
+        await mod.onMochaHookEnd('AFTER_EACH', { instance: mochaInstance, result: failing, ignoreHooksStatus: true })
+        await mod.onAfterExecute()
+
+        expect(statusBody()).toEqual({ status: 'passed' })
+    })
+
+    // Skipped tests are not "ran" — same flag as above, opposite verdict.
+    it('marks the session FAILED under ignoreHooksStatus when every test was aborted', async () => {
+        const mod = newModule()
+        await mod.onMochaHookEnd('BEFORE_ALL', { instance: mochaInstance, result: failing, ignoreHooksStatus: true })
+        await runTest(mod, { passed: false, skipped: true })
+        await mod.onAfterExecute()
+
+        expect(statusBody().status).toBe('failed')
+    })
+
+    it('still fails a test failure under ignoreHooksStatus', async () => {
+        const mod = newModule()
+        await runTest(mod, { passed: false, error: new Error('assertion') })
+        await mod.onMochaHookEnd('AFTER_EACH', { instance: mochaInstance, result: failing, ignoreHooksStatus: true })
+        await mod.onAfterExecute()
+
+        expect(statusBody().status).toBe('failed')
+        expect(statusBody().reason).toBe('assertion')
+    })
+
+    it('respects skipSessionStatus', async () => {
+        const mod = newModule({ testContextOptions: { skipSessionName: false, skipSessionStatus: true } })
+        await mod.onMochaHookEnd('BEFORE_ALL', { instance: mochaInstance, result: failing })
+        await mod.onAfterExecute()
+
+        expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('does not mark a non-BrowserStack session', async () => {
+        vi.mocked(isBrowserstackSession).mockReturnValue(false)
+        const mod = newModule()
+        await mod.onMochaHookEnd('BEFORE_ALL', { instance: mochaInstance, result: failing })
+        await mod.onAfterExecute()
+
+        expect(fetch).not.toHaveBeenCalled()
+    })
+
+    // Legacy `_specsRan` is worker-scoped and survives reloadSession.
+    it('keeps a post-reload session PASSED under ignoreHooksStatus when a test ran on an earlier session', async () => {
+        const mod = newModule()
+        await runTest(mod, { passed: true })
+        vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) =>
+            key === 'framework_session_id' ? 'sess-2' : ({} as never))
+        await mod.onMochaHookEnd('AFTER_ALL', { instance: mochaInstance, result: failing, ignoreHooksStatus: true })
+        await mod.onAfterExecute()
+
+        const bodies = vi.mocked(fetch).mock.calls
+            .filter(([url]) => String(url).includes('sess-2'))
+            .map(([, o]) => JSON.parse((o as { body: string }).body))
+            .filter(b => b.status !== undefined)
+        expect(bodies).toEqual([{ status: 'passed' }])
     })
 })
 
