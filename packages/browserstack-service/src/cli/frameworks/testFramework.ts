@@ -85,6 +85,13 @@ export default class TestFramework {
     }
 
     /**
+   * Wait for test finishes that are still being reported. A module calls this before it reads the
+   * final results of the run (session status, the last deferred test finish).
+   * @returns {Promise<void>}
+   */
+    async settleTestFinishes(): Promise<void> {}
+
+    /**
    * run test hooks
    * @param {TestFrameworkInstance} instance
    * @param {TestFrameworkState} testFrameworkState

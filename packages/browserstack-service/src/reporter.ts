@@ -5,6 +5,8 @@ import WDIOReporter from '@wdio/reporter'
 import type { Options, Frameworks } from '@wdio/types'
 import { BrowserstackCLI } from './cli/index.js'
 import { reportSkippedTest, resolveSpecFile } from './cli/skipReporter.js'
+import { TestFrameworkState } from './cli/states/testFrameworkState.js'
+import { HookState } from './cli/states/hookState.js'
 import * as url from 'node:url'
 
 import { v4 as uuidv4 } from 'uuid'
@@ -142,6 +144,37 @@ class _TestReporter extends WDIOReporter {
         default:
             return false
         }
+    }
+
+    /**
+     * SDK-7843: mocha emits `fail` for a timed-out test while its body and wdio's `afterTest` are
+     * still pending, and with `bail` (or on the worker's last test) `after()` runs before that
+     * `afterTest`. On the CLI flow, send the test's finish now, with mocha's own result, so it is
+     * recorded before the session status is marked. The CLI framework reports each test once, so
+     * this is dropped for a normal failure, which afterTest has already reported.
+     */
+    async onTestFail(testStats: TestStats) {
+        if (this._config?.framework !== 'mocha' || !BrowserstackCLI.getInstance().isRunning()) {
+            return
+        }
+        const framework = BrowserstackCLI.getInstance().getTestFramework()
+        if (!framework) {
+            return
+        }
+        // `retries` is this test's retry count so far, i.e. the attempt mocha just failed
+        const attempts = testStats.retries ?? 0
+        const stats = testStats as TestStats & { parent?: string, file?: string }
+        const test = { title: stats.title, parent: stats.parent, fullTitle: stats.fullTitle, file: stats.file, _currentRetry: attempts } as unknown as Frameworks.Test
+        const result: Frameworks.TestResult = {
+            passed: false,
+            error: testStats.error,
+            duration: testStats._duration,
+            retries: { attempts, limit: attempts },
+            exception: testStats.error?.message ?? '',
+            status: 'failed'
+        }
+        await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result, fromMochaFail: true })
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result, fromMochaFail: true })
     }
 
     async onTestEnd(testStats: TestStats) {

@@ -541,6 +541,14 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
         try {
             if (BrowserstackCLI.getInstance().isRunning()) {
+                // SDK-7843: a test that timed out is reported when mocha failed it, and that report
+                // can still be in flight; settle it before EXECUTE/POST, where the session status is
+                // marked from the results recorded so far
+                try {
+                    await BrowserstackCLI.getInstance().getTestFramework()?.settleTestFinishes()
+                } catch (settleErr) {
+                    BStackLogger.debug(`Exception settling test finishes in after(): ${util.format(settleErr)}`)
+                }
                 await BrowserstackCLI.getInstance().getAutomationFramework()!.trackEvent(AutomationFrameworkState.EXECUTE, HookState.POST, {})
             }
             const { preferScenarioName, setSessionName, setSessionStatus } = this._options
