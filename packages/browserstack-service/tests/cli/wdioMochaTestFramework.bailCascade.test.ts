@@ -6,6 +6,7 @@ import WdioMochaTestFramework from '../../src/cli/frameworks/wdioMochaTestFramew
 import TestFramework from '../../src/cli/frameworks/testFramework.js'
 import { TestFrameworkState } from '../../src/cli/states/testFrameworkState.js'
 import { HookState } from '../../src/cli/states/hookState.js'
+import { TestFrameworkConstants } from '../../src/cli/frameworks/constants/testFrameworkConstants.js'
 import { BStackLogger as cliLogger } from '../../src/cli/cliLogger.js'
 
 vi.spyOn(bstackLogger.BStackLogger, 'logToFile').mockImplementation(() => {})
@@ -133,8 +134,28 @@ describe('mocha bail skip cascade (SDK-7063), run by the CLI framework with the 
 
         await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: failing, result: { passed: false }, fromMochaFail: true })
         await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: failing, result: { passed: false }, fromMochaFail: true })
+        await framework.settleTestFinishes()
 
         expect(skippedTitles()).toEqual(['bail9 A3', 'bail9 B1'])
+    })
+
+    it('runs the cascade for a failure reported by mocha\'s `fail` from settle, not under the test\'s after-hooks (SDK-7843)', async () => {
+        const { failing } = buildTree('bail10')
+        await framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test: failing })
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test: failing, suiteTitle: 'suite', bail: true })
+        const failedUuid = TestFramework.getState(TestFramework.getTrackedInstance(), TestFrameworkConstants.KEY_TEST_UUID)
+        trackEvent.mockClear()
+
+        // the reporter's `fail`, which wdio does not await; mocha then runs the test's afterEach
+        await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: failing, result: { passed: false }, fromMochaFail: true })
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: failing, result: { passed: false }, fromMochaFail: true })
+        await framework.trackEvent(TestFrameworkState.AFTER_EACH, HookState.PRE, { test: failing })
+
+        expect(skippedTitles()).toEqual([])
+        expect(TestFramework.getState(TestFramework.getTrackedInstance(), TestFrameworkConstants.KEY_TEST_UUID)).toBe(failedUuid)
+
+        await framework.settleTestFinishes()
+        expect(skippedTitles()).toEqual(['bail10 A3', 'bail10 B1'])
     })
 
     it('does not cascade when the test passed', async () => {

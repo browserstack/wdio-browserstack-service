@@ -100,6 +100,8 @@ export default class WdioMochaTestFramework extends TestFramework {
     /** The attempt a source's LOG_REPORT/POST resolved; its TEST/POST passes the same `test` object. */
     private resolvedFinishes = new WeakMap<object, TestAttempt>()
     private pendingFinishes = new Set<Promise<void>>()
+    /** Bail cascades of failures the reporter's `fail` reported; settleTestFinishes() runs them. */
+    private owedBailCascades: Array<{ attempt: TestAttempt, result: Frameworks.TestResult }> = []
 
     /** One attempt of a test: mocha retries a test as a new runnable with `_currentRetry` + 1. */
     static attemptKey(test: Frameworks.Test): string {
@@ -229,7 +231,13 @@ export default class WdioMochaTestFramework extends TestFramework {
         args.instance = instance
         await this.runHooks(instance, testFrameworkState, hookState, args)
         if (attempt && testFrameworkState === TestFrameworkState.TEST) {
-            await this.reportBailSkippedTests(attempt, args.result as Frameworks.TestResult)
+            if (args.fromMochaFail) {
+                // wdio does not await the reporter's `fail`, and mocha still runs the failed test's
+                // after-hooks: the cascade's skip reports would claim the tracked slot under them
+                this.owedBailCascades.push({ attempt, result: args.result as Frameworks.TestResult })
+            } else {
+                await this.reportBailSkippedTests(attempt, args.result as Frameworks.TestResult)
+            }
         }
     }
 
@@ -264,8 +272,10 @@ export default class WdioMochaTestFramework extends TestFramework {
      * it is handed to one mocha instance. Cascading across them is still correct: bail aborts that
      * whole runner, so those tests do not run either.
      *
-     * Runs as part of the failed test's finish, so it lands before the session status is marked
-     * and the last test finish is flushed, also when that finish came from mocha's `fail` (SDK-7843).
+     * Runs as part of the failed test's finish when that comes from afterTest, which wdio awaits.
+     * When it comes from the reporter's `fail`, which wdio does not await, settleTestFinishes()
+     * runs it instead: bail has already aborted the spec, and that still lands before the session
+     * status is marked and the last test finish is flushed (SDK-7843).
      */
     private async reportBailSkippedTests(attempt: TestAttempt, results: Frameworks.TestResult | undefined) {
         if (!attempt.bail || !results || results.passed || results.skipped) {
@@ -368,7 +378,8 @@ export default class WdioMochaTestFramework extends TestFramework {
     /**
      * Before the session status is marked and the last test finish is flushed: finish every attempt
      * mocha already failed that nothing reported (no reporter is registered when Test Reporting,
-     * Accessibility and Percy are all off), then wait for every finish the reporter started.
+     * Accessibility and Percy are all off), then wait for every finish the reporter started, then
+     * run the bail cascades those finishes owe.
      */
     async settleTestFinishes(): Promise<void> {
         for (const attempt of [...this.openAttempts]) {
@@ -381,6 +392,9 @@ export default class WdioMochaTestFramework extends TestFramework {
         }
         while (this.pendingFinishes.size > 0) {
             await Promise.all([...this.pendingFinishes])
+        }
+        for (const { attempt, result } of this.owedBailCascades.splice(0)) {
+            await this.reportBailSkippedTests(attempt, result)
         }
     }
 
