@@ -59,6 +59,8 @@ interface TestAttempt {
     bail?: boolean
     /** Who is reporting this attempt's finish: wdio's afterTest, or the reporter's `fail`. */
     finishingFrom?: 'afterTest' | 'fail'
+    /** Its TEST/POST has been reported. */
+    finished?: boolean
 }
 
 /** The failure mocha recorded on a runnable (it keeps no error object on it). */
@@ -83,8 +85,20 @@ export default class WdioMochaTestFramework extends TestFramework {
      * slot, or not at all before the session status is marked. Each attempt keeps the instance it
      * started on, so its finish is reported against its own test run, once.
      */
-    private openAttempts = new Map<string, TestAttempt>()
-    private finishedAttempts = new Set<string>()
+    private openAttempts = new Set<TestAttempt>()
+    /**
+     * The latest attempt started under each `attemptKey`. The key holds only the immediate parent's
+     * title, so two tests in a worker can share it; the later one's TEST/PRE replaces the entry.
+     */
+    private latestAttemptByKey = new Map<string, TestAttempt>()
+    /**
+     * Attempts by the test's body. wdio hands beforeTest and afterTest separate copies of the mocha
+     * test (`{ ...context.test }`), but both carry its `fn`, so afterTest finds its own attempt even
+     * when another test with the same key has started since.
+     */
+    private attemptsByFn = new WeakMap<object, Map<number, TestAttempt>>()
+    /** The attempt a source's LOG_REPORT/POST resolved; its TEST/POST passes the same `test` object. */
+    private resolvedFinishes = new WeakMap<object, TestAttempt>()
     private pendingFinishes = new Set<Promise<void>>()
 
     /** One attempt of a test: mocha retries a test as a new runnable with `_currentRetry` + 1. */
@@ -92,6 +106,11 @@ export default class WdioMochaTestFramework extends TestFramework {
         const retry = (test as { _currentRetry?: number })._currentRetry
         const identifier = getUniqueIdentifier(test, 'mocha')
         return retry ? `${identifier} (retry ${retry})` : identifier
+    }
+
+    private static testBody(test: Frameworks.Test): object | undefined {
+        const fn = (test as { fn?: unknown }).fn
+        return typeof fn === 'function' ? fn : undefined
     }
 
     /**
@@ -126,6 +145,9 @@ export default class WdioMochaTestFramework extends TestFramework {
 
     private async trackTestEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
         logger.info(`trackEvent: testFrameworkState=${testFrameworkState} hookState=${hookState}`)
+        // before any await: the reporter's `fail` must resolve to the attempt mocha just failed,
+        // before mocha starts the next test (it defers that with setImmediate)
+        const attempt = this.resolveTestAttempt(testFrameworkState, hookState, args)
         await super.trackEvent(testFrameworkState, hookState, args)
 
         // Console output from wdio's `before` hook (after the service has patched console)
@@ -137,7 +159,6 @@ export default class WdioMochaTestFramework extends TestFramework {
             return
         }
 
-        const attempt = this.resolveTestAttempt(testFrameworkState, hookState, args)
         if (attempt === null) {
             return
         }
@@ -272,13 +293,39 @@ export default class WdioMochaTestFramework extends TestFramework {
     /** TEST/PRE: this attempt's finish is owed from here on, against this instance. */
     private openTestAttempt(instance: TestFrameworkInstance, args: Record<string, unknown>) {
         const test = args.test as Frameworks.Test
-        this.openAttempts.set(WdioMochaTestFramework.attemptKey(test), {
+        const attempt: TestAttempt = {
             instance,
             test,
             suiteTitle: args.suiteTitle,
             runnable: test.ctx?.test as MochaRunnable | undefined,
             bail: args.bail === true
-        })
+        }
+        this.openAttempts.add(attempt)
+        this.latestAttemptByKey.set(WdioMochaTestFramework.attemptKey(test), attempt)
+        const body = WdioMochaTestFramework.testBody(test)
+        if (body) {
+            const byRetry = this.attemptsByFn.get(body) ?? new Map<number, TestAttempt>()
+            byRetry.set((test as { _currentRetry?: number })._currentRetry ?? 0, attempt)
+            this.attemptsByFn.set(body, byRetry)
+        }
+    }
+
+    /**
+     * The attempt a finish belongs to. wdio's afterTest carries the test's body, which identifies
+     * it exactly. The reporter's `fail` has only the title and parent: it is resolved (before any
+     * await, see trackTestEvent) to the latest attempt with that key, which is the one mocha just
+     * failed, and pinned so the same source's TEST/POST cannot land on a later same-named test.
+     */
+    private findTestAttempt(test: Frameworks.Test): TestAttempt | undefined {
+        const resolved = this.resolvedFinishes.get(test)
+        if (resolved) {
+            return resolved
+        }
+        const body = WdioMochaTestFramework.testBody(test)
+        if (body) {
+            return this.attemptsByFn.get(body)?.get((test as { _currentRetry?: number })._currentRetry ?? 0)
+        }
+        return this.latestAttemptByKey.get(WdioMochaTestFramework.attemptKey(test))
     }
 
     /**
@@ -292,18 +339,19 @@ export default class WdioMochaTestFramework extends TestFramework {
         if (!isFinish || !args.test) {
             return undefined
         }
-        const key = WdioMochaTestFramework.attemptKey(args.test as Frameworks.Test)
+        const test = args.test as Frameworks.Test
         const source = args.fromMochaFail ? 'fail' : 'afterTest'
-        const attempt = this.openAttempts.get(key)
-        if (this.finishedAttempts.has(key) || (attempt?.finishingFrom && attempt.finishingFrom !== source)) {
-            logger.debug(`trackEvent: '${key}' was already reported, dropping ${testFrameworkState} ${hookState} from ${source}`)
-            return null
-        }
+        const attempt = this.findTestAttempt(test)
         if (!attempt) {
             // the reporter's `fail` for a hook, or for a test that never started
             return source === 'fail' ? null : undefined
         }
+        if (attempt.finished || (attempt.finishingFrom && attempt.finishingFrom !== source)) {
+            logger.debug(`trackEvent: '${WdioMochaTestFramework.attemptKey(test)}' was already reported, dropping ${testFrameworkState} ${hookState} from ${source}`)
+            return null
+        }
         attempt.finishingFrom = source
+        this.resolvedFinishes.set(test, attempt)
         args.suiteTitle ??= attempt.suiteTitle
         // a timed-out test whose body finished late: wdio's result says only whether the body
         // threw, not that mocha already failed it
@@ -311,8 +359,8 @@ export default class WdioMochaTestFramework extends TestFramework {
             args.result = failureFromRunnable(attempt.runnable)
         }
         if (testFrameworkState === TestFrameworkState.TEST) {
-            this.openAttempts.delete(key)
-            this.finishedAttempts.add(key)
+            attempt.finished = true
+            this.openAttempts.delete(attempt)
         }
         return attempt
     }
@@ -323,9 +371,10 @@ export default class WdioMochaTestFramework extends TestFramework {
      * Accessibility and Percy are all off), then wait for every finish the reporter started.
      */
     async settleTestFinishes(): Promise<void> {
-        for (const attempt of [...this.openAttempts.values()]) {
+        for (const attempt of [...this.openAttempts]) {
             if (attempt.runnable?.state === 'failed' && !attempt.finishingFrom) {
                 const result = failureFromRunnable(attempt.runnable)
+                this.resolvedFinishes.set(attempt.test, attempt)
                 await this.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: attempt.test, result, fromMochaFail: true })
                 await this.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: attempt.test, result, suiteTitle: attempt.suiteTitle, fromMochaFail: true })
             }
