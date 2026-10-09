@@ -146,6 +146,52 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         expect(finishes).toEqual([`flaky ${uuid0} passed=false`, `flaky ${uuid1} passed=false`])
     })
 
+    // `attemptKey` holds only the immediate parent's title, so these share `valid - works`:
+    // describe('login', () => describe('valid', () => it('works'))) and the same under 'signup'
+    it('reports a later test that shares an earlier finished test\'s key', async () => {
+        const first = makeTest('works', { parent: 'valid' })
+        const firstUuid = await start(first)
+        await afterTest(first, passed)
+        const second = makeTest('works', { parent: 'valid' })
+        const secondUuid = await start(second)
+        await afterTest(second, failed)
+
+        expect(finishes).toEqual([`works ${firstUuid} passed=true`, `works ${secondUuid} passed=false`])
+    })
+
+    it('closes a late afterTest by the test\'s body when a same-named test has started since', async () => {
+        // wdio hands beforeTest and afterTest separate copies of the mocha test; both carry its fn
+        const first = makeTest('works', { parent: 'valid', fn: () => {} })
+        const firstUuid = await start(first)
+        reporterFail(makeTest('works', { parent: 'valid' }))
+        await framework.settleTestFinishes()
+        const second = makeTest('works', { parent: 'valid', fn: () => {} })
+        const secondUuid = await start(second)
+
+        // the first test's body finishes late (and succeeds) while the second test is running; the
+        // second then fails on its own
+        await afterTest({ ...first } as Frameworks.Test, passed)
+        await afterTest({ ...second } as Frameworks.Test, failed)
+
+        expect(finishes).toEqual([`works ${firstUuid} passed=false`, `works ${secondUuid} passed=false`])
+    })
+
+    it('keeps the reporter\'s TEST/POST on the test its LOG_REPORT resolved, if a same-named test starts in between', async () => {
+        const first = makeTest('works', { parent: 'valid', fn: () => {} })
+        const firstUuid = await start(first)
+        const failed1 = makeTest('works', { parent: 'valid' })
+        // mocha's `fail`: LOG_REPORT resolves now; TEST/POST is sent after it, by when mocha may
+        // have started the next test
+        const logReport = framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: failed1, result: failed, fromMochaFail: true })
+        const second = makeTest('works', { parent: 'valid', fn: () => {} })
+        const secondUuid = await start(second)
+        await logReport
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: failed1, result: failed, fromMochaFail: true })
+        await afterTest({ ...second } as Frameworks.Test, passed)
+
+        expect(finishes).toEqual([`works ${firstUuid} passed=false`, `works ${secondUuid} passed=true`])
+    })
+
     it('drops a `fail` for a test that never started (a hook), and still reports afterTest for one it never saw', async () => {
         await start(makeTest('runs'))
 
