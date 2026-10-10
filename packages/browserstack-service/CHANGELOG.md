@@ -1,5 +1,34 @@
 # @wdio/browserstack-service
 
+## 9.39.4
+
+### Patch Changes
+
+- 7ed97bc: - Fixed `ETXTBSY: text file is busy, open '~/.browserstack/percy'` crashes on Linux when Percy is enabled.
+
+## 9.39.3
+
+### Patch Changes
+
+- 817d036: - Added `browser.uploadAttachment(filePath)` (also available as `browser.uploadMedia`) so WebdriverIO tests can attach files to a test, hook, or build in Test Reporting — the same capability the Java, Python and Node SDKs already offer. Pass `{ buildAttachment: true }` to attach to the build instead of the current test.
+  - Made BrowserStack session bootstrap tolerant of an incomplete configuration response. Previously an empty or partial response aborted the whole bootstrap, which silently disabled every BrowserStack feature for that run — including custom tags and Test Reporting — and could leave the build with no test results.
+- 706da2a: - Raised the minimum `chalk` version to 5.6.2 so installs can never resolve the compromised `chalk@5.6.1` (GHSA-2v46-p5h4-248w).
+
+## 9.39.2
+
+### Patch Changes
+
+- b3ed8ef: - Fixed a configured `buildIdentifier` being dropped from the build name when `BROWSERSTACK_BUILD_NAME` was set via environment variable.
+  - `BROWSERSTACK_BUILD_RUN_IDENTIFIER` and `BROWSERSTACK_BUILD_IDENTIFIER` are now honoured as build-identifier overrides.
+  - Placeholders such as `${CUSTOM_DATE}` in `buildIdentifier` are now substituted from the environment.
+
+## 9.39.1
+
+### Patch Changes
+
+- 1a103aa: - Restored Percy visual snapshots on WebdriverIO by picking up the fixed `@percy/webdriverio@3.3.4`.
+- a0d9e37: - Added a warning when `BROWSERSTACK_USERNAME`/`BROWSERSTACK_ACCESS_KEY` or `testObservabilityOptions.user` point to a different BrowserStack account than the WebdriverIO `user`/`key`. Such runs send test results to a different account than their sessions.
+
 ## 9.39.0
 
 ### Minor Changes
