@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'node:path'
 import * as bstackLogger from '../../src/bstackLogger.js'
 import WdioCucumberTestFramework from '../../src/cli/frameworks/wdioCucumberTestFramework.js'
+import { TestFrameworkState } from '../../src/cli/states/testFrameworkState.js'
+import { HookState } from '../../src/cli/states/hookState.js'
 
 vi.spyOn(bstackLogger.BStackLogger, 'logToFile').mockImplementation(() => {})
 
@@ -56,5 +58,25 @@ describe.each([
 
         expect(meta.feature.path).not.toBe(framework['featurePath']())
         expect(meta.feature.path).not.toContain(process.cwd())
+    })
+})
+
+describe('cucumber WebDriver command logs', () => {
+    const commandLog = { logEntry: { kind: 'TEST_SCREENSHOT', message: 'b64', timestamp: 't' }, commandLog: true }
+
+    it('drops command logs until a scenario has started, then attributes them as before', async () => {
+        const framework = new WdioCucumberTestFramework(['WebdriverIO-cucumber'], { 'WebdriverIO-cucumber': '9.0.0' }, 'bin-1')
+        const resolveInstance = vi.spyOn(framework as never, 'resolveInstance').mockReturnValue(null as never)
+
+        await framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { ...commandLog })
+        expect(resolveInstance).not.toHaveBeenCalled()
+
+        await framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { logEntry: { kind: 'TEST_LOG', message: 'console' } })
+        expect(resolveInstance).toHaveBeenCalledTimes(1)
+
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, {})
+        await framework.trackEvent(TestFrameworkState.LOG, HookState.POST, { ...commandLog })
+        expect(resolveInstance).toHaveBeenCalledTimes(3)
+        expect(resolveInstance).toHaveBeenLastCalledWith(TestFrameworkState.LOG, HookState.POST)
     })
 })

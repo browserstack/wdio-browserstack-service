@@ -7,6 +7,8 @@ import BrowserstackService from '../src/service.js'
 import * as utils from '../src/util.js'
 import InsightsHandler from '../src/insights-handler.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
+import * as skipReporter from '../src/cli/skipReporter.js'
+import TestFramework from '../src/cli/frameworks/testFramework.js'
 import AccessibilityModule from '../src/cli/modules/accessibilityModule.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import AutomationFramework from '../src/cli/frameworks/automationFramework.js'
@@ -15,11 +17,14 @@ import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
 import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
 import { AutomationFrameworkState } from '../src/cli/states/automationFrameworkState.js'
+import PerformanceTester from '../src/instrumentation/performance/performance-tester.js'
 
 const jasmineSuiteTitle = 'Jasmine__TopLevel__Suite'
 const sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
 const sessionId = 'session123'
 const sessionIdA = 'session456'
+// What WDIO hands a jasmine hook: a copy of the last started spec (no `title`), then the hookName.
+const jasmineLastSpec = { description: 'outer passing test', fullName: 'Nested outer outer passing test', file: '/p/nested.spec.js' } as any
 
 vi.mock('fetch')
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
@@ -584,10 +589,7 @@ describe('before', () => {
         expect(service['_sessionBaseUrl']).toEqual(sessionBaseUrl)
     })
 
-    it('registers the result event on the CLI path, and only that event', async () => {
-        // browserCommand is the only producer of TEST_SCREENSHOT logs, so the binary flow has to
-        // register the result event too (SDK-4177). `command` must stay unregistered — it only
-        // feeds browserCommand's HTTP-log half, which the binary owns on this path.
+    it('registers no command or result listener on the CLI path', async () => {
         process.env.BROWSERSTACK_OBSERVABILITY = 'true'
         const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
             isRunning: () => true,
@@ -605,7 +607,7 @@ describe('before', () => {
         await service.before(service['_config'] as any, [], browser)
 
         const events = vi.mocked(browser.on).mock.calls.map(([event]) => event)
-        expect(events).toContain('result')
+        expect(events).not.toContain('result')
         expect(events).not.toContain('command')
 
         getInstanceSpy.mockRestore()
@@ -849,6 +851,35 @@ describe('before', () => {
 
         expect(browserA.overwriteCommand).not.toHaveBeenCalled()
         expect(browserB.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
+    })
+
+    describe('command and result registration on the CLI flow', () => {
+        let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
+
+        afterEach(() => {
+            getInstanceSpy?.mockRestore()
+            getInstanceSpy = undefined
+        })
+
+        const registeredEvents = async (framework: string) => {
+            process.env.BROWSERSTACK_OBSERVABILITY = 'true'
+            getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                getTestFramework: () => null,
+                getAutomationFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) })
+            } as any)
+            const cliBrowser = { on: vi.fn(), sessionId: 's1', capabilities: {}, config: {}, execute: vi.fn(), executeScript: vi.fn() } as any
+            const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', framework, capabilities: {} } as any)
+            await service.before(service['_config'] as any, [], cliBrowser)
+            delete process.env.BROWSERSTACK_OBSERVABILITY
+            return vi.mocked(cliBrowser.on).mock.calls.map(([event]: [string]) => event)
+        }
+
+        it.each(['jasmine', 'mocha', 'cucumber'])('leaves %s command capture to TestHubModule', async (framework) => {
+            const events = await registeredEvents(framework)
+            expect(events).not.toContain('command')
+            expect(events).not.toContain('result')
+        })
     })
 })
 
@@ -1152,6 +1183,39 @@ describe('beforeTest', () => {
                     headers
                 }
             )
+        })
+    })
+
+    describe('on the CLI flow', () => {
+        let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
+
+        afterEach(() => {
+            getInstanceSpy?.mockRestore()
+            getInstanceSpy = undefined
+        })
+
+        const runBeforeTest = async (framework: string, test: Record<string, unknown>) => {
+            const trackEvent = vi.fn().mockResolvedValue(undefined)
+            getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                getTestFramework: () => ({ trackEvent }),
+                getAutomationFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) })
+            } as any)
+            const service = new BrowserstackService({} as any, [] as any, { user: 'foo', key: 'bar', framework } as any)
+            const annotate = vi.spyOn(service as any, '_setAnnotation').mockResolvedValue(undefined)
+            const getState = vi.spyOn(TestFramework, 'getState').mockReturnValue('spec-uuid')
+            await service.beforeTest(test as any)
+            getState.mockRestore()
+            return { annotate, trackEvent }
+        }
+
+        it.each([
+            ['jasmine', jasmineLastSpec],
+            ['mocha', { title: 't', parent: 'suite' }],
+        ])('leaves the %s test annotation to AutomateModule and still sends TEST/PRE', async (framework, test) => {
+            const { annotate, trackEvent } = await runBeforeTest(framework, test as Record<string, unknown>)
+            expect(annotate).not.toHaveBeenCalled()
+            expect(trackEvent).toHaveBeenCalledWith(TestFrameworkState.TEST, HookState.PRE, expect.objectContaining({ test }))
         })
     })
 })
@@ -2638,6 +2702,80 @@ describe('beforeHook (CLI hook reporting)', () => {
 
         expect(service['_insightsHandler']!.beforeHook).toHaveBeenCalledTimes(1)
     })
+
+    describe('classification by framework', () => {
+        const mochaHook = (title: string) => ({ title, ctx: { test: { parent: { title: 'suite', tests: [], suites: [] } } } }) as any
+        const cliWith = (framework: unknown) => {
+            getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                getTestFramework: () => framework,
+                getAutomationFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) })
+            } as any)
+        }
+        const makeService = (framework: string) => new BrowserstackService({} as any, [] as any, { user: 'foo', key: 'bar', framework } as any)
+
+        it('classifies jasmine hooks by hookName, without touching the missing title', async () => {
+            const trackEvent = vi.fn().mockResolvedValue(undefined)
+            cliWith({ trackEvent })
+            const getHookTypeSpy = vi.spyOn(utils, 'getHookType')
+            const service = makeService('jasmine')
+
+            for (const hookName of ['beforeAll', 'beforeEach']) {
+                await service.beforeHook(jasmineLastSpec, {}, hookName)
+            }
+            for (const hookName of ['afterEach', 'afterAll']) {
+                await service.afterHook(jasmineLastSpec, {}, { passed: true } as any, hookName)
+            }
+
+            expect(getHookTypeSpy).not.toHaveBeenCalled()
+            expect(trackEvent.mock.calls.map(([state, hook]) => [state, hook])).toEqual([
+                [TestFrameworkState.BEFORE_ALL, HookState.PRE],
+                [TestFrameworkState.BEFORE_EACH, HookState.PRE],
+                [TestFrameworkState.AFTER_EACH, HookState.POST],
+                [TestFrameworkState.AFTER_ALL, HookState.POST],
+            ])
+            getHookTypeSpy.mockRestore()
+        })
+
+        it('sends nothing for a jasmine hook without a hookName, and does not throw', async () => {
+            const trackEvent = vi.fn().mockResolvedValue(undefined)
+            cliWith({ trackEvent })
+            const service = makeService('jasmine')
+
+            await expect(service.beforeHook({} as any, {})).resolves.toBeUndefined()
+            await expect(service.afterHook({} as any, {}, { passed: true } as any)).resolves.toBeUndefined()
+            expect(trackEvent).not.toHaveBeenCalled()
+        })
+
+        it('never runs the mocha skip cascade for a failed jasmine hook, but still records the hook failure', async () => {
+            cliWith({ trackEvent: vi.fn().mockResolvedValue(undefined) })
+            const cascade = vi.spyOn(skipReporter, 'reportSuiteSkipped').mockResolvedValue(undefined as any)
+            const service = makeService('jasmine')
+
+            await service.afterHook({ ...jasmineLastSpec, ctx: { test: { parent: {} } } }, {}, { passed: false, error: new Error('beforeAll failed') } as any, 'beforeAll')
+
+            expect(cascade).not.toHaveBeenCalled()
+            expect(service['_hookFailReasons']).toEqual(['beforeAll failed'])
+            cascade.mockRestore()
+        })
+
+        it('keeps mocha on its title classification and skip cascade', async () => {
+            const trackEvent = vi.fn().mockResolvedValue(undefined)
+            cliWith({ trackEvent })
+            const cascade = vi.spyOn(skipReporter, 'reportSuiteSkipped').mockResolvedValue(undefined as any)
+            const service = makeService('mocha')
+
+            await service.beforeHook(mochaHook('"before each" hook for "t"'), {}, 'beforeEach')
+            await service.afterHook(mochaHook('"before all" hook for "t"'), {}, { passed: false, error: new Error('x') } as any, 'afterAll')
+
+            expect(trackEvent.mock.calls.map(([state, hook]) => [state, hook])).toEqual([
+                [TestFrameworkState.BEFORE_EACH, HookState.PRE],
+                [TestFrameworkState.BEFORE_ALL, HookState.POST],
+            ])
+            expect(cascade).toHaveBeenCalledTimes(1)
+            cascade.mockRestore()
+        })
+    })
 })
 
 describe('_isAppAutomate honors skipAppOverride', () => {
@@ -3124,5 +3262,67 @@ describe('_cucumberTestResult failure reason adjacent', () => {
         const result = makeService(false)['_cucumberTestResult'](world('UNDEFINED') as never)
 
         expect(result.error?.message).toBe('Unknown Error')
+    })
+})
+
+describe('after hands AutomateModule the jasmine session verdict inputs', () => {
+    // describe('after') swaps the prototype method for a stand-in; these cases need the real one
+    const after = BrowserstackService.prototype.after
+    let trackEvent: ReturnType<typeof vi.fn>
+    let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
+
+    const makeService = (framework: string) => new BrowserstackService(
+        { testObservability: false, setSessionStatus: true } as never,
+        [] as never,
+        { user: 'foo', key: 'bar', framework } as never
+    )
+    const executeArgs = () => trackEvent.mock.calls.find(([state, hook]) => state === AutomationFrameworkState.EXECUTE && hook === HookState.POST)?.[2]
+
+    beforeEach(() => {
+        trackEvent = vi.fn().mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => null,
+            getAutomationFramework: () => ({ trackEvent }),
+            modules: {}
+        } as never)
+        ;(PerformanceTester as unknown as Record<string, unknown>).stopAndGenerate = vi.fn().mockResolvedValue(undefined)
+    })
+
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+        delete (PerformanceTester as unknown as Record<string, unknown>).stopAndGenerate
+    })
+
+    it.each(['mocha', 'cucumber'])('sends nothing extra for %s', async (framework) => {
+        const service = makeService(framework)
+        service['_specsRan'] = true
+        service['_failReasons'] = ['boom']
+
+        await after.call(service, 1)
+
+        expect(executeArgs()).toEqual({})
+    })
+
+    it('sends the runner result and a copy of the tracked reasons for jasmine', async () => {
+        const service = makeService('jasmine')
+        service['_specsRan'] = true
+        service['_failReasons'] = ['beforeEach hook failure', 'boom']
+        service['_pureTestFailReasons'] = ['boom']
+        service['_hookFailReasons'] = ['beforeEach hook failure']
+
+        await after.call(service, 2)
+
+        const args = executeArgs() as { sessionVerdictInputs: Record<string, unknown> }
+        expect(args).toEqual({
+            sessionVerdictInputs: {
+                result: 2,
+                specsRan: true,
+                failReasons: ['beforeEach hook failure', 'boom'],
+                pureTestFailReasons: ['boom'],
+                hookFailReasons: ['beforeEach hook failure'],
+            }
+        })
+        expect(args.sessionVerdictInputs.failReasons).not.toBe(service['_failReasons'])
     })
 })

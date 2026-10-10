@@ -6,9 +6,11 @@ import { TestFrameworkState } from '../../../src/cli/states/testFrameworkState.j
 import { AutomationFrameworkState } from '../../../src/cli/states/automationFrameworkState.js'
 import { HookState } from '../../../src/cli/states/hookState.js'
 import { TestFrameworkConstants } from '../../../src/cli/frameworks/constants/testFrameworkConstants.js'
+import { BStackLogger } from '../../../src/cli/cliLogger.js'
 import { isBrowserstackSession } from '../../../src/util.js'
 import PerformanceTester from '../../../src/instrumentation/performance/performance-tester.js'
 import { _fetch as fetch } from '../../../src/fetchWrapper.js'
+import { BrowserstackCLI } from '../../../src/cli/index.js'
 import type { Options } from '@wdio/types'
 
 // Mock dependencies
@@ -18,6 +20,12 @@ vi.mock('../../../src/cli/frameworks/testFramework.js', () => ({
         setState: vi.fn(),
         getState: vi.fn(),
         getTrackedInstance: vi.fn()
+    }
+}))
+
+vi.mock('../../../src/cli/index.js', () => ({
+    BrowserstackCLI: {
+        getInstance: vi.fn(() => ({ options: {} }))
     }
 }))
 
@@ -1003,5 +1011,253 @@ describe('AutomateModule preferScenarioName', () => {
         await mod.onAfterExecute()
 
         expect(namesPUT()).toContain('Can log in')
+    })
+})
+
+describe('AutomateModule — jasmine session verdict', () => {
+    let automateModule: AutomateModule
+    const putBodies = () => vi.mocked(fetch).mock.calls.map(([url, opts]) => [String(url).split('/sessions/')[1], JSON.parse((opts as { body: string }).body)])
+    const inputs = (overrides: Record<string, unknown> = {}) => ({
+        result: 0, specsRan: true, failReasons: [], pureTestFailReasons: [], hookFailReasons: [], ...overrides
+    })
+    const verdict = (overrides: Record<string, unknown>, ignoreHooksStatus: boolean) =>
+        (automateModule as any).jasmineVerdict(inputs(overrides), ignoreHooksStatus)
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as any)
+        vi.mocked(AutomationFramework.getDriver).mockReturnValue({ sessionId: 'live' } as any)
+        vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) => key === 'framework_session_id' ? 'live' : {})
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(fetch).mockResolvedValue({ json: async () => ({}) } as any)
+        automateModule = new AutomateModule({} as Options.Testrunner)
+        automateModule.config = {
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false },
+            userName: 'u',
+            accessKey: 'k'
+        } as any
+    })
+
+    describe('jasmineVerdict (legacy service.after())', () => {
+        it('passes a clean run with no reason, whatever ignoreHooksStatus says', () => {
+            expect(verdict({}, false)).toEqual({ status: 'passed' })
+            expect(verdict({}, true)).toEqual({ status: 'passed' })
+        })
+
+        it('fails a runner-clean run on any recorded reason, joined in order', () => {
+            expect(verdict({ failReasons: ['beforeAll hook failure', 'boom'], pureTestFailReasons: ['boom'], hookFailReasons: ['beforeAll hook failure'] }, false))
+                .toEqual({ status: 'failed', reason: 'beforeAll hook failure\nboom' })
+        })
+
+        it('under ignoreHooksStatus judges a runner-clean run on its pure test failures only', () => {
+            expect(verdict({ hookFailReasons: ['afterAll hook failure'] }, true)).toEqual({ status: 'passed' })
+            expect(verdict({ failReasons: ['boom'], pureTestFailReasons: ['boom'], hookFailReasons: ['afterAll hook failure'] }, true))
+                .toEqual({ status: 'failed', reason: 'boom' })
+        })
+
+        it('under ignoreHooksStatus passes a runner-failed run whose only failures are hooks', () => {
+            expect(verdict({ result: 2, hookFailReasons: ['beforeEach hook failure'] }, true)).toEqual({ status: 'passed' })
+        })
+
+        it('under ignoreHooksStatus fails a runner-failed run with pure failures, on those reasons', () => {
+            expect(verdict({ result: 1, failReasons: ['boom'], pureTestFailReasons: ['boom'], hookFailReasons: ['hook'] }, true))
+                .toEqual({ status: 'failed', reason: 'boom' })
+        })
+
+        it('under ignoreHooksStatus fails a runner-failed run with no recorded failure, with no reason', () => {
+            expect(verdict({ result: 1 }, true)).toEqual({ status: 'failed', reason: undefined })
+        })
+
+        it('fails a runner-failed run with every recorded reason when hooks count', () => {
+            expect(verdict({ result: 1, failReasons: ['beforeEach hook failure', 'boom'], pureTestFailReasons: ['boom'], hookFailReasons: ['beforeEach hook failure'] }, false))
+                .toEqual({ status: 'failed', reason: 'beforeEach hook failure\nboom' })
+            expect(verdict({ result: 1 }, false)).toEqual({ status: 'failed', reason: undefined })
+        })
+
+        it('fails a worker where no spec ran, preferring pure reasons under ignoreHooksStatus', () => {
+            expect(verdict({ specsRan: false }, false)).toEqual({ status: 'failed', reason: undefined })
+            expect(verdict({ specsRan: false, failReasons: ['beforeAll hook failure'], hookFailReasons: ['beforeAll hook failure'] }, false))
+                .toEqual({ status: 'failed', reason: 'beforeAll hook failure' })
+            expect(verdict({ specsRan: false, hookFailReasons: ['beforeAll hook failure'] }, true)).toEqual({ status: 'failed', reason: undefined })
+            expect(verdict({ specsRan: false, failReasons: ['boom'], pureTestFailReasons: ['boom'] }, true)).toEqual({ status: 'failed', reason: 'boom' })
+        })
+
+        it('reproduces the CP0 hookfail verdict: failed, every hook failure in the order it happened', () => {
+            const hookFailures = ['beforeAll hook failure', 'beforeEach hook failure', 'beforeEach hook failure', 'afterEach hook failure', 'afterEach hook failure']
+            expect(verdict({ result: 6, failReasons: hookFailures, hookFailReasons: hookFailures }, false))
+                .toEqual({ status: 'failed', reason: hookFailures.join('\n') })
+        })
+    })
+
+    it('marks the live session with the verdict, the last name and the joined reasons', async () => {
+        (automateModule as any).sessionMap.set('live', { lastTestName: 'Hookfail afterEach suite', appliedName: 'Hookfail afterEach suite', testResults: new Map(), scenariosRan: 0 })
+
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1, failReasons: ['beforeAll hook failure', 'afterEach hook failure'] }) })
+
+        expect(putBodies()).toEqual([
+            ['live.json', { status: 'failed', name: 'Hookfail afterEach suite', reason: 'beforeAll hook failure\nafterEach hook failure' }]
+        ])
+    })
+
+    it('marks a live session no spec registered, without a name', async () => {
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1, specsRan: false, failReasons: ['beforeAll hook failure'] }) })
+
+        expect(putBodies()).toEqual([['live.json', { status: 'failed', reason: 'beforeAll hook failure' }]])
+    })
+
+    it('marks only the live session, leaving a reloaded one to its onReload mark', async () => {
+        (automateModule as any).sessionMap.set('old', { lastTestName: 'Suite A', appliedName: 'Suite A', testResults: new Map(), scenariosRan: 0 })
+
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs() })
+
+        expect(putBodies()).toEqual([['live.json', { status: 'passed' }]])
+    })
+
+    it('marks nothing when no session is live', async () => {
+        vi.mocked(AutomationFramework.getState).mockReturnValue('' as any)
+        ;(automateModule as any).sessionMap.set('old', { lastTestName: 'Suite A', appliedName: 'Suite A', testResults: new Map(), scenariosRan: 0 })
+
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1 }) })
+
+        expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('checks the driver only for an unregistered live session', async () => {
+        vi.mocked(isBrowserstackSession).mockReturnValue(false)
+
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs() })
+        expect(fetch).not.toHaveBeenCalled()
+
+        ;(automateModule as any).sessionMap.set('live', { lastTestName: 'Suite', appliedName: 'Suite', testResults: new Map(), scenariosRan: 0 })
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs() })
+        expect(putBodies()).toEqual([['live.json', { status: 'passed', name: 'Suite' }]])
+    })
+
+    it('reads ignoreHooksStatus from the worker\'s service options', async () => {
+        vi.mocked(BrowserstackCLI.getInstance).mockReturnValueOnce({ options: { testObservabilityOptions: { ignoreHooksStatus: true } } } as any)
+
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1, hookFailReasons: ['beforeEach hook failure'] }) })
+
+        expect(putBodies()).toEqual([['live.json', { status: 'passed' }]])
+    })
+
+    it('honours skipSessionStatus and skipSessionName', async () => {
+        (automateModule as any).sessionMap.set('live', { lastTestName: 'Suite', testResults: new Map(), scenariosRan: 0 })
+        ;(automateModule.config as any).testContextOptions = { skipSessionName: true, skipSessionStatus: true }
+
+        await automateModule.onAfterExecute({ sessionVerdictInputs: inputs({ result: 1, failReasons: ['x'] }) })
+
+        expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('keeps the existing per-test aggregation when no verdict inputs arrive (mocha, cucumber)', async () => {
+        (automateModule as any).sessionMap.set('live', {
+            lastTestName: 'Suite', appliedName: 'Suite', scenariosRan: 0,
+            testResults: new Map([['t', { testName: 'Suite', status: 'failed', reason: 'boom' }]])
+        })
+
+        await automateModule.onAfterExecute({})
+
+        expect(putBodies()).toEqual([['live.json', { status: 'failed', reason: 'boom' }]])
+    })
+})
+
+describe('AutomateModule — per-test annotation', () => {
+    let automateModule: AutomateModule
+    let executeScript: ReturnType<typeof vi.fn>
+    const annotation = (data: string) => `browserstack_executor: ${JSON.stringify({ action: 'annotate', arguments: { data, level: 'info' } })}`
+
+    const runBeforeTest = (frameworkName: string, test: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+        vi.mocked(TestFramework.getState).mockImplementation((_i, key) => key === TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME ? frameworkName : undefined)
+        return automateModule.onBeforeTest({ instance: {}, test, suiteTitle: 'Suite', ...extra })
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        executeScript = vi.fn().mockResolvedValue(undefined)
+        vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as any)
+        vi.mocked(AutomationFramework.getDriver).mockReturnValue({ sessionId: 's1', executeScript } as any)
+        vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) => key === 'framework_session_id' ? 's1' : {})
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(fetch).mockResolvedValue({ json: async () => ({}) } as any)
+        automateModule = new AutomateModule({} as Options.Testrunner)
+        automateModule.config = {
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false },
+            userName: 'u',
+            accessKey: 'k'
+        } as any
+    })
+
+    it('annotates a mocha test with its title, as legacy beforeTest did', async () => {
+        await runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' })
+        expect(executeScript).toHaveBeenCalledExactlyOnceWith(annotation('Test: t'), [])
+    })
+
+    it('annotates a jasmine spec with its full name', async () => {
+        await runBeforeTest('WebdriverIO-jasmine', { description: 'outer passing test', fullName: 'Nested outer outer passing test' })
+        expect(executeScript).toHaveBeenCalledExactlyOnceWith(annotation('Test: Nested outer outer passing test'), [])
+    })
+
+    it('annotates even when the session name is skipped', async () => {
+        (automateModule.config as any).testContextOptions.skipSessionName = true
+        await runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' })
+        expect(executeScript).toHaveBeenCalledExactlyOnceWith(annotation('Test: t'), [])
+    })
+
+    it('never annotates cucumber, a skip report, or a non-BrowserStack session', async () => {
+        await runBeforeTest('WebdriverIO-cucumber', { title: 'Scenario', parent: 'Feature' })
+        await runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' }, { skipReport: true })
+        vi.mocked(isBrowserstackSession).mockReturnValue(false)
+        await runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' })
+        expect(executeScript).not.toHaveBeenCalled()
+    })
+
+    it('logs a failed annotate and still names the session', async () => {
+        executeScript.mockRejectedValue(new Error('annotate blew up'))
+        await expect(runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' })).resolves.toBeUndefined()
+        expect(BStackLogger.error).toHaveBeenCalledWith(expect.stringContaining('annotate blew up'))
+        expect((automateModule as any).sessionMap.get('s1')?.lastTestName).toBe('Suite - t')
+    })
+})
+
+describe('AutomateModule — jasmine sessionNameFormat', () => {
+    let automateModule: AutomateModule
+    const format = vi.fn((_config: unknown, _caps: unknown, suiteTitle: string, testTitle?: string) => `fmt[${suiteTitle}][${String(testTitle)}]`)
+    const names = () => vi.mocked(fetch).mock.calls.map(([, opts]) => JSON.parse((opts as { body: string }).body).name)
+
+    const runBeforeTest = (frameworkName: string, test: Record<string, unknown>) => {
+        vi.mocked(TestFramework.getState).mockImplementation((_i, key) => key === TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME ? frameworkName : undefined)
+        return automateModule.onBeforeTest({ instance: {}, test, suiteTitle: 'Nested outer' })
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        vi.mocked(AutomationFramework.getTrackedInstance).mockReturnValue({} as any)
+        vi.mocked(AutomationFramework.getDriver).mockReturnValue({ sessionId: 's1' } as any)
+        vi.mocked(AutomationFramework.getState).mockImplementation((_i, key) => key === 'framework_session_id' ? 's1' : {})
+        vi.mocked(isBrowserstackSession).mockReturnValue(true)
+        vi.mocked(fetch).mockResolvedValue({ json: async () => ({}) } as any)
+        vi.mocked(BrowserstackCLI.getInstance).mockReturnValue({ options: { sessionNameFormat: format } } as any)
+        automateModule = new AutomateModule({} as Options.Testrunner)
+        automateModule.config = {
+            testContextOptions: { skipSessionName: false, skipSessionStatus: false, sessionNameFormat: '' },
+            userName: 'u',
+            accessKey: 'k'
+        } as any
+    })
+
+    afterEach(() => {
+        vi.mocked(BrowserstackCLI.getInstance).mockReset().mockReturnValue({ options: {} } as any)
+    })
+
+    it('applies the service-option format for jasmine, with no test title (legacy call shape)', async () => {
+        await runBeforeTest('WebdriverIO-jasmine', { description: 'outer passing test', fullName: 'Nested outer outer passing test' })
+        expect(names()).toEqual(['fmt[Nested outer][undefined]'])
+    })
+
+    it('leaves mocha on the binary config (format absent there)', async () => {
+        await runBeforeTest('WebdriverIO-mocha', { title: 't', parent: 'Suite' })
+        expect(format).not.toHaveBeenCalled()
+        expect(names()).toEqual(['Suite - t'])
     })
 })

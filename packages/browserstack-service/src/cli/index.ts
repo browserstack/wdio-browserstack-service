@@ -17,6 +17,7 @@ import type { Options } from '@wdio/types'
 import TestOpsConfig from '../testOps/testOpsConfig.js'
 import WdioMochaTestFramework from './frameworks/wdioMochaTestFramework.js'
 import WdioCucumberTestFramework from './frameworks/wdioCucumberTestFramework.js'
+import WdioJasmineTestFramework from './frameworks/wdioJasmineTestFramework.js'
 import WdioAutomationFramework from './frameworks/wdioAutomationFramework.js'
 import WebdriverIOModule from './modules/webdriverIOModule.js'
 import AccessibilityModule from './modules/accessibilityModule.js'
@@ -49,7 +50,7 @@ export class BrowserstackCLI {
     modulesLoaded = false
     binSessionId: string | null = null
     modules: Record<string, BaseModule> = {}
-    testFramework: WdioMochaTestFramework|WdioCucumberTestFramework|null = null
+    testFramework: WdioMochaTestFramework|WdioCucumberTestFramework|WdioJasmineTestFramework|null = null
     cliParams: Record<string, string> | null = null
     automationFramework: WdioAutomationFramework|null = null
     SDK_CLI_BIN_PATH: string | null = null
@@ -179,7 +180,12 @@ export class BrowserstackCLI {
                 this.modules[ObservabilityModule.MODULE_NAME] = new ObservabilityModule(startBinResponse.observability)
             }
 
-            this.modules[TestHubModule.MODULE_NAME] = new TestHubModule(startBinResponse.testhub)
+            const testHubModule = new TestHubModule(startBinResponse.testhub)
+            this.modules[TestHubModule.MODULE_NAME] = testHubModule
+            testHubModule.setTestFramework(this.testFramework)
+            if (this.testFramework instanceof WdioJasmineTestFramework) {
+                this.testFramework.setTestHubModule(testHubModule)
+            }
 
             // Custom-tag (multi Test-Case-ID) tagging rides the per-test event_json
             // to TestHub, so it is gated on the testhub pipeline being active.
@@ -566,6 +572,10 @@ export class BrowserstackCLI {
         }
         if (testFrameworkDetail.name.toLowerCase() === 'webdriverio-cucumber') {
             this.testFramework = new WdioCucumberTestFramework([testFrameworkDetail.name], testFrameworkDetail.version, this.binSessionId as string)
+            return
+        }
+        if (testFrameworkDetail.name.toLowerCase() === 'webdriverio-jasmine') {
+            this.testFramework = new WdioJasmineTestFramework([testFrameworkDetail.name], testFrameworkDetail.version, this.binSessionId as string)
             return
         }
         // An unmatched name leaves testFramework null, and every CLI event then no-ops with no

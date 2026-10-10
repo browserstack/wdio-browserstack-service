@@ -35,6 +35,12 @@ export default class WdioMochaTestFramework extends TestFramework {
     static KEY_HOOK_LAST_STARTED = 'test_hook_last_started'
     static KEY_HOOK_LAST_FINISHED = 'test_hook_last_finished'
 
+    // WebDriver command logs follow the hook or test that started last, even after it finished, as legacy's
+    // current test did: a hook names its hook run, a test (null) the test.
+    private commandLogHook: Record<string, unknown> | null = null
+    // The last test that ran: a skip report moves the tracked instance to the skipped test, never this.
+    private commandLogTest: TestFrameworkInstance | null = null
+
     /**
    * Constructor for the TestFramework
    * @param {Array} testFrameworks - List of Test frameworks
@@ -55,7 +61,7 @@ export default class WdioMochaTestFramework extends TestFramework {
         logger.info(`trackEvent: testFrameworkState=${testFrameworkState} hookState=${hookState}`)
         await super.trackEvent(testFrameworkState, hookState, args)
 
-        const instance = this.resolveInstance(testFrameworkState, hookState, args)
+        const instance = this.commandLogTestInstance(testFrameworkState, hookState, args) ?? this.resolveInstance(testFrameworkState, hookState, args)
         if (instance === null) {
             logger.error(`trackEvent: instance not found for testFrameworkState=${testFrameworkState} hookState=${hookState}`)
             return
@@ -92,7 +98,7 @@ export default class WdioMochaTestFramework extends TestFramework {
             } else if (testFrameworkState === TestFrameworkState.LOG) {
                 const logEntry = args.logEntry as Record<string, unknown>
                 logEntry.uuid = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOK_ID)
-                this.loadLogEntries(instance, testFrameworkState, hookState, logEntry)
+                this.loadLogEntries(instance, testFrameworkState, hookState, logEntry, args.commandLog === true)
             } else if (testFrameworkState === TestFrameworkState.LOG_REPORT && hookState === HookState.POST) {
                 logger.info('trackEvent: load test results')
                 this.loadTestResult(instance, args)
@@ -105,6 +111,12 @@ export default class WdioMochaTestFramework extends TestFramework {
             // test_hooks_started forever (never popped).
             if (CLIUtils.matchHookRegex(testFrameworkState.toString().split('.')[1])) {
                 await this.trackHookEvents(instance, testFrameworkState, hookState, args)
+                if (hookState === HookState.PRE) {
+                    this.commandLogHook = WdioMochaTestFramework.openHook(instance) ?? null
+                }
+            } else if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.PRE && args.skipReport !== true) {
+                this.commandLogHook = null
+                this.commandLogTest = instance
             }
             logger.debug(`trackEvent: tracked instance data=${JSON.stringify(Object.fromEntries(instance.getAllData()))}`)
         } catch (error) {
@@ -266,7 +278,7 @@ export default class WdioMochaTestFramework extends TestFramework {
      * @param hookState HookState
      * @param args Additional arguments (level, message, etc.)
      */
-    loadLogEntries(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, logEntry: Record<string, unknown>) {
+    loadLogEntries(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, logEntry: Record<string, unknown>, commandLog = false) {
         const logRecord: Record<string, unknown> = {}
         const { level, message, timestamp, kind } = logEntry
 
@@ -279,6 +291,14 @@ export default class WdioMochaTestFramework extends TestFramework {
         logRecord.message = Buffer.from(message as string)
         logRecord.level = level
         logRecord.timestamp = timestamp
+
+        // The instance is already in LOG here, so a WebDriver command log names its hook itself: the binary
+        // keys an entry to a hook run only by a hook state.
+        const commandLogHook = commandLog ? this.commandLogHook : null
+        if (commandLogHook) {
+            logRecord[TestFrameworkConstants.KEY_HOOK_ID] = commandLogHook[TestFrameworkConstants.KEY_HOOK_ID]
+            logRecord.testFrameworkState = commandLogHook.key
+        }
 
         // Attach to the suitable hook
         const lastActiveHook = WdioMochaTestFramework.lastActiveHook(instance, WdioMochaTestFramework.KEY_HOOK_LAST_STARTED)
@@ -295,6 +315,22 @@ export default class WdioMochaTestFramework extends TestFramework {
         instance.updateMultipleEntries({
             [TestFrameworkConstants.KEY_TEST_LOGS]: entries,
         })
+    }
+
+    /** A command log outside any hook goes to the last test that ran, in LOG state, as console logs do. */
+    private commandLogTestInstance(testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
+        if (testFrameworkState !== TestFrameworkState.LOG || args.commandLog !== true || this.commandLogHook || !this.commandLogTest) {
+            return null
+        }
+        this.updateInstanceState(this.commandLogTest, testFrameworkState, hookState)
+        return this.commandLogTest
+    }
+
+    /** The hook started last and not yet finished: a hook's POST pops it from the started list. */
+    static openHook(instance: TestFrameworkInstance): Record<string, unknown> | undefined {
+        const key = TestFramework.getState(instance, WdioMochaTestFramework.KEY_HOOK_LAST_STARTED) as string | undefined
+        const started = TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOKS_STARTED) as Map<string, Record<string, unknown>[]> | undefined
+        return key && started instanceof Map ? started.get(key)?.at(-1) : undefined
     }
 
     /**

@@ -278,7 +278,7 @@ export default class AccessibilityModule extends BaseModule {
             // on suite and test titles, and in this window neither exists yet. onBeforeTest
             // re-computes the per-test gate, tags included, so this only affects the window.
             const preTestSessionId = this.currentSessionId()
-            if (this.autoScanning && preTestSessionId !== undefined && preTestSessionId !== null) {
+            if (this.autoScanning && this.supportsPreTestWindow() && preTestSessionId !== undefined && preTestSessionId !== null) {
                 this.accessibilityMap.set(preTestSessionId, true)
                 this.logger.debug('Accessibility scan gate opened ahead of the first test')
             }
@@ -338,9 +338,11 @@ export default class AccessibilityModule extends BaseModule {
         try {
             this.logger.debug('Accessibility before test hook. Starting accessibility scan for this test case.')
             const suiteTitle = (typeof args.suiteTitle === 'string' ? args.suiteTitle : '') || ''
-            const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string } : {}) || {}
+            const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string, description?: string } : {}) || {}
+            // jasmine specs carry their name in `description` (`title` is unset), as on the classic handler
+            const testTitle = test.title ?? test.description
 
-            this.currentTestName = test.title || null
+            this.currentTestName = testTitle || null
             this.testContextSeen = true
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const testInstance: TestFrameworkInstance = TestFramework.getTrackedInstance()
@@ -353,7 +355,7 @@ export default class AccessibilityModule extends BaseModule {
             // only ever populated on the cucumber path, so mocha and jasmine keep the exact 3-arg
             // behaviour — both extra args arrive undefined/false and the tag branch is not taken.
             const world = args.world as { [key: string]: unknown } | undefined
-            const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title || '', accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)) && this.accessibility
+            const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, testTitle || '', accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)) && this.accessibility
 
             this.accessibilityMap.set(sessionId, shouldScanTest)
 
@@ -535,6 +537,12 @@ export default class AccessibilityModule extends BaseModule {
             }
         }
         return false
+    }
+
+    // Legacy jasmine opened no scan window before its first spec (classic PRE_TEST_SCAN_FRAMEWORKS)
+    private supportsPreTestWindow(): boolean {
+        const frameworks = BrowserstackCLI.getInstance().getTestFramework()?.getTestFrameworks() ?? []
+        return !frameworks.some((name) => String(name).toLowerCase().includes('jasmine'))
     }
 
     // See the classic handler: one definition, used at every scan site.

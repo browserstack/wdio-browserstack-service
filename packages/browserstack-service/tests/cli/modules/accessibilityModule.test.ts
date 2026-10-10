@@ -59,6 +59,7 @@ import AutomationFramework from '../../../src/cli/frameworks/automationFramework
 import { AutomationFrameworkState } from '../../../src/cli/states/automationFrameworkState.js'
 import { HookState } from '../../../src/cli/states/hookState.js'
 import { TestFrameworkState } from '../../../src/cli/states/testFrameworkState.js'
+import { BrowserstackCLI } from '../../../src/cli/index.js'
 
 describe('AccessibilityModule', () => {
     let accessibilityModule: AccessibilityModule
@@ -194,6 +195,30 @@ describe('AccessibilityModule', () => {
             expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
         })
 
+        it('opens no window for jasmine, whose classic flow scanned nothing before the first spec', async () => {
+            withA11yCaps()
+            const cliSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                getTestFramework: () => ({ getTestFrameworks: () => ['WebdriverIO-jasmine'] })
+            } as any)
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.has('session-w')).toBe(false)
+            cliSpy.mockRestore()
+        })
+
+        it('still opens the window for mocha', async () => {
+            withA11yCaps()
+            const cliSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                getTestFramework: () => ({ getTestFrameworks: () => ['WebdriverIO-mocha'] })
+            } as any)
+
+            await accessibilityModule.onBeforeExecute()
+
+            expect(accessibilityModule.accessibilityMap.get('session-w')).toBe(true)
+            cliSpy.mockRestore()
+        })
+
         it('respects autoScanning — the one validation the window still owns', async () => {
             withA11yCaps()
             accessibilityModule.autoScanning = false
@@ -273,6 +298,25 @@ describe('AccessibilityModule', () => {
             await fireWrappedCommand()
 
             expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', 'a test', null, false)
+        })
+    })
+
+    describe('onBeforeTest — jasmine spec name', () => {
+        it('filters on the spec description when the test has no title, and names the test with it', async () => {
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            vi.mocked(AutomationFramework.getState).mockImplementation(() => 'session-w')
+            await accessibilityModule.onBeforeTest({
+                suiteTitle: 'Nested outer',
+                test: { description: 'outer passing test', fullName: 'Nested outer outer passing test' }
+            })
+            expect(shouldScanTestForAccessibility).toHaveBeenCalledWith('Nested outer', 'outer passing test', {}, undefined, false)
+        })
+
+        it('keeps the title when there is one (mocha)', async () => {
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            vi.mocked(AutomationFramework.getState).mockImplementation(() => 'session-w')
+            await accessibilityModule.onBeforeTest({ suiteTitle: 'Suite', test: { title: 't', description: 'ignored' } })
+            expect(shouldScanTestForAccessibility).toHaveBeenCalledWith('Suite', 't', {}, undefined, false)
         })
     })
 

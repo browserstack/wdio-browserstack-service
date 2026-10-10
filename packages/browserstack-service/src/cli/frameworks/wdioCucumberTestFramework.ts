@@ -116,6 +116,8 @@ export default class WdioCucumberTestFramework extends TestFramework {
 
     /** The hook currently open on this worker — started and not yet finished. */
     private openHook: { key: string, hookId: string } | null = null
+    // WebDriver command logs attach only once a scenario has started, as legacy's current-test gate did.
+    private scenarioStarted = false
 
     constructor(testFrameworks: string[], testFrameworkVersions: Record<string, string>, binSessionId: string) {
         super(testFrameworks, testFrameworkVersions, binSessionId)
@@ -221,6 +223,13 @@ export default class WdioCucumberTestFramework extends TestFramework {
     async trackEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown> = {}) {
         logger.debug(`WdioCucumberTestFramework.trackEvent: testFrameworkState=${testFrameworkState} hookState=${hookState}`)
         await super.trackEvent(testFrameworkState, hookState, args)
+
+        if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.PRE) {
+            this.scenarioStarted = true
+        } else if (testFrameworkState === TestFrameworkState.LOG && args.commandLog === true && !this.scenarioStarted) {
+            logger.debug('trackEvent: command log before the first scenario dropped')
+            return
+        }
 
         const instance = this.resolveInstance(testFrameworkState, hookState)
         if (!instance) {

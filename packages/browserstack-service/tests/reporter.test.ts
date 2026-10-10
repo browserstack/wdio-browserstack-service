@@ -4,6 +4,10 @@ import { describe, expect, it, vi, beforeEach, afterEach, beforeAll, afterAll } 
 import type { StdLog } from '../src/index.js'
 
 import TestReporter from '../src/reporter.js'
+import { BrowserstackCLI } from '../src/cli/index.js'
+import WdioJasmineTestFramework from '../src/cli/frameworks/wdioJasmineTestFramework.js'
+import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
+import { HookState } from '../src/cli/states/hookState.js'
 import * as utils from '../src/util.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 
@@ -352,6 +356,224 @@ describe('test-reporter', () => {
             expect(testLogObj.hook_run_uuid).toBe(undefined)
             expect(testLogObj.test_run_uuid).toBe(undefined)
             expect(sendDataSpy).toBeCalledTimes(0)
+        })
+    })
+
+    describe('jasmine CLI feed', () => {
+        const jasmineRunnerConfig = {
+            type: 'runner',
+            cid: '0-0',
+            capabilities: { browserName: 'chrome', browserVersion: '151' },
+            config: { framework: 'jasmine', hostname: 'hub.browserstack.com' },
+            specs: ['/work/test/p2/nested.spec.js'],
+            sessionId: 'sessionId'
+        }
+        const suite = { title: 'Nested outer', file: '/work/test/p2/nested.spec.js' }
+        const jasmineTestStats = () => ({
+            type: 'test',
+            uid: 'outer passing test0',
+            title: 'outer passing test',
+            fullTitle: 'Nested outer outer passing test',
+            start: new Date('2026-09-25T15:34:12.259Z'),
+            _duration: 0,
+            retries: 0,
+            state: 'pending',
+        })
+        const hookStats = () => ({ type: 'hook', uid: 'h', title: '"before all" hook', start: new Date(), _duration: 0 })
+        const logEntry = () => ({ timestamp: new Date().toISOString(), level: 'INFO', message: 'console line', kind: 'TEST_LOG' as const, http_response: {} })
+
+        let reporter: TestReporter
+        let listener: Record<string, ReturnType<typeof vi.spyOn>>
+        let framework: WdioJasmineTestFramework
+        let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
+        let getGitMetaDataSpy: ReturnType<typeof vi.spyOn>
+        // the reporter-sourced trackEvent calls, as [state, hookState, args]
+        const reporterCalls = () => vi.mocked(framework.trackEvent).mock.calls.filter(([, , args]) => (args as Record<string, unknown>)?.source === 'reporter')
+
+        const setCli = (running: boolean, testFramework: unknown) => {
+            getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => running,
+                getTestFramework: () => testFramework,
+            } as unknown as BrowserstackCLI)
+        }
+
+        beforeEach(async () => {
+            vi.spyOn(utils, 'getCloudProvider').mockReturnValue('browserstack')
+            getGitMetaDataSpy = vi.spyOn(utils, 'getGitMetaData').mockResolvedValue(undefined as any)
+            framework = new WdioJasmineTestFramework(['WebdriverIO-jasmine'], { 'WebdriverIO-jasmine': '9.39.0' }, 'bin')
+            vi.spyOn(framework, 'trackEvent').mockImplementation(async (state, hookState, args = {}) => {
+                if (state === TestFrameworkState.TEST && hookState === HookState.PRE) {
+                    args.testUuid = 'cli-uuid'
+                }
+            })
+
+            reporter = new TestReporter({})
+            await reporter.onRunnerStart(jasmineRunnerConfig as any)
+            reporter.onSuiteStart(suite as any)
+            listener = {
+                testStarted: vi.spyOn(reporter['listener'], 'testStarted').mockImplementation(() => {}),
+                testFinished: vi.spyOn(reporter['listener'], 'testFinished').mockImplementation(() => {}),
+                hookStarted: vi.spyOn(reporter['listener'], 'hookStarted').mockImplementation(() => {}),
+                hookFinished: vi.spyOn(reporter['listener'], 'hookFinished').mockImplementation(() => {}),
+                logCreated: vi.spyOn(reporter['listener'], 'logCreated').mockImplementation(() => {}),
+            }
+        })
+
+        afterEach(() => {
+            getInstanceSpy?.mockRestore()
+            getInstanceSpy = undefined
+            getGitMetaDataSpy.mockRestore()
+            for (const spy of Object.values(listener)) {
+                spy.mockRestore()
+            }
+        })
+
+        describe('on the CLI flow', () => {
+            beforeEach(() => setCli(true, framework))
+
+            it('feeds every test and hook event to the framework and enqueues nothing on the legacy Listener', async () => {
+                const stats = jasmineTestStats()
+                await reporter.onHookStart(hookStats() as any)
+                await reporter.onHookEnd(hookStats() as any)
+                await reporter.onTestStart(stats as any)
+                await reporter.onTestEnd({ ...stats, state: 'passed' } as any)
+                await reporter.appendTestItemLog(logEntry())
+
+                expect(reporterCalls().map(([state, hookState]) => [state, hookState])).toEqual([
+                    [TestFrameworkState.BEFORE_ALL, HookState.PRE],
+                    [TestFrameworkState.BEFORE_ALL, HookState.POST],
+                    [TestFrameworkState.TEST, HookState.PRE],
+                    [TestFrameworkState.TEST, HookState.POST],
+                    [TestFrameworkState.LOG, HookState.POST],
+                ])
+                expect(framework.trackEvent).toHaveBeenCalledTimes(5)
+                for (const spy of Object.values(listener)) {
+                    expect(spy).not.toHaveBeenCalled()
+                }
+            })
+
+            it('passes the suite stack and suite file', async () => {
+                await reporter.onTestStart(jasmineTestStats() as any)
+                expect(framework.trackEvent).toHaveBeenCalledWith(TestFrameworkState.TEST, HookState.PRE, expect.objectContaining({
+                    source: 'reporter',
+                    testStats: expect.objectContaining({ fullTitle: 'Nested outer outer passing test' }),
+                    context: { scopes: ['Nested outer'], suiteFile: '/work/test/p2/nested.spec.js' },
+                }))
+            })
+
+            it('passes hook stats with the suite context, and log entries as they came', async () => {
+                const hook = hookStats()
+                await reporter.onHookStart(hook as any)
+                await reporter.onHookEnd(hook as any)
+                const entry = logEntry()
+                await reporter.appendTestItemLog(entry)
+                const context = { scopes: ['Nested outer'], suiteFile: '/work/test/p2/nested.spec.js' }
+                expect(reporterCalls().map(([, , args]) => args)).toEqual([
+                    { source: 'reporter', hookStats: hook, context },
+                    { source: 'reporter', hookStats: hook, context },
+                    { source: 'reporter', logEntry: entry },
+                ])
+            })
+
+            it('reports an each-hook in NONE, leaving the class to drop it', async () => {
+                await reporter.onHookStart({ ...hookStats(), title: '"before each" hook' } as any)
+                expect(framework.trackEvent).toHaveBeenCalledWith(TestFrameworkState.NONE, HookState.PRE, expect.objectContaining({ source: 'reporter' }))
+            })
+
+            it('records nothing for the spec when the framework minted no uuid', async () => {
+                vi.mocked(framework.trackEvent).mockResolvedValue(undefined)
+                ;(TestReporter as any).currentTest = {}
+                await reporter.onTestStart({ ...jasmineTestStats(), fullTitle: 'No uuid spec' } as any)
+                expect(TestReporter.getTests()['No uuid spec']).toBeUndefined()
+                expect((TestReporter as any).currentTest).toEqual({})
+            })
+
+            it('records the CLI uuid for the spec so command-result lookups resolve to the wire uuid', async () => {
+                await reporter.onTestStart(jasmineTestStats() as any)
+                expect(TestReporter.getTests()['Nested outer outer passing test']).toEqual({ uuid: 'cli-uuid' })
+            })
+
+            it('names the current test for Percy\'s testCase, as legacy getRunData did', async () => {
+                await reporter.onTestStart(jasmineTestStats() as any)
+                expect((TestReporter as any).currentTest).toMatchObject({ uuid: 'cli-uuid', name: 'outer passing test' })
+            })
+
+            it('keeps legacy\'s end stamp and forced hook pass on the WDIO stats objects', async () => {
+                const stats = jasmineTestStats() as Record<string, unknown>
+                await reporter.onTestEnd(stats as any)
+                expect(stats.end).toBeInstanceOf(Date)
+                const hook = hookStats() as Record<string, unknown>
+                await reporter.onHookEnd(hook as any)
+                expect(hook.state).toBe('passed')
+            })
+
+            it('drops <unknown test>', async () => {
+                await reporter.onTestStart({ ...jasmineTestStats(), fullTitle: '<unknown test>' } as any)
+                await reporter.onTestEnd({ ...jasmineTestStats(), fullTitle: '<unknown test>' } as any)
+                expect(framework.trackEvent).not.toHaveBeenCalled()
+            })
+
+            it('sends nothing when Test Observability is opted out', async () => {
+                reporter['_observability'] = false
+                await reporter.onTestStart(jasmineTestStats() as any)
+                expect(framework.trackEvent).not.toHaveBeenCalled()
+                expect(listener.testStarted).not.toHaveBeenCalled()
+            })
+
+            it('never falls back to the legacy Listener when the tracker is missing', async () => {
+                setCli(true, null)
+                await reporter.onTestStart(jasmineTestStats() as any)
+                await reporter.appendTestItemLog(logEntry())
+                expect(listener.testStarted).not.toHaveBeenCalled()
+                expect(listener.logCreated).not.toHaveBeenCalled()
+            })
+
+            it('reports unsynchronised while the framework has queued events', () => {
+                const isIdle = vi.spyOn(framework, 'isIdle').mockReturnValue(false)
+                expect(reporter.isSynchronised).toBe(false)
+                isIdle.mockReturnValue(true)
+                expect(reporter.isSynchronised).toBe(true)
+            })
+
+            it('is synchronised when the CLI test framework is not jasmine\'s', () => {
+                setCli(true, { isIdle: () => false })
+                expect(reporter.isSynchronised).toBe(true)
+            })
+        })
+
+        describe('on the legacy flow', () => {
+            beforeEach(() => setCli(false, null))
+
+            it('enqueues on the legacy Listener and never touches the framework', async () => {
+                const stats = jasmineTestStats()
+                await reporter.onHookStart(hookStats() as any)
+                await reporter.onHookEnd(hookStats() as any)
+                await reporter.onTestStart(stats as any)
+                await reporter.onTestEnd({ ...stats, state: 'passed' } as any)
+                reporter['_currentHook'] = {}
+                await reporter.appendTestItemLog(logEntry())
+
+                expect(listener.hookStarted).toHaveBeenCalledTimes(1)
+                expect(listener.hookFinished).toHaveBeenCalledTimes(1)
+                expect(listener.testStarted).toHaveBeenCalledTimes(1)
+                expect(listener.testFinished).toHaveBeenCalledTimes(1)
+                expect(listener.logCreated).toHaveBeenCalledTimes(1)
+                expect(framework.trackEvent).not.toHaveBeenCalled()
+                expect(TestReporter.getTests()['Nested outer outer passing test']).toEqual({ uuid: '123456789' })
+            })
+        })
+
+        describe('mocha on the CLI flow', () => {
+            beforeEach(() => setCli(true, framework))
+
+            it('leaves the mocha arm unchanged: no start/end publishing from the reporter', async () => {
+                reporter['_config']!.framework = 'mocha'
+                await reporter.onTestStart(jasmineTestStats() as any)
+                await reporter.onTestEnd({ ...jasmineTestStats(), state: 'passed' } as any)
+                expect(framework.trackEvent).not.toHaveBeenCalled()
+                expect(listener.testStarted).not.toHaveBeenCalled()
+                expect(listener.testFinished).not.toHaveBeenCalled()
+            })
         })
     })
 })

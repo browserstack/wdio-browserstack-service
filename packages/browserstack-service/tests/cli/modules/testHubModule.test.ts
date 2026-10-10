@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import type { Mock } from 'vitest'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import TestHubModule from '../../../src/cli/modules/testHubModule.js'
@@ -10,6 +11,7 @@ import WdioMochaTestFramework from '../../../src/cli/frameworks/wdioMochaTestFra
 import { TestFrameworkConstants } from '../../../src/cli/frameworks/constants/testFrameworkConstants.js'
 import { AutomationFrameworkConstants } from '../../../src/cli/frameworks/constants/automationFrameworkConstants.js'
 import type { Frameworks } from '@wdio/types'
+import { BStackLogger } from '../../../src/cli/cliLogger.js'
 
 // Mock all dependencies
 vi.mock('../../../src/cli/frameworks/testFramework.js', () => ({
@@ -26,7 +28,8 @@ vi.mock('../../../src/cli/frameworks/automationFramework.js', () => ({
     default: {
         getTrackedInstance: vi.fn(),
         getState: vi.fn(),
-        getDriver: vi.fn()
+        getDriver: vi.fn(),
+        registerObserver: vi.fn()
     }
 }))
 
@@ -152,6 +155,15 @@ describe('TestHubModule', () => {
                 autoInstance: [mockAutomationInstance]
             })
         })
+
+        it('should skip events marked skipTestHub', async () => {
+            const sendTestSessionEventSpy = vi.spyOn(testHubModule, 'sendTestSessionEvent').mockResolvedValue()
+
+            await testHubModule.onBeforeTest({ test: { title: 'Test' } as Frameworks.Test, skipTestHub: true })
+
+            expect(AutomationFramework.getTrackedInstance).not.toHaveBeenCalled()
+            expect(sendTestSessionEventSpy).not.toHaveBeenCalled()
+        })
     })
 
     describe('onAllTestEvents', () => {
@@ -220,6 +232,32 @@ describe('TestHubModule', () => {
                 instance: mockInstance,
                 test: { title: 'Test' } as Frameworks.Test
             }
+
+            await testHubModule.onAllTestEvents(mockArgs)
+
+            expect(sendTestFrameworkEventSpy).toHaveBeenCalledWith(mockArgs)
+        })
+
+        it('should skip events marked skipTestHub', async () => {
+            const mockInstance = {
+                getCurrentTestState: vi.fn(() => TestFrameworkState.TEST),
+                getCurrentHookState: vi.fn(() => HookState.POST)
+            }
+            const sendTestFrameworkEventSpy = vi.spyOn(testHubModule, 'sendTestFrameworkEvent').mockResolvedValue()
+
+            await testHubModule.onAllTestEvents({ instance: mockInstance, skipTestHub: true })
+
+            expect(mockInstance.getCurrentTestState).not.toHaveBeenCalled()
+            expect(sendTestFrameworkEventSpy).not.toHaveBeenCalled()
+        })
+
+        it('should only treat a literal true skipTestHub as the marker', async () => {
+            const mockInstance = {
+                getCurrentTestState: vi.fn(() => TestFrameworkState.TEST),
+                getCurrentHookState: vi.fn(() => HookState.PRE)
+            }
+            const sendTestFrameworkEventSpy = vi.spyOn(testHubModule, 'sendTestFrameworkEvent').mockResolvedValue()
+            const mockArgs = { instance: mockInstance, skipTestHub: 'true' }
 
             await testHubModule.onAllTestEvents(mockArgs)
 
@@ -581,5 +619,157 @@ describe('TestHubModule', () => {
             expect(call.automationSessions).toEqual([])
             expect(call.capabilities).toEqual(new Uint8Array())
         })
+    })
+})
+describe('TestHubModule — sendLogCreatedEvent per-entry state', () => {
+    it('sends an entry that names its own hook state in that state, and every other entry in the instance\'s', async () => {
+        const logCreatedEvent = vi.fn().mockResolvedValue(undefined)
+        vi.mocked(GrpcClient.getInstance).mockReturnValue({ logCreatedEvent } as any)
+        vi.mocked(TestFramework.getState).mockReturnValue('test-uuid')
+        const instance = {
+            getContext: () => ({ getId: () => 'ctx', getThreadId: () => 1, getProcessId: () => 2 }),
+            getAllData: () => new Map(),
+            getCurrentTestState: () => TestFrameworkState.LOG,
+            getCurrentHookState: () => HookState.POST,
+        }
+        await new TestHubModule({}).sendLogCreatedEvent({ instance, logEntries: [
+            { kind: 'TEST_SCREENSHOT', message: 'a', timestamp: 't', [TestFrameworkConstants.KEY_HOOK_ID]: 'hook-uuid', testFrameworkState: 'BEFORE_EACH' },
+            { kind: 'TEST_LOG', message: 'b', timestamp: 't' },
+        ] })
+        const logs = logCreatedEvent.mock.calls[0][0].logs
+        expect(logs.map((l: Record<string, unknown>) => [l.testFrameworkState, l.uuid])).toEqual([['BEFORE_EACH', 'hook-uuid'], ['LOG', 'test-uuid']])
+    })
+})
+
+describe('TestHubModule — WebDriver command logs', () => {
+    const settle = () => new Promise(resolve => setImmediate(resolve))
+    const title = { method: 'GET', endpoint: '/session/:sessionId/title', body: {} }
+    const screenshot = { method: 'GET', endpoint: '/session/:sessionId/screenshot', body: {} }
+    let module: TestHubModule
+    let browser: EventEmitter & { sessionId: string }
+    let framework: { trackEvent: Mock }
+    const logEntries = () => framework.trackEvent.mock.calls.map(([state, hook, args]) => {
+        expect([state, hook]).toEqual([TestFrameworkState.LOG, HookState.POST])
+        expect(args.commandLog).toBe(true)
+        return args.logEntry
+    })
+
+    const register = () => {
+        framework = { trackEvent: vi.fn().mockResolvedValue(undefined) }
+        module.setTestFramework(framework as unknown as TestFramework)
+        module.onDriverCreated({ browser })
+    }
+    const run = async (command: Record<string, unknown>, result: unknown) => {
+        browser.emit('command', { ...command })
+        browser.emit('result', { ...command, result })
+        await settle()
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        process.env.BROWSERSTACK_OBSERVABILITY = 'true'
+        process.env.BS_TESTOPS_ALLOW_SCREENSHOTS = 'true'
+        module = new TestHubModule({})
+        browser = Object.assign(new EventEmitter(), { sessionId: 's1' })
+    })
+
+    afterEach(() => {
+        delete process.env.BROWSERSTACK_OBSERVABILITY
+        delete process.env.BS_TESTOPS_ALLOW_SCREENSHOTS
+    })
+
+    it('observes driver creation', () => {
+        expect(AutomationFramework.registerObserver).toHaveBeenCalledWith(expect.anything(), HookState.POST, expect.any(Function))
+    })
+
+    it('sends a paired HTTP log in the legacy message shape', async () => {
+        register()
+        await run(title, { value: 'StackDemo' })
+        expect(logEntries()).toEqual([{ kind: 'HTTP', message: JSON.stringify({ path: title.endpoint, method: 'GET', body: {}, response: { value: 'StackDemo' } }), timestamp: expect.any(String) }])
+    })
+
+    it('sends the screenshot, then its HTTP log', async () => {
+        register()
+        await run(screenshot, { value: 'b64' })
+        expect(logEntries().map(e => e.kind)).toEqual(['TEST_SCREENSHOT', 'HTTP'])
+    })
+
+    it.each([undefined, 'false', ''])('sends no screenshot when allow_screenshots is %j', async (allow) => {
+        if (allow === undefined) {
+            delete process.env.BS_TESTOPS_ALLOW_SCREENSHOTS
+        } else {
+            process.env.BS_TESTOPS_ALLOW_SCREENSHOTS = allow
+        }
+        register()
+        await run(screenshot, { value: 'b64' })
+        expect(logEntries().map(e => e.kind)).toEqual(['HTTP'])
+    })
+
+    it('pairs on the live session id, so a reload pairs its own commands and never an earlier session\'s', async () => {
+        register()
+        browser.emit('command', { ...title })
+        browser.sessionId = 's2'
+        browser.emit('result', { ...title, result: { value: 'old' } })
+        await settle()
+        expect(framework.trackEvent).not.toHaveBeenCalled()
+
+        await run(title, { value: 'new' })
+        expect(logEntries().map(e => JSON.parse(e.message).response.value)).toEqual(['new'])
+    })
+
+    it('pairs every result of concurrent same-key commands', async () => {
+        register()
+        browser.emit('command', { ...title })
+        browser.emit('command', { ...title })
+        browser.emit('result', { ...title, result: { value: 'a' } })
+        browser.emit('result', { ...title, result: { value: 'b' } })
+        await settle()
+        expect(logEntries()).toHaveLength(2)
+    })
+
+    it('registers once per browser, so a reload never doubles the logs', async () => {
+        register()
+        module.onDriverCreated({ browser })
+        await run(title, { value: 'StackDemo' })
+        expect(browser.listenerCount('result')).toBe(1)
+        expect(framework.trackEvent).toHaveBeenCalledTimes(1)
+    })
+
+    it('registers nothing, and later sends nothing, when no product reports events', async () => {
+        delete process.env.BROWSERSTACK_OBSERVABILITY
+        register()
+        expect(browser.listenerCount('result')).toBe(0)
+
+        process.env.BROWSERSTACK_OBSERVABILITY = 'true'
+        browser = Object.assign(new EventEmitter(), { sessionId: 's1' })
+        register()
+        delete process.env.BROWSERSTACK_OBSERVABILITY
+        await run(title, { value: 'StackDemo' })
+        expect(framework.trackEvent).not.toHaveBeenCalled()
+    })
+
+    it('sends no HTTP log when LogCreated events are off for the run (accessibility only), as legacy\'s listener did', async () => {
+        delete process.env.BROWSERSTACK_OBSERVABILITY
+        process.env.BROWSERSTACK_ACCESSIBILITY = 'true'
+        try {
+            register()
+            await run(title, { value: 'StackDemo' })
+            await run(screenshot, { value: 'b64' })
+            expect(logEntries().map(e => e.kind)).toEqual(['TEST_SCREENSHOT'])
+        } finally {
+            delete process.env.BROWSERSTACK_ACCESSIBILITY
+        }
+    })
+
+    it('never throws out of a listener when the framework fails', async () => {
+        register()
+        framework.trackEvent.mockRejectedValue(new Error('track blew up'))
+        await expect(run(screenshot, { value: 'b64' })).resolves.toBeUndefined()
+        expect(BStackLogger.error).toHaveBeenCalledWith(expect.stringContaining('track blew up'))
+    })
+
+    it('logs nothing without a test framework', async () => {
+        module.onDriverCreated({ browser })
+        await expect(run(screenshot, { value: 'b64' })).resolves.toBeUndefined()
     })
 })

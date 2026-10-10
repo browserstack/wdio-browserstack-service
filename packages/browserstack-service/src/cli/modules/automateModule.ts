@@ -1,4 +1,5 @@
 import BaseModule from './baseModule.js'
+import { BrowserstackCLI } from '../index.js'
 import { BStackLogger } from '../cliLogger.js'
 import TestFramework from '../frameworks/testFramework.js'
 import { TestFrameworkState } from '../states/testFrameworkState.js'
@@ -19,6 +20,20 @@ import util from 'node:util'
 
 interface TestResult {
     testName: string
+    status: 'passed' | 'failed'
+    reason?: string
+}
+
+/** What legacy `service.after()` computed the jasmine session verdict from, as the service tracked it. */
+interface SessionVerdictInputs {
+    result: number
+    specsRan: boolean
+    failReasons: string[]
+    pureTestFailReasons: string[]
+    hookFailReasons: string[]
+}
+
+interface SessionVerdict {
     status: 'passed' | 'failed'
     reason?: string
 }
@@ -74,6 +89,11 @@ export default class AutomateModule extends BaseModule {
             return
         }
 
+        // Legacy annotated from service.beforeTest, which never runs for cucumber or a skipped test
+        if (!this.isCucumberInstance(instace) && args.skipReport !== true) {
+            await this.annotate(browser, `Test: ${test.fullName ?? test.title}`)
+        }
+
         // `setSessionName: false` suppresses the NAME, not the registration. The session still has
         // to enter sessionMap or onAfterExecute has nothing to status-mark, and legacy marks it
         // either way — its `after()` status block gates on setSessionStatus alone. Registering with
@@ -88,9 +108,10 @@ export default class AutomateModule extends BaseModule {
         }
 
         let name = suiteTitle
-        if (testContextOptions.sessionNameFormat) {
+        const sessionNameFormat = this.sessionNameFormatFor(instace, testContextOptions)
+        if (sessionNameFormat) {
             const caps = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_CAPABILITIES)
-            name = testContextOptions.sessionNameFormat(
+            name = sessionNameFormat(
                 this.browserStackConfig,
                 caps,
                 suiteTitle,
@@ -181,9 +202,10 @@ export default class AutomateModule extends BaseModule {
         }
 
         let name = suiteTitle
-        if (testContextOptions.sessionNameFormat) {
+        const sessionNameFormat = this.sessionNameFormatFor(instace, testContextOptions)
+        if (sessionNameFormat) {
             const caps = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_CAPABILITIES)
-            name = testContextOptions.sessionNameFormat(
+            name = sessionNameFormat(
                 this.browserStackConfig,
                 caps,
                 suiteTitle,
@@ -324,6 +346,30 @@ export default class AutomateModule extends BaseModule {
         }
     }
 
+    /**
+     * The binary's config echo cannot carry a function, so `sessionNameFormat` arrives empty. Jasmine
+     * takes it from the worker's own service options, as legacy did.
+     */
+    private sessionNameFormatFor(instance: TestFrameworkInstance, testContextOptions: TestContextOptions) {
+        if (testContextOptions.sessionNameFormat) {
+            return testContextOptions.sessionNameFormat
+        }
+        const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
+        if (!frameworkName.toLowerCase().includes('jasmine')) {
+            return undefined
+        }
+        const format = (BrowserstackCLI.getInstance().options as { sessionNameFormat?: unknown })?.sessionNameFormat
+        return typeof format === 'function' ? format as TestContextOptions['sessionNameFormat'] : undefined
+    }
+
+    private async annotate(browser: WebdriverIO.Browser, data: string) {
+        try {
+            await browser.executeScript(`browserstack_executor: ${JSON.stringify({ action: 'annotate', arguments: { data, level: 'info' } })}`, [])
+        } catch (error) {
+            this.logger.error(`annotate: failed to annotate the session: ${util.format(error)}`)
+        }
+    }
+
     private isCucumberInstance(instance: TestFrameworkInstance): boolean {
         const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
         return frameworkName.toLowerCase().includes('cucumber')
@@ -341,12 +387,21 @@ export default class AutomateModule extends BaseModule {
         }
     }
 
-    async onAfterExecute() {
+    async onAfterExecute(args: { sessionVerdictInputs?: SessionVerdictInputs } = {}) {
         this.logger.debug('onAfterExecute: inside automate module after execute hook!')
 
         const userName = this.config.userName as string
         const accessKey = this.config.accessKey as string
         const testContextOptions = this.config.testContextOptions as TestContextOptions
+
+        if (args?.sessionVerdictInputs) {
+            // The binary's config echo carries `testObservabilityOptions` empty, so read the worker's own service options
+            const serviceOptions = BrowserstackCLI.getInstance().options as { testObservabilityOptions?: { ignoreHooksStatus?: boolean } }
+            const ignoreHooksStatus = serviceOptions?.testObservabilityOptions?.ignoreHooksStatus === true
+            await this.markJasmineSession(this.liveSessionId(), this.jasmineVerdict(args.sessionVerdictInputs, ignoreHooksStatus))
+            this.sessionMap.clear()
+            return
+        }
 
         for (const [sessionId, sessionData] of this.sessionMap.entries()) {
             try {
@@ -387,6 +442,58 @@ export default class AutomateModule extends BaseModule {
         }
 
         this.sessionMap.clear()
+    }
+
+    private liveSessionId(): string {
+        const autoInstance = AutomationFramework.getTrackedInstance()
+        return autoInstance ? String(AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID) || '') : ''
+    }
+
+    /**
+     * Legacy `service.after()`'s session status: passed only when the runner reported no failed spec, a spec
+     * ran, and no test or hook failed, with `ignoreHooksStatus` handled as coded there.
+     */
+    private jasmineVerdict(inputs: SessionVerdictInputs, ignoreHooksStatus: boolean): SessionVerdict {
+        const { result, specsRan, failReasons, pureTestFailReasons, hookFailReasons } = inputs
+        const joined = (reasons: string[]) => reasons.length > 0 ? reasons.join('\n') : undefined
+
+        if (result === 0 && specsRan) {
+            const reasons = ignoreHooksStatus ? pureTestFailReasons : failReasons
+            return reasons.length > 0 ? { status: 'failed', reason: joined(reasons) } : { status: 'passed' }
+        }
+        if (ignoreHooksStatus && specsRan) {
+            const hasOnlyHookFailures = failReasons.length === 0 && hookFailReasons.length > 0
+            if (hasOnlyHookFailures && pureTestFailReasons.length === 0) {
+                return { status: 'passed' }
+            }
+            return { status: 'failed', reason: joined(pureTestFailReasons) }
+        }
+        return {
+            status: 'failed',
+            reason: ignoreHooksStatus && pureTestFailReasons.length > 0 ? joined(pureTestFailReasons) : joined(failReasons),
+        }
+    }
+
+    /**
+     * Jasmine: legacy `service.after()` marked only the live session, with the worker's status, the last
+     * name and the test and hook failure reasons. A session nothing registered (a beforeAll failed before
+     * any spec ran) is still marked; a reloaded one keeps the mark `onReload` already sent.
+     */
+    private async markJasmineSession(liveSessionId: string, verdict: SessionVerdict) {
+        const testContextOptions = this.config.testContextOptions as TestContextOptions
+        if (!liveSessionId || testContextOptions.skipSessionStatus) {
+            return
+        }
+        const registered = this.sessionMap.get(liveSessionId)
+        if (!registered && !isBrowserstackSession(AutomationFramework.getDriver(AutomationFramework.getTrackedInstance()) as WebdriverIO.Browser)) {
+            return
+        }
+        const name = testContextOptions.skipSessionName ? undefined : registered?.lastTestName || undefined
+        try {
+            await this.markSessionStatus(liveSessionId, verdict.status, verdict.reason, { user: this.config.userName as string, key: this.config.accessKey as string }, name)
+        } catch (error) {
+            this.logger.error(`Failed to process session ${liveSessionId}: ${error}`)
+        }
     }
 
     // An App Automate session is identified by the service-level app / skipAppOverride flag,
@@ -474,10 +581,10 @@ export default class AutomateModule extends BaseModule {
         )(sessionId, sessionName, config)
     }
 
-    async markSessionStatus(sessionId: string, sessionStatus: 'passed' | 'failed', sessionErrorMessage: string | undefined, config: { user: string; key: string; }): Promise<void> {
+    async markSessionStatus(sessionId: string, sessionStatus: 'passed' | 'failed', sessionErrorMessage: string | undefined, config: { user: string; key: string; }, sessionName?: string): Promise<void> {
         return await PerformanceTester.measureWrapper(
             PERFORMANCE_SDK_EVENTS.AUTOMATE_EVENTS.SESSION_STATUS,
-            async (sessionId: string, sessionStatus: 'passed' | 'failed', sessionErrorMessage: string | undefined, config: { user: string; key: string; }) => {
+            async (sessionId: string, sessionStatus: 'passed' | 'failed', sessionErrorMessage: string | undefined, config: { user: string; key: string; }, sessionName?: string) => {
                 try {
                     const auth = Buffer.from(`${config.user}:${config.key}`).toString('base64')
                     const { url: sessionStatusApiUrl, method, product } = this.resolveSessionApi(sessionId)
@@ -485,6 +592,7 @@ export default class AutomateModule extends BaseModule {
 
                     const body = {
                         status: sessionStatus,
+                        ...(sessionName ? { name: sessionName } : {}),
                         ...(sessionErrorMessage ? { reason: sessionErrorMessage } : {})
                     }
 
@@ -504,7 +612,7 @@ export default class AutomateModule extends BaseModule {
                     this.logger.error(`Failed to update session status on BrowserStack: ${err}`)
                 }
             }
-        )(sessionId, sessionStatus, sessionErrorMessage, config)
+        )(sessionId, sessionStatus, sessionErrorMessage, config, sessionName)
     }
 
 }

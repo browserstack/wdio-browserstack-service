@@ -109,8 +109,10 @@ describe('CLI/gRPC flow: startBinSession observability success:false', () => {
 
         // TestHubModule has no shouldProcessEventForTesthub-style gate: its send* paths
         // call GrpcClient unconditionally.
-        const src = TestHubModule.toString() + Object.getOwnPropertyNames(TestHubModule.prototype)
+        const src = Object.getOwnPropertyNames(TestHubModule.prototype)
+            .filter((m) => m.startsWith('send'))
             .map((m) => (TestHubModule.prototype as any)[m]?.toString?.() ?? '').join('\n')
+        expect(src).toContain('GrpcClient')
         expect(src.includes('shouldProcessEventForTesthub')).toBe(false)
     })
 
