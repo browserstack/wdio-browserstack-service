@@ -7,6 +7,7 @@ import WdioMochaTestFramework from '../src/cli/frameworks/wdioMochaTestFramework
 import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
 import * as bstackLogger from '../src/bstackLogger.js'
+import { drainSkipReports, reportSkippedTest } from '../src/cli/skipReporter.js'
 
 vi.mock('@wdio/reporter', () => import(path.join(process.cwd(), '__mocks__', '@wdio/reporter')))
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
@@ -21,9 +22,8 @@ describe('reporter onTestFail — sends mocha\'s failure through the CLI test ev
         ;(reporter as unknown as { _config: unknown })._config = { framework }
         return reporter
     }
-    const mockCli = (isRunning: boolean) => {
-        const trackEvent = vi.fn().mockResolvedValue(undefined)
-        vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({ isRunning: () => isRunning, getTestFramework: () => ({ trackEvent }) } as never)
+    const mockCli = (isRunning: boolean, trackEvent = vi.fn().mockResolvedValue(undefined), pinFailedAttempt = vi.fn()) => {
+        vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({ isRunning: () => isRunning, getTestFramework: () => ({ trackEvent, pinFailedAttempt }) } as never)
         return trackEvent
     }
 
@@ -55,6 +55,44 @@ describe('reporter onTestFail — sends mocha\'s failure through the CLI test ev
         expect(WdioMochaTestFramework.attemptKey(trackEvent.mock.calls[0][2].test)).toBe('Smoke: Home Navigation - should navigate via bottom nav (retry 1)')
         expect(WdioMochaTestFramework.attemptKey({ title: testStats.title, parent: testStats.parent, _currentRetry: 1 } as never))
             .toBe('Smoke: Home Navigation - should navigate via bottom nav (retry 1)')
+    })
+
+    it('pins the test before queueing its finish, and reports that same test object', async () => {
+        const order: string[] = []
+        const pinFailedAttempt = vi.fn(() => {
+            order.push('pin')
+        })
+        const trackEvent = mockCli(true, vi.fn(async (state: unknown) => {
+            order.push(String(state))
+        }), pinFailedAttempt)
+
+        await makeReporter('mocha').onTestFail(testStats as never)
+
+        expect(order).toEqual(['pin', String(TestFrameworkState.LOG_REPORT), String(TestFrameworkState.TEST)])
+        const pinned = pinFailedAttempt.mock.calls[0][0]
+        expect(trackEvent.mock.calls.map(([, , args]) => args.test)).toEqual([pinned, pinned])
+        expect(trackEvent.mock.calls[0][2].test).toBe(pinned)
+    })
+
+    it('queues its finish on the skip-report chain, so a queued skip cannot interleave with it', async () => {
+        const events: string[] = []
+        const trackEvent = vi.fn(async (state: unknown, hook: unknown, args: { test: { title: string } }) => {
+            events.push(`${args.test.title} ${String(state)}/${String(hook)} start`)
+            await new Promise((resolve) => setTimeout(resolve, 10))
+            events.push(`${args.test.title} ${String(state)}/${String(hook)} end`)
+        })
+        mockCli(true, trackEvent)
+        const framework = { trackEvent } as never
+
+        // wdio does not await either: the fail, then mocha's skip of a later test
+        void makeReporter('mocha').onTestFail(testStats as never)
+        void reportSkippedTest(framework, 'Smoke - skipped later', { title: 'skipped later', parent: 'Smoke' } as never, 'Smoke')
+        await drainSkipReports()
+
+        const failEnd = events.indexOf(`${testStats.title} ${TestFrameworkState.TEST}/${HookState.POST} end`)
+        const skipStart = events.indexOf(`skipped later ${TestFrameworkState.INIT_TEST}/${HookState.PRE} start`)
+        expect(failEnd).toBeGreaterThan(-1)
+        expect(skipStart).toBeGreaterThan(failEnd)
     })
 
     it('does nothing on the classic flow, which sets the session status from after(result)', async () => {

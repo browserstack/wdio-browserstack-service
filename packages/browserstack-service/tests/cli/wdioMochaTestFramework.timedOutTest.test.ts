@@ -10,6 +10,7 @@ import { HookState } from '../../src/cli/states/hookState.js'
 import { TestFrameworkConstants } from '../../src/cli/frameworks/constants/testFrameworkConstants.js'
 import type TestFrameworkInstance from '../../src/cli/instances/testFrameworkInstance.js'
 import { BStackLogger as cliLogger } from '../../src/cli/cliLogger.js'
+import { drainSkipReports, enqueueReport } from '../../src/cli/skipReporter.js'
 
 vi.spyOn(bstackLogger.BStackLogger, 'logToFile').mockImplementation(() => {})
 
@@ -37,10 +38,18 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result })
         await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result, suiteTitle: 'Suite' })
     }
-    /** What the reporter sends from `fail`; wdio does not await it. */
+    /** What the reporter does in `fail`: pin the test, then queue its finish; wdio does not await it. */
     const reporterFail = (test: Frameworks.Test, result = failed) => {
-        void framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result, fromMochaFail: true })
-        void framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result, fromMochaFail: true })
+        framework.pinFailedAttempt(test)
+        void enqueueReport(async () => {
+            await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result, fromMochaFail: true })
+            await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result, fromMochaFail: true })
+        }, test.title)
+    }
+    /** service.after(): drain the report chain, then settle. */
+    const settle = async () => {
+        await drainSkipReports()
+        await framework.settleTestFinishes()
     }
 
     beforeEach(() => {
@@ -74,7 +83,7 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         const uuid = await start(test)
 
         reporterFail(test)
-        await framework.settleTestFinishes()
+        await settle()
         expect(finishes).toEqual([`times out ${uuid} passed=false`])
 
         // the body finished late and succeeded: wdio's afterTest says passed
@@ -88,7 +97,7 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
 
         await afterTest(test, { ...failed, error: new Error('expected 1 to equal 2') })
         reporterFail(test)
-        await framework.settleTestFinishes()
+        await settle()
 
         expect(finishes).toEqual([`fails ${uuid} passed=false`])
     })
@@ -124,7 +133,7 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         await start(running)
         const loadResult = vi.spyOn(framework, 'loadTestResult')
 
-        await framework.settleTestFinishes()
+        await settle()
 
         expect(finishes).toEqual([`times out unreported ${timedOutUuid} passed=false`])
         expect(loadResult).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
@@ -141,7 +150,7 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         // attempt 0's late afterTest, then attempt 1 times out too
         await afterTest(attempt0, failed)
         reporterFail(makeTest('flaky', { _currentRetry: 1 }))
-        await framework.settleTestFinishes()
+        await settle()
 
         expect(finishes).toEqual([`flaky ${uuid0} passed=false`, `flaky ${uuid1} passed=false`])
     })
@@ -157,7 +166,7 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         const uuid1 = await start(attempt1)
         await afterTest({ ...attempt1 } as Frameworks.Test, passed)
 
-        await framework.settleTestFinishes()
+        await settle()
 
         expect(finishes).toEqual([`flaky ${uuid1} passed=true`, `flaky ${uuid0} passed=false`])
     })
@@ -207,7 +216,7 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         const first = makeTest('works', { parent: 'valid', fn: () => {} })
         const firstUuid = await start(first)
         reporterFail(makeTest('works', { parent: 'valid' }))
-        await framework.settleTestFinishes()
+        await settle()
         const second = makeTest('works', { parent: 'valid', fn: () => {} })
         const secondUuid = await start(second)
 
@@ -219,16 +228,16 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         expect(finishes).toEqual([`works ${firstUuid} passed=false`, `works ${secondUuid} passed=false`])
     })
 
-    it('keeps the reporter\'s TEST/POST on the test its LOG_REPORT resolved, if a same-named test starts in between', async () => {
+    it('keeps the reporter\'s queued finish on the test it pinned, if a same-named test starts in between', async () => {
         const first = makeTest('works', { parent: 'valid', fn: () => {} })
         const firstUuid = await start(first)
         const failed1 = makeTest('works', { parent: 'valid' })
-        // mocha's `fail`: LOG_REPORT resolves now; TEST/POST is sent after it, by when mocha may
-        // have started the next test
-        const logReport = framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: failed1, result: failed, fromMochaFail: true })
+        // mocha's `fail`: the reporter pins the test now; its queued finish may run after mocha has
+        // started the next test
+        framework.pinFailedAttempt(failed1)
         const second = makeTest('works', { parent: 'valid', fn: () => {} })
         const secondUuid = await start(second)
-        await logReport
+        await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: failed1, result: failed, fromMochaFail: true })
         await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: failed1, result: failed, fromMochaFail: true })
         await afterTest({ ...second } as Frameworks.Test, passed)
 
@@ -239,7 +248,7 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         await start(makeTest('runs'))
 
         reporterFail(makeTest('"before each" hook for runs'))
-        await framework.settleTestFinishes()
+        await settle()
         expect(finishes).toEqual([])
 
         await afterTest(makeTest('unseen'), passed)

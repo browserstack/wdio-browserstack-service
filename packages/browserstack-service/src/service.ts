@@ -36,7 +36,7 @@ import { EVENTS } from './instrumentation/performance/constants.js'
 import { BrowserstackCLI } from './cli/index.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { HookState } from './cli/states/hookState.js'
-import { markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
+import { drainSkipReports, markTestStarted, reportSuiteSkipped } from './cli/skipReporter.js'
 import { AutomationFrameworkState } from './cli/states/automationFrameworkState.js'
 import TestFramework from './cli/frameworks/testFramework.js'
 import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
@@ -541,9 +541,15 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
         try {
             if (BrowserstackCLI.getInstance().isRunning()) {
-                // SDK-7843: a test that timed out is reported when mocha failed it, and that report
-                // can still be in flight; settle it before EXECUTE/POST, where the session status is
-                // marked from the results recorded so far
+                // SDK-7843: a test that timed out is reported when mocha failed it, and the reporter
+                // queues that report on the skip-report chain; wait for the chain, then finish a
+                // failed test nothing reported (no reporter registered), before EXECUTE/POST, where
+                // the session status is marked from the results recorded so far
+                try {
+                    await drainSkipReports()
+                } catch (drainErr) {
+                    BStackLogger.debug(`Exception draining reports in after(): ${util.format(drainErr)}`)
+                }
                 try {
                     await BrowserstackCLI.getInstance().getTestFramework()?.settleTestFinishes()
                 } catch (settleErr) {

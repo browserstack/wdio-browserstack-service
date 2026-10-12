@@ -70,7 +70,6 @@ export default class WdioMochaTestFramework extends TestFramework {
     private attemptsByFn = new WeakMap<object, Map<string, TestAttempt>>()
     /** The attempt a source's LOG_REPORT/POST resolved; its TEST/POST passes the same `test` object. */
     private resolvedFinishes = new WeakMap<object, TestAttempt>()
-    private pendingFinishes = new Set<Promise<void>>()
 
     /** One attempt of a test: mocha retries a test as a new runnable with `_currentRetry` + 1. */
     static attemptKey(test: Frameworks.Test): string {
@@ -105,23 +104,7 @@ export default class WdioMochaTestFramework extends TestFramework {
      * @param {*} args
   */
     async trackEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown> = {}) {
-        if (args.fromMochaFail) {
-            // the reporter's `fail` (SDK-7843): wdio does not await reporter callbacks, so keep the
-            // send visible to settleTestFinishes()
-            const work = this.trackTestEvent(testFrameworkState, hookState, args).catch((err: unknown) => {
-                logger.debug(`trackEvent: reporting a failed test failed: ${err}`)
-            })
-            this.pendingFinishes.add(work)
-            work.finally(() => this.pendingFinishes.delete(work))
-            return work
-        }
-        await this.trackTestEvent(testFrameworkState, hookState, args)
-    }
-
-    private async trackTestEvent(testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
         logger.info(`trackEvent: testFrameworkState=${testFrameworkState} hookState=${hookState}`)
-        // before any await: the reporter's `fail` must resolve to the attempt mocha just failed,
-        // before mocha starts the next test (it defers that with setImmediate)
         const attempt = this.resolveTestAttempt(testFrameworkState, hookState, args)
         await super.trackEvent(testFrameworkState, hookState, args)
 
@@ -217,6 +200,19 @@ export default class WdioMochaTestFramework extends TestFramework {
     }
 
     /**
+     * The reporter's `fail`, synchronously in mocha's `fail` event (SDK-7843): pin the failed test
+     * to the attempt mocha just failed, the latest with its key. The finish itself is queued (see
+     * skipReporter's enqueueReport) and may run after mocha has started the next test, which can
+     * share the key.
+     */
+    pinFailedAttempt(test: Frameworks.Test) {
+        const attempt = this.findTestAttempt(test)
+        if (attempt) {
+            this.resolvedFinishes.set(test, attempt)
+        }
+    }
+
+    /**
      * Whether mocha already failed this attempt. A failure it retries is not marked: mocha clones
      * the test, emits `retry` instead of `fail` and leaves the attempt's `state` unset. It only
      * retries a failure, though, so a later attempt of the same test having started means this
@@ -235,9 +231,9 @@ export default class WdioMochaTestFramework extends TestFramework {
 
     /**
      * The attempt a finish belongs to. wdio's afterTest carries the test's body, which identifies
-     * it exactly. The reporter's `fail` has only the title and parent: it is resolved (before any
-     * await, see trackTestEvent) to the latest attempt with that key, which is the one mocha just
-     * failed, and pinned so the same source's TEST/POST cannot land on a later same-named test.
+     * it exactly. The reporter's `fail` has only the title and parent: it is pinned (see
+     * pinFailedAttempt) to the latest attempt with that key, which is the one mocha just failed,
+     * so its queued LOG_REPORT and TEST/POST cannot land on a later same-named test.
      */
     private findTestAttempt(test: Frameworks.Test): TestAttempt | undefined {
         const resolved = this.resolvedFinishes.get(test)
@@ -290,8 +286,8 @@ export default class WdioMochaTestFramework extends TestFramework {
     /**
      * Before the session status is marked and the last test finish is flushed: finish every attempt
      * mocha already failed (or retried) that nothing reported (no reporter is registered when Test
-     * Reporting, Accessibility and Percy are all off), then wait for every finish the reporter
-     * started.
+     * Reporting, Accessibility and Percy are all off). Runs after drainSkipReports(), which waits
+     * for the finishes the reporter queued.
      */
     async settleTestFinishes(): Promise<void> {
         for (const attempt of [...this.openAttempts]) {
@@ -301,9 +297,6 @@ export default class WdioMochaTestFramework extends TestFramework {
                 await this.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: attempt.test, result, fromMochaFail: true })
                 await this.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: attempt.test, result, fromMochaFail: true })
             }
-        }
-        while (this.pendingFinishes.size > 0) {
-            await Promise.all([...this.pendingFinishes])
         }
     }
 

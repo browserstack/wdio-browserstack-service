@@ -4,7 +4,7 @@ import type { SuiteStats, TestStats, RunnerStats, HookStats } from '@wdio/report
 import WDIOReporter from '@wdio/reporter'
 import type { Options, Frameworks } from '@wdio/types'
 import { BrowserstackCLI } from './cli/index.js'
-import { reportSkippedTest, resolveSpecFile } from './cli/skipReporter.js'
+import { enqueueReport, reportSkippedTest, resolveSpecFile } from './cli/skipReporter.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { HookState } from './cli/states/hookState.js'
 import * as url from 'node:url'
@@ -173,8 +173,13 @@ class _TestReporter extends WDIOReporter {
             exception: testStats.error?.message ?? '',
             status: 'failed'
         }
-        await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result, fromMochaFail: true })
-        await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result, fromMochaFail: true })
+        // pin now, in mocha's `fail` event: the queued report can run after mocha starts the next test
+        framework.pinFailedAttempt(test)
+        // wdio does not await reporter callbacks: queue it on the skip-report chain, which after() drains
+        await enqueueReport(async () => {
+            await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result, fromMochaFail: true })
+            await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result, fromMochaFail: true })
+        }, `failed test '${stats.title}'`)
     }
 
     async onTestEnd(testStats: TestStats) {
