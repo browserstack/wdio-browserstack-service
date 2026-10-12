@@ -72,7 +72,7 @@ describe('service after() — settles test finishes before the session status is
         await service.afterTest(test, undefined as never, { passed: false, error: new Error('Timeout'), duration: 1 } as Frameworks.TestResult)
 
         expect(setState).not.toHaveBeenCalled()
-        expect(events.filter((e) => e.startsWith(TestFrameworkState.TEST))).toEqual([
+        expect(events.filter((e) => e.startsWith(String(TestFrameworkState.TEST)))).toEqual([
             `${TestFrameworkState.TEST}/${HookState.PRE}`,
             `${TestFrameworkState.TEST}/${HookState.POST}`
         ])

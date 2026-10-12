@@ -146,6 +146,34 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         expect(finishes).toEqual([`flaky ${uuid0} passed=false`, `flaky ${uuid1} passed=false`])
     })
 
+    // mocha retries a timed-out attempt without failing it: it emits `retry`, not `fail`, and
+    // leaves the attempt's runnable `state` unset
+    it('without a reporter, settle finishes a retried attempt whose body never returned', async () => {
+        const fn = () => {}
+        const attempt0 = makeTest('flaky', { fn, _currentRetry: 0 })
+        const uuid0 = await start(attempt0)
+        Object.assign(attempt0.ctx!.test as object, { timedOut: true, duration: 10001 })
+        const attempt1 = makeTest('flaky', { fn, _currentRetry: 1 })
+        const uuid1 = await start(attempt1)
+        await afterTest({ ...attempt1 } as Frameworks.Test, passed)
+
+        await framework.settleTestFinishes()
+
+        expect(finishes).toEqual([`flaky ${uuid1} passed=true`, `flaky ${uuid0} passed=false`])
+    })
+
+    it('keeps a retried attempt failed when its late afterTest says passed', async () => {
+        const fn = () => {}
+        const attempt0 = makeTest('flaky', { fn, _currentRetry: 0 })
+        const uuid0 = await start(attempt0)
+        Object.assign(attempt0.ctx!.test as object, { timedOut: true, duration: 10001 })
+        await start(makeTest('flaky', { fn, _currentRetry: 1 }))
+
+        await afterTest({ ...attempt0 } as Frameworks.Test, passed)
+
+        expect(finishes).toEqual([`flaky ${uuid0} passed=false`])
+    })
+
     // `attemptKey` holds only the immediate parent's title, so these share `valid - works`:
     // describe('login', () => describe('valid', () => it('works'))) and the same under 'signup'
     it('reports a later test that shares an earlier finished test\'s key', async () => {
