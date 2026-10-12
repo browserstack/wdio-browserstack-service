@@ -321,6 +321,22 @@ export default class WdioMochaTestFramework extends TestFramework {
     }
 
     /**
+     * Whether mocha already failed this attempt. A failure it retries is not marked: mocha clones
+     * the test, emits `retry` instead of `fail` and leaves the attempt's `state` unset. It only
+     * retries a failure, though, so a later attempt of the same test having started means this
+     * one failed.
+     */
+    private mochaFailed(attempt: TestAttempt): boolean {
+        if (attempt.runnable?.state === 'failed') {
+            return true
+        }
+        const body = WdioMochaTestFramework.testBody(attempt.test)
+        const retries = body ? this.attemptsByFn.get(body) : undefined
+        const retry = (attempt.test as { _currentRetry?: number })._currentRetry ?? 0
+        return Boolean(retries && [...retries.keys()].some((later) => later > retry))
+    }
+
+    /**
      * The attempt a finish belongs to. wdio's afterTest carries the test's body, which identifies
      * it exactly. The reporter's `fail` has only the title and parent: it is resolved (before any
      * await, see trackTestEvent) to the latest attempt with that key, which is the one mocha just
@@ -365,7 +381,7 @@ export default class WdioMochaTestFramework extends TestFramework {
         args.suiteTitle ??= attempt.suiteTitle
         // a timed-out test whose body finished late: wdio's result says only whether the body
         // threw, not that mocha already failed it
-        if (attempt.runnable?.state === 'failed' && (args.result as Frameworks.TestResult | undefined)?.passed) {
+        if (attempt.runnable && this.mochaFailed(attempt) && (args.result as Frameworks.TestResult | undefined)?.passed) {
             args.result = failureFromRunnable(attempt.runnable)
         }
         if (testFrameworkState === TestFrameworkState.TEST) {
@@ -377,13 +393,13 @@ export default class WdioMochaTestFramework extends TestFramework {
 
     /**
      * Before the session status is marked and the last test finish is flushed: finish every attempt
-     * mocha already failed that nothing reported (no reporter is registered when Test Reporting,
-     * Accessibility and Percy are all off), then wait for every finish the reporter started, then
-     * run the bail cascades those finishes owe.
+     * mocha already failed (or retried) that nothing reported (no reporter is registered when Test
+     * Reporting, Accessibility and Percy are all off), then wait for every finish the reporter
+     * started, then run the bail cascades those finishes owe.
      */
     async settleTestFinishes(): Promise<void> {
         for (const attempt of [...this.openAttempts]) {
-            if (attempt.runnable?.state === 'failed' && !attempt.finishingFrom) {
+            if (attempt.runnable && this.mochaFailed(attempt) && !attempt.finishingFrom) {
                 const result = failureFromRunnable(attempt.runnable)
                 this.resolvedFinishes.set(attempt.test, attempt)
                 await this.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: attempt.test, result, fromMochaFail: true })
