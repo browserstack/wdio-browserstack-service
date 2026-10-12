@@ -158,6 +158,26 @@ describe('mocha bail skip cascade (SDK-7063), run by the CLI framework with the 
         expect(skippedTitles()).toEqual(['bail10 A3', 'bail10 B1'])
     })
 
+    it('runs the cascade from settle for a timed-out test\'s late afterTest, with no reporter (SDK-7843)', async () => {
+        const { failing } = buildTree('bail11')
+        await framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test: failing })
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test: failing, suiteTitle: 'suite', bail: true })
+        const failedUuid = TestFramework.getState(TestFramework.getTrackedInstance(), TestFrameworkConstants.KEY_TEST_UUID)
+        // mocha timed the test out and moved on to its afterEach; wdio's afterTest arrives late
+        Object.assign(failing.ctx.test, { state: 'failed', timedOut: true })
+        trackEvent.mockClear()
+
+        await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test: failing, result: { passed: false } })
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test: failing, result: { passed: false }, suiteTitle: 'suite' })
+        await framework.trackEvent(TestFrameworkState.AFTER_EACH, HookState.PRE, { test: failing })
+
+        expect(skippedTitles()).toEqual([])
+        expect(TestFramework.getState(TestFramework.getTrackedInstance(), TestFrameworkConstants.KEY_TEST_UUID)).toBe(failedUuid)
+
+        await framework.settleTestFinishes()
+        expect(skippedTitles()).toEqual(['bail11 A3', 'bail11 B1'])
+    })
+
     it('does not cascade when the test passed', async () => {
         const { failing } = buildTree('bail4')
         await runTest(failing, { passed: true })

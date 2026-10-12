@@ -92,22 +92,29 @@ export default class WdioMochaTestFramework extends TestFramework {
      */
     private latestAttemptByKey = new Map<string, TestAttempt>()
     /**
-     * Attempts by the test's body. wdio hands beforeTest and afterTest separate copies of the mocha
-     * test (`{ ...context.test }`), but both carry its `fn`, so afterTest finds its own attempt even
-     * when another test with the same key has started since.
+     * Attempts by the test's body, then by `attemptKey`. wdio hands beforeTest and afterTest
+     * separate copies of the mocha test (`{ ...context.test }`, with no reference to the runnable),
+     * but both carry its `fn`, so afterTest finds its own attempt even when another test with the
+     * same key has started since. Tests can share one body (`it(name, sharedFn)`), hence the key.
      */
-    private attemptsByFn = new WeakMap<object, Map<number, TestAttempt>>()
+    private attemptsByFn = new WeakMap<object, Map<string, TestAttempt>>()
     /** The attempt a source's LOG_REPORT/POST resolved; its TEST/POST passes the same `test` object. */
     private resolvedFinishes = new WeakMap<object, TestAttempt>()
     private pendingFinishes = new Set<Promise<void>>()
-    /** Bail cascades of failures the reporter's `fail` reported; settleTestFinishes() runs them. */
+    /** Bail cascades owed by failures reported after mocha moved on; settleTestFinishes() runs them. */
     private owedBailCascades: Array<{ attempt: TestAttempt, result: Frameworks.TestResult }> = []
+    /** settleTestFinishes() has run its cascades; anything later cascades inline. */
+    private settled = false
 
     /** One attempt of a test: mocha retries a test as a new runnable with `_currentRetry` + 1. */
     static attemptKey(test: Frameworks.Test): string {
         const retry = (test as { _currentRetry?: number })._currentRetry
         const identifier = getUniqueIdentifier(test, 'mocha')
         return retry ? `${identifier} (retry ${retry})` : identifier
+    }
+
+    private static currentRetry(test: Frameworks.Test): number {
+        return (test as { _currentRetry?: number })._currentRetry ?? 0
     }
 
     private static testBody(test: Frameworks.Test): object | undefined {
@@ -231,9 +238,10 @@ export default class WdioMochaTestFramework extends TestFramework {
         args.instance = instance
         await this.runHooks(instance, testFrameworkState, hookState, args)
         if (attempt && testFrameworkState === TestFrameworkState.TEST) {
-            if (args.fromMochaFail) {
-                // wdio does not await the reporter's `fail`, and mocha still runs the failed test's
-                // after-hooks: the cascade's skip reports would claim the tracked slot under them
+            if (!this.settled && (args.fromMochaFail || this.mochaFailed(attempt))) {
+                // mocha has moved on: it runs the failed test's after-hooks after the reporter's
+                // `fail` (which wdio does not await), and a timed-out test's afterTest arrives later
+                // still. The cascade's skip reports would claim the tracked slot under those hooks
                 this.owedBailCascades.push({ attempt, result: args.result as Frameworks.TestResult })
             } else {
                 await this.reportBailSkippedTests(attempt, args.result as Frameworks.TestResult)
@@ -272,10 +280,11 @@ export default class WdioMochaTestFramework extends TestFramework {
      * it is handed to one mocha instance. Cascading across them is still correct: bail aborts that
      * whole runner, so those tests do not run either.
      *
-     * Runs as part of the failed test's finish when that comes from afterTest, which wdio awaits.
-     * When it comes from the reporter's `fail`, which wdio does not await, settleTestFinishes()
-     * runs it instead: bail has already aborted the spec, and that still lands before the session
-     * status is marked and the last test finish is flushed (SDK-7843).
+     * Runs as part of the failed test's finish when that comes from afterTest while mocha waits
+     * for it. When mocha has already moved on (the reporter's `fail`, or a timed-out test's late
+     * afterTest), settleTestFinishes() runs it instead: bail has already aborted the spec, and that
+     * still lands before the session status is marked and the last test finish is flushed
+     * (SDK-7843).
      */
     private async reportBailSkippedTests(attempt: TestAttempt, results: Frameworks.TestResult | undefined) {
         if (!attempt.bail || !results || results.passed || results.skipped) {
@@ -314,9 +323,9 @@ export default class WdioMochaTestFramework extends TestFramework {
         this.latestAttemptByKey.set(WdioMochaTestFramework.attemptKey(test), attempt)
         const body = WdioMochaTestFramework.testBody(test)
         if (body) {
-            const byRetry = this.attemptsByFn.get(body) ?? new Map<number, TestAttempt>()
-            byRetry.set((test as { _currentRetry?: number })._currentRetry ?? 0, attempt)
-            this.attemptsByFn.set(body, byRetry)
+            const byKey = this.attemptsByFn.get(body) ?? new Map<string, TestAttempt>()
+            byKey.set(WdioMochaTestFramework.attemptKey(test), attempt)
+            this.attemptsByFn.set(body, byKey)
         }
     }
 
@@ -331,9 +340,10 @@ export default class WdioMochaTestFramework extends TestFramework {
             return true
         }
         const body = WdioMochaTestFramework.testBody(attempt.test)
-        const retries = body ? this.attemptsByFn.get(body) : undefined
-        const retry = (attempt.test as { _currentRetry?: number })._currentRetry ?? 0
-        return Boolean(retries && [...retries.keys()].some((later) => later > retry))
+        const identifier = getUniqueIdentifier(attempt.test, 'mocha')
+        const retry = WdioMochaTestFramework.currentRetry(attempt.test)
+        return [...(body && this.attemptsByFn.get(body)?.values() || [])].some((other) =>
+            getUniqueIdentifier(other.test, 'mocha') === identifier && WdioMochaTestFramework.currentRetry(other.test) > retry)
     }
 
     /**
@@ -349,7 +359,7 @@ export default class WdioMochaTestFramework extends TestFramework {
         }
         const body = WdioMochaTestFramework.testBody(test)
         if (body) {
-            return this.attemptsByFn.get(body)?.get((test as { _currentRetry?: number })._currentRetry ?? 0)
+            return this.attemptsByFn.get(body)?.get(WdioMochaTestFramework.attemptKey(test))
         }
         return this.latestAttemptByKey.get(WdioMochaTestFramework.attemptKey(test))
     }
@@ -409,9 +419,11 @@ export default class WdioMochaTestFramework extends TestFramework {
         while (this.pendingFinishes.size > 0) {
             await Promise.all([...this.pendingFinishes])
         }
-        for (const { attempt, result } of this.owedBailCascades.splice(0)) {
+        while (this.owedBailCascades.length > 0) {
+            const { attempt, result } = this.owedBailCascades.shift()!
             await this.reportBailSkippedTests(attempt, result)
         }
+        this.settled = true
     }
 
     /**

@@ -174,6 +174,21 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         expect(finishes).toEqual([`flaky ${uuid0} passed=false`])
     })
 
+    it('closes a late afterTest by its own test when tests share one body', async () => {
+        // for (const c of cases) it(c.name, sharedFn)
+        const fn = () => {}
+        const first = makeTest('case a', { fn })
+        const firstUuid = await start(first)
+        Object.assign(first.ctx!.test as object, { state: 'failed', timedOut: true, duration: 10001 })
+        const second = makeTest('case b', { fn })
+        const secondUuid = await start(second)
+
+        await afterTest({ ...first } as Frameworks.Test, passed)
+        await afterTest({ ...second } as Frameworks.Test, failed)
+
+        expect(finishes).toEqual([`case a ${firstUuid} passed=false`, `case b ${secondUuid} passed=false`])
+    })
+
     // `attemptKey` holds only the immediate parent's title, so these share `valid - works`:
     // describe('login', () => describe('valid', () => it('works'))) and the same under 'signup'
     it('reports a later test that shares an earlier finished test\'s key', async () => {
