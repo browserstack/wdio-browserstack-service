@@ -1,6 +1,7 @@
 import path from 'node:path'
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import type { Frameworks } from '@wdio/types'
 import logger from '@wdio/logger'
 
 import BrowserstackService from '../src/service.js'
@@ -9,6 +10,7 @@ import InsightsHandler from '../src/insights-handler.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
 import AccessibilityModule from '../src/cli/modules/accessibilityModule.js'
 import * as bstackLogger from '../src/bstackLogger.js'
+import * as skipReporter from '../src/cli/skipReporter.js'
 import AutomationFramework from '../src/cli/frameworks/automationFramework.js'
 import WdioCucumberTestFramework from '../src/cli/frameworks/wdioCucumberTestFramework.js'
 import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
@@ -59,6 +61,7 @@ vi.mock('../src/instrumentation/performance/performance-tester.js', () => ({
         start: vi.fn(),
         end: vi.fn(),
         startMonitoring: vi.fn(),
+        stopAndGenerate: vi.fn().mockResolvedValue(undefined),
         measureWrapper: vi.fn().mockImplementation((_name: string, fn: Function) => fn),
         Measure: vi.fn().mockImplementation(() => (_target: any, _propertyKey: string, descriptor: PropertyDescriptor) => descriptor),
         browser: undefined,
@@ -3011,5 +3014,155 @@ describe('_cucumberTestResult failure reason adjacent', () => {
         const result = makeService(false)['_cucumberTestResult'](world('UNDEFINED') as never)
 
         expect(result.error?.message).toBe('Unknown Error')
+    })
+})
+
+/**
+ * SDK-7843 — with a mocha timeout, mocha fails the test (the reporter sends its finish) while its
+ * body and wdio's afterTest are still pending; with `bail`, wdio then runs after() before that
+ * afterTest. after() must let that finish land before the flush and before EXECUTE/POST, where
+ * AutomateModule marks the session status.
+ */
+describe('service after() — settles test finishes before the session status is marked (SDK-7843)', () => {
+    let events: string[]
+    let settle: ReturnType<typeof vi.fn>
+    let trackEvent: ReturnType<typeof vi.fn>
+    // restored one by one: vi.restoreAllMocks() would also undo this file's module-wide logger spies
+    let spies: Array<{ mockRestore: () => void }>
+    // the `after` suite above replaces BrowserstackService.prototype.after in its beforeEach; this
+    // runs at collection, before any hook, so it keeps the real one
+    const realAfter = BrowserstackService.prototype.after
+
+    const makeService = () => new BrowserstackService(
+        { testObservability: false } as never,
+        [] as never,
+        { user: 'foo', key: 'bar', framework: 'mocha', mochaOpts: { bail: true } } as never
+    )
+
+    beforeEach(() => {
+        // this file fakes every timer; the finish below is timed with a real setTimeout
+        vi.useRealTimers()
+        events = []
+        // the reporter's finish is still being sent when after() starts
+        settle = vi.fn().mockImplementation(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 30))
+            events.push('settleTestFinishes')
+        })
+        trackEvent = vi.fn().mockImplementation(async (state: unknown, hook: unknown) => {
+            events.push(`${String(state)}/${String(hook)}`)
+        })
+        spies = []
+        spies.push(vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => ({ trackEvent, settleTestFinishes: settle }),
+            getAutomationFramework: () => ({
+                trackEvent: vi.fn().mockImplementation(async (state: unknown, hook: unknown) => {
+                    events.push(`${String(state)}/${String(hook)}`)
+                })
+            }),
+            modules: { TestHubModule: { flushPendingTestFinishEvent: vi.fn().mockImplementation(async () => { events.push('flushPendingTestFinishEvent') }) } }
+        } as never))
+        spies.push(vi.spyOn(TestFramework, 'getTrackedInstance').mockReturnValue({} as never))
+        spies.push(vi.spyOn(TestFramework, 'getState').mockReturnValue('uuid-1' as never))
+    })
+
+    afterEach(() => {
+        spies.forEach((spy) => spy.mockRestore())
+        vi.useFakeTimers().setSystemTime(new Date('2020-01-01'))
+    })
+
+    it('settles before the deferred-finish flush and before EXECUTE/POST', async () => {
+        await realAfter.call(makeService(), 1)
+
+        expect(events).toEqual(['settleTestFinishes', 'flushPendingTestFinishEvent', `${AutomationFrameworkState.EXECUTE}/${HookState.POST}`])
+    })
+
+    it('leaves the tracked test run alone in afterTest; the CLI framework picks the test\'s own', async () => {
+        const setState = vi.spyOn(TestFramework, 'setState')
+        spies.push(setState)
+        const service = makeService()
+        const test = { title: 'times out', parent: 'Suite', ctx: { test: {} } } as unknown as Frameworks.Test
+
+        await service.beforeTest(test)
+        await service.afterTest(test, undefined as never, { passed: false, error: new Error('Timeout'), duration: 1 } as Frameworks.TestResult)
+
+        expect(setState).not.toHaveBeenCalled()
+        expect(events.filter((e) => e.startsWith(String(TestFrameworkState.TEST)))).toEqual([
+            `${TestFrameworkState.TEST}/${HookState.PRE}`,
+            `${TestFrameworkState.TEST}/${HookState.POST}`
+        ])
+    })
+})
+
+/**
+ * SDK-7493 — `service.after()` must drain the skip-report chain BEFORE flushing the
+ * deferred test-finish.
+ *
+ * wdio does not await `onTestSkip`, so skip reports are still in flight when `after()`
+ * starts, and each one ENDS by emitting mocha TEST/POST — which TestHubModule stashes in
+ * its single-slot `pendingTestFinish` instead of sending. Flushing first therefore flushes
+ * an empty slot and strands the stash that lands moments later; with `describe.skip()`
+ * there is no next test to flush it either, so the test stays "in progress" until Test
+ * Hub's ~60-min idle reap stamps the whole build `timeout`.
+ *
+ * This asserts the ORDER, which is the whole fix — both calls being present is not enough.
+ */
+describe('service.after() — skip drain must precede the deferred-finish flush (SDK-7493)', () => {
+    // the `after` suite above replaces BrowserstackService.prototype.after; keep the real one
+    const realAfter = BrowserstackService.prototype.after
+    const flushPendingTestFinishEvent = vi.fn().mockResolvedValue(undefined)
+    let spies: Array<{ mockRestore: () => void }>
+    let drainSkipReports: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+        flushPendingTestFinishEvent.mockClear()
+        drainSkipReports = vi.spyOn(skipReporter, 'drainSkipReports').mockResolvedValue(undefined)
+        spies = [
+            drainSkipReports,
+            vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                modules: { TestHubModule: { flushPendingTestFinishEvent } },
+                getAutomationFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) })
+            } as never)
+        ]
+    })
+
+    afterEach(() => {
+        spies.forEach((spy) => spy.mockRestore())
+    })
+
+    function fakeService() {
+        return {
+            _options: { setSessionStatus: false, setSessionName: false, preferScenarioName: false },
+            _scenariosRanCount: 0,
+            _lastScenarioName: undefined,
+            _fullTitle: 'suite - test',
+            _specsRan: true,
+            _failReasons: [],
+            _pureTestFailReasons: [],
+            _hookFailReasons: [],
+            _insightsHandler: undefined,
+            _percyHandler: undefined,
+            saveWorkerData: vi.fn()
+        }
+    }
+
+    it('drains queued skip reports before flushing the deferred test finish', async () => {
+        await realAfter.call(fakeService() as never, 0)
+
+        expect(drainSkipReports).toHaveBeenCalledTimes(1)
+        expect(flushPendingTestFinishEvent).toHaveBeenCalledTimes(1)
+
+        const drainOrder = drainSkipReports.mock.invocationCallOrder[0]
+        const flushOrder = flushPendingTestFinishEvent.mock.invocationCallOrder[0]
+        expect(drainOrder).toBeLessThan(flushOrder)
+    })
+
+    it('still flushes when the skip drain rejects — a drain failure must not strand the finish', async () => {
+        drainSkipReports.mockRejectedValueOnce(new Error('skip chain blew up'))
+
+        await realAfter.call(fakeService() as never, 0)
+
+        expect(flushPendingTestFinishEvent).toHaveBeenCalledTimes(1)
     })
 })
