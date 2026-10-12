@@ -540,7 +540,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
             if (framework) {
                 const hookFrameworkState = TestFrameworkState[getHookType((test as Frameworks.Test).title) as keyof typeof TestFrameworkState]
                 if (hookFrameworkState) {
-                    await framework.trackEvent(hookFrameworkState, HookState.POST, { test, result })
+                    await framework.trackEvent(hookFrameworkState, HookState.POST, {
+                        test,
+                        result,
+                        ignoreHooksStatus: this._options.testObservabilityOptions?.ignoreHooksStatus === true
+                    })
                 }
                 // a failed (or skipping) before/each hook silently drops the suite's remaining
                 // tests in mocha — report them as skipped so they surface on the dashboard and

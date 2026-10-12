@@ -1952,6 +1952,26 @@ describe('ignoreHooksStatus feature', () => {
             })
         })
 
+        it.each([true, false])('forwards ignoreHooksStatus=%s on the CLI mocha hook event', async (ignoreHooksStatus) => {
+            const trackEvent = vi.fn().mockResolvedValue(undefined)
+            const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                getTestFramework: () => ({ trackEvent })
+            } as any)
+            service = new BrowserstackService({
+                testObservabilityOptions: { ignoreHooksStatus },
+                setSessionStatus: true
+            } as any, [] as any, { user: 'foo', key: 'bar' } as any)
+            service['_browser'] = browser
+
+            await service.afterHook({ title: '"after each" hook for "test"', parent: 'suite' } as any,
+                undefined as never, { passed: false, error: { message: 'Hook failed' } } as any)
+
+            expect(trackEvent).toHaveBeenCalledWith(TestFrameworkState.AFTER_EACH, HookState.POST,
+                expect.objectContaining({ ignoreHooksStatus }))
+            getInstanceSpy.mockRestore()
+        })
+
         it('should mark session as failed when tests fail even with ignoreHooksStatus=true', async () => {
             // Simulate hook failure
             await service.afterHook({ title: 'hook', parent: 'suite' } as any,
