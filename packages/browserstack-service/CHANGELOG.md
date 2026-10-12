@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.39.5
+
+### Patch Changes
+
+- c6ccf90: - Fixed BrowserStack Automate and App Automate sessions being marked as passed when a Mocha hook (`before`, `beforeEach`, `after`, `afterEach`) failed.
+
 ## 9.39.4
 
 ### Patch Changes
