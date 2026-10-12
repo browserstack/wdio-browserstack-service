@@ -675,9 +675,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 } catch (skipDrainErr) {
                     BStackLogger.debug(`Exception draining skip reports in after(): ${util.format(skipDrainErr)}`)
                 }
-                // SDK-7843: a test that timed out is reported when mocha failed it, and that report
-                // can still be in flight; settle it before the flush below and before EXECUTE/POST,
-                // where the session status is marked from the results recorded so far
+                // SDK-7843: the drain above also waits for a timed-out test's finish, which the
+                // reporter's `fail` queues on the same chain. Then finish a failed test nothing
+                // reported (no reporter registered) and run owed bail cascades, before the flush
+                // below and before EXECUTE/POST, where the session status is marked
                 try {
                     await BrowserstackCLI.getInstance().getTestFramework()?.settleTestFinishes()
                 } catch (settleErr) {

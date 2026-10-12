@@ -87,6 +87,18 @@ async function emitSkipReport({ framework, test, result, suiteTitle }: QueuedSki
     }
 }
 
+/**
+ * Queue a report on the one chain every report wdio may not await goes through, so reports never
+ * interleave on the tracker's per-worker tracked-instance slot. service.after() waits for the chain
+ * through drainSkipReports(). Also used by the reporter's `fail` (SDK-7843).
+ */
+export function enqueueReport(work: () => Promise<void>, what: string): Promise<void> {
+    reportChain = reportChain.then(work).catch((err: unknown) => {
+        BStackLogger.debug(`Failed reporting ${what}: ${err}`)
+    })
+    return reportChain
+}
+
 export function markTestStarted(identifier: string) {
     startedTests.add(identifier)
 }
@@ -135,10 +147,7 @@ export function reportSkippedTest(
     // change for no benefit: their skips would move to end-of-run and their reports would no
     // longer be part of the hook/test they belong to.
     if (options?.immediate) {
-        reportChain = reportChain.then(() => emitSkipReport(queued)).catch((err: unknown) => {
-            BStackLogger.debug(`Failed reporting skipped test '${identifier}': ${err}`)
-        })
-        return reportChain
+        return enqueueReport(() => emitSkipReport(queued), `skipped test '${identifier}'`)
     }
 
     // The un-awaited `onTestSkip` path: queue it — see the QueuedSkip docs above. Emitting here
