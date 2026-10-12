@@ -62,11 +62,12 @@ export default class WdioMochaTestFramework extends TestFramework {
      */
     private latestAttemptByKey = new Map<string, TestAttempt>()
     /**
-     * Attempts by the test's body. wdio hands beforeTest and afterTest separate copies of the mocha
-     * test (`{ ...context.test }`), but both carry its `fn`, so afterTest finds its own attempt even
-     * when another test with the same key has started since.
+     * Attempts by the test's body, then by `attemptKey`. wdio hands beforeTest and afterTest
+     * separate copies of the mocha test (`{ ...context.test }`, with no reference to the runnable),
+     * but both carry its `fn`, so afterTest finds its own attempt even when another test with the
+     * same key has started since. Tests can share one body (`it(name, sharedFn)`), hence the key.
      */
-    private attemptsByFn = new WeakMap<object, Map<number, TestAttempt>>()
+    private attemptsByFn = new WeakMap<object, Map<string, TestAttempt>>()
     /** The attempt a source's LOG_REPORT/POST resolved; its TEST/POST passes the same `test` object. */
     private resolvedFinishes = new WeakMap<object, TestAttempt>()
     private pendingFinishes = new Set<Promise<void>>()
@@ -76,6 +77,10 @@ export default class WdioMochaTestFramework extends TestFramework {
         const retry = (test as { _currentRetry?: number })._currentRetry
         const identifier = getUniqueIdentifier(test, 'mocha')
         return retry ? `${identifier} (retry ${retry})` : identifier
+    }
+
+    private static currentRetry(test: Frameworks.Test): number {
+        return (test as { _currentRetry?: number })._currentRetry ?? 0
     }
 
     private static testBody(test: Frameworks.Test): object | undefined {
@@ -205,9 +210,9 @@ export default class WdioMochaTestFramework extends TestFramework {
         this.latestAttemptByKey.set(WdioMochaTestFramework.attemptKey(test), attempt)
         const body = WdioMochaTestFramework.testBody(test)
         if (body) {
-            const byRetry = this.attemptsByFn.get(body) ?? new Map<number, TestAttempt>()
-            byRetry.set((test as { _currentRetry?: number })._currentRetry ?? 0, attempt)
-            this.attemptsByFn.set(body, byRetry)
+            const byKey = this.attemptsByFn.get(body) ?? new Map<string, TestAttempt>()
+            byKey.set(WdioMochaTestFramework.attemptKey(test), attempt)
+            this.attemptsByFn.set(body, byKey)
         }
     }
 
@@ -222,9 +227,10 @@ export default class WdioMochaTestFramework extends TestFramework {
             return true
         }
         const body = WdioMochaTestFramework.testBody(attempt.test)
-        const retries = body ? this.attemptsByFn.get(body) : undefined
-        const retry = (attempt.test as { _currentRetry?: number })._currentRetry ?? 0
-        return Boolean(retries && [...retries.keys()].some((later) => later > retry))
+        const identifier = getUniqueIdentifier(attempt.test, 'mocha')
+        const retry = WdioMochaTestFramework.currentRetry(attempt.test)
+        return [...(body && this.attemptsByFn.get(body)?.values() || [])].some((other) =>
+            getUniqueIdentifier(other.test, 'mocha') === identifier && WdioMochaTestFramework.currentRetry(other.test) > retry)
     }
 
     /**
@@ -240,7 +246,7 @@ export default class WdioMochaTestFramework extends TestFramework {
         }
         const body = WdioMochaTestFramework.testBody(test)
         if (body) {
-            return this.attemptsByFn.get(body)?.get((test as { _currentRetry?: number })._currentRetry ?? 0)
+            return this.attemptsByFn.get(body)?.get(WdioMochaTestFramework.attemptKey(test))
         }
         return this.latestAttemptByKey.get(WdioMochaTestFramework.attemptKey(test))
     }
