@@ -132,6 +132,15 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                         this._buildName = capability.build?.toString()
                     } else {
                         capability['bstack:options'].wdioService = BSTACK_SERVICE_VERSION
+                        // projectName/buildName must take the env value over the config file, as
+                        // every other SDK and the binary's own env->config map already do. Write
+                        // them back into the caps so the session carries them.
+                        if (process.env.BROWSERSTACK_PROJECT_NAME) {
+                            capability['bstack:options'].projectName = process.env.BROWSERSTACK_PROJECT_NAME
+                        }
+                        if (process.env.BROWSERSTACK_BUILD_NAME) {
+                            capability['bstack:options'].buildName = process.env.BROWSERSTACK_BUILD_NAME
+                        }
                         this._buildName = capability['bstack:options'].buildName
                         this._projectName = capability['bstack:options'].projectName
                         this._buildTag = capability['bstack:options'].buildTag
@@ -164,6 +173,12 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 } else {
                     const bstackOptions = (caps.capabilities as WebdriverIO.Capabilities)['bstack:options']
                     bstackOptions!.wdioService = BSTACK_SERVICE_VERSION
+                    if (process.env.BROWSERSTACK_PROJECT_NAME) {
+                        bstackOptions!.projectName = process.env.BROWSERSTACK_PROJECT_NAME
+                    }
+                    if (process.env.BROWSERSTACK_BUILD_NAME) {
+                        bstackOptions!.buildName = process.env.BROWSERSTACK_BUILD_NAME
+                    }
                     this._buildName = bstackOptions!.buildName
                     this._projectName = bstackOptions!.projectName
                     this._buildTag = bstackOptions!.buildTag
