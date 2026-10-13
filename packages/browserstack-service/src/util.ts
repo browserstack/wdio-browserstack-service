@@ -2126,6 +2126,7 @@ const WDIO_V10_REMOVED_ELEMENT_COMMANDS = new Set(['touchAction'])
 /**
  * `overwriteCommand(name, fn, attachToElement)` took a boolean up to webdriverio 9 and an
  * options object from 10 on; the boolean form throws there, so retry with the object.
+ * v10 is recognised by its error text or, should that change, by the missing `executeAsync`.
  */
 export function overwriteCommandCompat(
     browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser,
@@ -2137,7 +2138,9 @@ export function overwriteCommandCompat(
     try {
         return overwrite(name, fn, attachToElement)
     } catch (err) {
-        if (!String(err).includes('removed in WebdriverIO v10')) {
+        const isV10 = String(err).includes('removed in WebdriverIO v10') ||
+            typeof (browser as unknown as { executeAsync?: unknown }).executeAsync !== 'function'
+        if (!isV10) {
             throw err
         }
         if (attachToElement && WDIO_V10_REMOVED_ELEMENT_COMMANDS.has(name)) {

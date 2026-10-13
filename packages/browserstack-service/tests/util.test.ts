@@ -2560,9 +2560,30 @@ describe('overwriteCommandCompat', () => {
         expect(browser.overwriteCommand).toHaveBeenCalledTimes(1)
     })
 
-    it('rethrows any other overwriteCommand error', () => {
-        const browser = { overwriteCommand: vi.fn(() => { throw new Error('no such command') }) } as any
+    it('retries with an options object when executeAsync is missing even if the error text changed', () => {
+        const browser = {
+            overwriteCommand: vi.fn().mockImplementationOnce(() => {
+                throw new Error('Invalid third argument to overwriteCommand: expected an options object')
+            })
+        } as any
+        utils.overwriteCommandCompat(browser, 'click', fn, true)
+        expect(browser.overwriteCommand).toHaveBeenCalledTimes(2)
+        expect(browser.overwriteCommand).toHaveBeenLastCalledWith('click', fn, { attachToElement: true })
+    })
+
+    it('rethrows any other overwriteCommand error on webdriverio <= 9', () => {
+        const browser = {
+            executeAsync: vi.fn(),
+            overwriteCommand: vi.fn(() => { throw new Error('no such command') })
+        } as any
         expect(() => utils.overwriteCommandCompat(browser, 'nope', fn, false)).toThrow('no such command')
         expect(browser.overwriteCommand).toHaveBeenCalledTimes(1)
+    })
+
+    it('rethrows when the options-object retry also fails on webdriverio 10', () => {
+        const browser = { overwriteCommand: vi.fn(() => { throw new Error('no such command') }) } as any
+        expect(() => utils.overwriteCommandCompat(browser, 'nope', fn, false)).toThrow('no such command')
+        expect(browser.overwriteCommand).toHaveBeenCalledTimes(2)
+        expect(browser.overwriteCommand).toHaveBeenLastCalledWith('nope', fn, { attachToElement: false })
     })
 })
