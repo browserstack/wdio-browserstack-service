@@ -1100,7 +1100,9 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         /**
          * The dashboard appends the identifier to the buildName, so it needs one. SDK-4748:
          * BROWSERSTACK_BUILD_NAME used to force this branch too, discarding any configured
-         * identifier; this service never reads that var as a buildName source, so it no longer does.
+         * identifier. SDK-7075 made that var a buildName source - the constructor folds it into
+         * the caps - so this branch now fires only when neither the caps nor the environment
+         * supply a buildName.
          */
         if (!this._buildName) {
             this._updateCaps(capabilities, 'buildIdentifier')
