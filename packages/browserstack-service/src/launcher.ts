@@ -1212,9 +1212,10 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
          * A buildIdentifier is only meaningful next to a buildName - the dashboard appends it
          * to that name. BROWSERSTACK_BUILD_NAME used to force this branch as well, which
          * silently discarded every explicitly configured buildIdentifier whenever that env var
-         * happened to be exported (SDK-4748). This service never reads BROWSERSTACK_BUILD_NAME
-         * as a buildName source, and unlike the yml-driven SDKs it has no default identifier to
-         * suppress, so the env var no longer takes part in this decision.
+         * happened to be exported (SDK-4748). SDK-7075 then made BROWSERSTACK_BUILD_NAME a
+         * buildName source - the constructor folds it into the caps - so the env var no longer
+         * suppresses the identifier; it supplies the very name the identifier is appended to.
+         * This branch therefore fires only when neither the caps nor the environment name a build.
          */
         if (!this._buildName) {
             this._updateCaps(capabilities, 'buildIdentifier')
