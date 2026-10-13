@@ -226,11 +226,13 @@ describe('_update', () => {
         it('logs at debug when a TurboScale session update gets an HTTP error (SDK-6948)', async () => {
             service['_browser'] = browser
             service['_turboScale'] = true
+            const debugSpy = vi.spyOn(bstackLogger.BStackLogger, 'debug')
             const originalPatch = (got as any).patch
             ;(got as any).patch = vi.fn().mockRejectedValueOnce(Object.assign(new Error('Response code 404 (Not Found)'), { response: { statusCode: 404 } }))
             try {
                 await expect(service._update('sessionId', { name: 'x' })).resolves.toBeUndefined()
                 expect((got as any).patch).toHaveBeenCalledTimes(1)
+                expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Could not update Browserstack session (404)'))
             } finally {
                 (got as any).patch = originalPatch
                 service['_turboScale'] = false
