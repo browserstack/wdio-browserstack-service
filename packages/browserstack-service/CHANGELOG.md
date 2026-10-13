@@ -1,5 +1,12 @@
 # @wdio/browserstack-service
 
+## 9.39.6
+
+### Patch Changes
+
+- 937350b: - Fixed mocha tests that fail by exceeding their timeout being marked "passed" on the Automate / App Automate dashboard, and their builds ending as "timeout" in Test Reporting about an hour after the run. Such tests are now reported as failed, with the timeout error as the reason.
+  - Removed the `resolveInstance: unable to resolve/create instance ... LOG POST` error printed when a wdio `before` hook writes to the console.
+
 ## 9.39.5
 
 ### Patch Changes
