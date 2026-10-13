@@ -461,6 +461,69 @@ describe('CLIUtils', () => {
             }
         })
 
+        it('uses the cached binary when the BROWSERSTACK_BINARY_URL download fails (SDK-6948)', async () => {
+            const saved = process.env.BROWSERSTACK_BINARY_URL
+            process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
+            try {
+                vi.spyOn(CLIUtils, 'runShellCommand').mockResolvedValue('1.0.0')
+                vi.spyOn(CLIUtils, 'requestToUpdateCLI').mockRejectedValue({ response: { statusCode: 401 } })
+                vi.spyOn(CLIUtils, 'downloadLatestBinary').mockRejectedValue(new Error('download failed'))
+
+                const result = await CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, mockConfig)
+
+                expect(result).toBe(mockExistingPath)
+            } finally {
+                if (saved === undefined) { delete process.env.BROWSERSTACK_BINARY_URL } else { process.env.BROWSERSTACK_BINARY_URL = saved }
+            }
+        })
+
+        it('re-throws the download error when the BROWSERSTACK_BINARY_URL download fails and no binary is cached (SDK-6948)', async () => {
+            const saved = process.env.BROWSERSTACK_BINARY_URL
+            process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
+            try {
+                const downloadErr = new Error('download failed')
+                vi.spyOn(CLIUtils, 'requestToUpdateCLI').mockRejectedValue({ response: { statusCode: 401 } })
+                vi.spyOn(CLIUtils, 'downloadLatestBinary').mockRejectedValue(downloadErr)
+
+                await expect(CLIUtils.checkAndUpdateCli('', mockCliDir, mockConfig)).rejects.toBe(downloadErr)
+            } finally {
+                if (saved === undefined) { delete process.env.BROWSERSTACK_BINARY_URL } else { process.env.BROWSERSTACK_BINARY_URL = saved }
+            }
+        })
+
+        it('falls back to BROWSERSTACK_BINARY_URL when a 2xx reply has neither url nor updated_cli_version and no binary is cached (SDK-6948)', async () => {
+            const saved = process.env.BROWSERSTACK_BINARY_URL
+            process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
+            try {
+                vi.spyOn(CLIUtils, 'requestToUpdateCLI').mockResolvedValue({ message: 'Unauthorized' })
+                vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue('/mock/cli/dir/binary-fallback')
+
+                const result = await CLIUtils.checkAndUpdateCli('', mockCliDir, mockConfig)
+
+                expect(result).toBe('/mock/cli/dir/binary-fallback')
+                expect(CLIUtils.downloadLatestBinary).toHaveBeenCalledWith('https://example.com/staging-binary.zip', mockCliDir)
+            } finally {
+                if (saved === undefined) { delete process.env.BROWSERSTACK_BINARY_URL } else { process.env.BROWSERSTACK_BINARY_URL = saved }
+            }
+        })
+
+        it('keeps the cached binary when a 2xx reply has neither url nor updated_cli_version (SDK-6948)', async () => {
+            const saved = process.env.BROWSERSTACK_BINARY_URL
+            process.env.BROWSERSTACK_BINARY_URL = 'https://example.com/staging-binary.zip'
+            try {
+                vi.spyOn(CLIUtils, 'runShellCommand').mockResolvedValue('1.0.0')
+                vi.spyOn(CLIUtils, 'requestToUpdateCLI').mockResolvedValue({ success: true })
+                const downloadSpy = vi.spyOn(CLIUtils, 'downloadLatestBinary').mockResolvedValue('/should/not/be/used')
+
+                const result = await CLIUtils.checkAndUpdateCli(mockExistingPath, mockCliDir, mockConfig)
+
+                expect(result).toBe(mockExistingPath)
+                expect(downloadSpy).not.toHaveBeenCalled()
+            } finally {
+                if (saved === undefined) { delete process.env.BROWSERSTACK_BINARY_URL } else { process.env.BROWSERSTACK_BINARY_URL = saved }
+            }
+        })
+
         it('re-throws when update_cli fails and no BROWSERSTACK_BINARY_URL is set (unchanged behaviour)', async () => {
             const saved = process.env.BROWSERSTACK_BINARY_URL
             delete process.env.BROWSERSTACK_BINARY_URL

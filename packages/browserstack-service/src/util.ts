@@ -1029,16 +1029,38 @@ export function getUniqueIdentifierForCucumber(world: ITestCaseHookParameter): s
     return world.pickle.uri + '_' + world.pickle.astNodeIds.join(',')
 }
 
+/**
+ * SDK-6948: a named internal staging env (`BROWSERSTACK_STAGING_ENV` set to a bare token such as
+ * `k8s`) serves its hub/cdp from `*.bsstag.com` (e.g. `hub-k8s.bsstag.com`). Treat those hosts as
+ * BrowserStack so session marking and Automate <-> TRA linking work there. A dotted value (full
+ * host) or an unset/blank variable leaves the production-only host checks unchanged. The env value is
+ * trimmed and the hostname compared case-insensitively (shared rule across SDKs).
+ * `BROWSERSTACK_ENV` (trimmed, lowercased) of staging/stag/preprod/pre-prod also selects the bsstag
+ * hosts, matching node-agent constants and the binary's getEnvironmentUrl.
+ */
+const BSTAG_BROWSERSTACK_ENVS = ['staging', 'stag', 'preprod', 'pre-prod']
+
+export function isStagingEnvBsstagHost(hostname: string): boolean {
+    const stagingEnv = process.env.BROWSERSTACK_STAGING_ENV?.trim()
+    const namedStagingEnv = Boolean(stagingEnv) && !stagingEnv!.includes('.')
+    const browserstackEnv = process.env.BROWSERSTACK_ENV?.trim().toLowerCase() || ''
+    if (!namedStagingEnv && !BSTAG_BROWSERSTACK_ENVS.includes(browserstackEnv)) {
+        return false
+    }
+    const host = hostname.toLowerCase()
+    return host === 'bsstag.com' || host.endsWith('.bsstag.com')
+}
+
 export function getCloudProvider(browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser): string {
     if (browser && 'instances' in browser) {
         // Loop through all instances
         for (const instanceName of browser.instances) {
             const instance = (browser as any)[instanceName] as WebdriverIO.Browser
-            if (instance.options && instance.options.hostname && (instance.options.hostname.includes('browserstack') || instance.options.hostname.includes('bsstag'))) {
+            if (instance.options && instance.options.hostname && (instance.options.hostname.includes('browserstack') || isStagingEnvBsstagHost(instance.options.hostname))) {
                 return 'browserstack'
             }
         }
-    } else if (browser.options && browser.options.hostname && (browser.options.hostname.includes('browserstack') || browser.options.hostname.includes('bsstag'))) { // Single browser instance
+    } else if (browser.options && browser.options.hostname && (browser.options.hostname.includes('browserstack') || isStagingEnvBsstagHost(browser.options.hostname))) { // Single browser instance
         return 'browserstack'
     }
     return 'unknown_grid'
@@ -1168,7 +1190,7 @@ export function isBrowserstackInfra(config: BrowserstackConfig & Options.Testrun
     // a utility function to check if the hostname is browserstack
 
     const isBrowserstack = (str: string ): boolean => {
-        return str.includes('browserstack.com') || str.includes('bsstag.com')
+        return str.includes('browserstack.com') || isStagingEnvBsstagHost(str)
     }
 
     if ((config.hostname) && !isBrowserstack(config.hostname)) {

@@ -253,6 +253,34 @@ describe('_printSessionURL', () => {
         expect(isBrowserstackSessionSpy).toHaveBeenCalled()
     })
 
+    it('logs at debug instead of throwing when the session REST call fails (SDK-6948)', async () => {
+        browser.isMultiremote = false
+        service['_browser'] = browser
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
+        const debugSpy = vi.spyOn(bstackLogger.BStackLogger, 'debug')
+        logInfoSpy.mockClear()
+        vi.mocked(got).mockRejectedValueOnce(Object.assign(new Error('Response code 404 (Not Found)'), { response: { statusCode: 404 } }))
+
+        await expect(service._printSessionURL()).resolves.toBeUndefined()
+        expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Could not fetch Browserstack session URL (404)'))
+        expect(logInfoSpy).not.toHaveBeenCalledWith(expect.stringContaining('session: '))
+    })
+
+    it('logs at debug when the session REST reply has no automation_session (SDK-6948)', async () => {
+        browser.isMultiremote = false
+        service['_browser'] = browser
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
+        const debugSpy = vi.spyOn(bstackLogger.BStackLogger, 'debug')
+        logInfoSpy.mockClear()
+        vi.mocked(got).mockResolvedValueOnce({ statusCode: 200, body: { message: 'Unauthorized' } } as any)
+
+        await expect(service._printSessionURL()).resolves.toBeUndefined()
+        expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Could not fetch Browserstack session URL (200)'))
+        expect(logInfoSpy).not.toHaveBeenCalledWith(expect.stringContaining('session: '))
+    })
+
     describe('if cant print', () => {
         describe('no browser object', () => {
             const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)

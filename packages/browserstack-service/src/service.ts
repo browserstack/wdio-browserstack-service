@@ -824,12 +824,25 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 responseType: 'json'
             }
 
-            if (this._turboScale) {
-                const response = await got<TurboScaleSessionResponse>(sessionUrl, reqOpts)
-                browserUrl = response.body.url
-            } else {
-                const response = await got<SessionResponse>(sessionUrl, reqOpts)
-                browserUrl = response.body.automation_session.browser_url
+            try {
+                if (this._turboScale) {
+                    const response = await got<TurboScaleSessionResponse>(sessionUrl, reqOpts)
+                    browserUrl = response.body.url
+                } else {
+                    const response = await got<SessionResponse>(sessionUrl, reqOpts)
+                    const session = response.body?.automation_session
+                    if (!session) {
+                        BStackLogger.debug(`Could not fetch Browserstack session URL (${response.statusCode}) at ${sessionUrl}`)
+                        return
+                    }
+                    browserUrl = session.browser_url
+                }
+            } catch (err) {
+                // SDK-6948: on a named staging env the session REST host may not serve this session
+                // (e.g. classic non-CLI flow). Printing the link is informational, so don't fail the hook.
+                const status = (err as { response?: { statusCode?: number } })?.response?.statusCode ?? (err as Error)?.message
+                BStackLogger.debug(`Could not fetch Browserstack session URL (${status}) at ${sessionUrl}`)
+                return
             }
 
             if (!this._browser) {
