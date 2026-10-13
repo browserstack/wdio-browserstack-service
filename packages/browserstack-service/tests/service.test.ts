@@ -214,6 +214,37 @@ describe('_update', () => {
             expect(got.put).toBeCalledTimes(1)
         })
 
+        it('logs at debug instead of rejecting when the session update gets an HTTP error (SDK-6948)', async () => {
+            service['_browser'] = browser
+            const debugSpy = vi.spyOn(bstackLogger.BStackLogger, 'debug')
+            vi.mocked(got.put).mockRejectedValueOnce(Object.assign(new Error('Response code 401 (Unauthorized)'), { response: { statusCode: 401 } }))
+
+            await expect(service._update('sessionId', { name: 'x' })).resolves.toBeUndefined()
+            expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Could not update Browserstack session (401)'))
+        })
+
+        it('logs at debug when a TurboScale session update gets an HTTP error (SDK-6948)', async () => {
+            service['_browser'] = browser
+            service['_turboScale'] = true
+            const originalPatch = (got as any).patch
+            ;(got as any).patch = vi.fn().mockRejectedValueOnce(Object.assign(new Error('Response code 404 (Not Found)'), { response: { statusCode: 404 } }))
+            try {
+                await expect(service._update('sessionId', { name: 'x' })).resolves.toBeUndefined()
+                expect((got as any).patch).toHaveBeenCalledTimes(1)
+            } finally {
+                (got as any).patch = originalPatch
+                service['_turboScale'] = false
+            }
+        })
+
+        it('still rejects on a network error (no HTTP response)', async () => {
+            service['_browser'] = browser
+            const networkErr = new Error('ECONNRESET')
+            vi.mocked(got.put).mockRejectedValueOnce(networkErr)
+
+            await expect(service._update('sessionId', {})).rejects.toBe(networkErr)
+        })
+
         afterEach(() => {
             getCloudProviderSpy.mockClear()
         })

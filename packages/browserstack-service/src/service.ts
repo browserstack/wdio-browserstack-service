@@ -794,18 +794,27 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
         const sessionUrl = `${this._sessionBaseUrl}/${sessionId}.json`
         BStackLogger.debug(`Updating Browserstack session at ${sessionUrl} with request body: `, requestBody)
+        // SDK-6948: an HTTP error reply (e.g. 401/404 from a named staging env's session REST host)
+        // must not fail the calling hook. got rejects on non-2xx; main/v9 uses fetch, which resolves,
+        // so only HTTP-status errors are swallowed here and network errors still propagate.
+        const onHttpError = (err: { response?: { statusCode?: number } }) => {
+            if (!err?.response) {
+                throw err
+            }
+            BStackLogger.debug(`Could not update Browserstack session (${err.response.statusCode}) at ${sessionUrl}`)
+        }
         if (this._turboScale) {
             return got.patch(sessionUrl, {
                 json: requestBody,
                 username: this._config.user,
                 password: this._config.key
-            })
+            }).catch(onHttpError)
         }
         return got.put(sessionUrl, {
             json: requestBody,
             username: this._config.user,
             password: this._config.key
-        })
+        }).catch(onHttpError)
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.AUTOMATE_EVENTS.PRINT_BUILDLINK)
