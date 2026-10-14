@@ -1,0 +1,19 @@
+{
+  "//": "Consumer-facing type-regression fixture (SDK-6882). Mimics a downstream project's tsconfig: it resolves @wdio/browserstack-service through the package's exports/types map (build/index.d.ts), NOT the internal src/ types. Requires a prior `npm run build`. Run via the package `test:types` script.",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "es2022",
+    "lib": ["es2023", "dom"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["@wdio/globals/types"],
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@wdio/browserstack-service": ["../.."]
+    }
+  },
+  "include": ["./**/*.test-d.ts"]
+}
