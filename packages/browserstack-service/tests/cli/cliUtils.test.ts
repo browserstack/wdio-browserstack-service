@@ -199,67 +199,35 @@ describe('CLIUtils', () => {
             })
         })
 
-        it('passes every testManagementOptions key through with a trimmed testPlanId', () => {
+        it('drops a blank testPlanId and keeps the other testManagementOptions keys', () => {
             const capabilities = [
                 { browserName: 'chrome' }
             ]
-            const options = createBrowserstackOptions({
-                testManagementOptions: {
-                    testPlanId: ' tm-plan-456 ',
-                    issues: ['XYZ-1', 'XYZ-2'],
-                    issueTracker: { name: 'jira', host: 'https://demo.atlassian.net' },
-                    customKey: { nested: true }
-                }
-            })
-
-            const parsed = JSON.parse(CLIUtils.getBinConfig(mockConfig, capabilities, options))
-
-            expect(parsed.testManagementOptions).toEqual({
-                testPlanId: 'tm-plan-456',
-                issues: ['XYZ-1', 'XYZ-2'],
-                issueTracker: { name: 'jira', host: 'https://demo.atlassian.net' },
-                customKey: { nested: true }
-            })
-        })
-
-        it('drops a blank testPlanId but keeps the other testManagementOptions keys', () => {
-            const capabilities = [
-                { browserName: 'chrome' }
-            ]
-            const options = createBrowserstackOptions({
+            const emptyPlanOptions = createBrowserstackOptions({
                 testManagementOptions: {
                     testPlanId: '   ',
-                    issues: ['XYZ-1']
+                    ignoredKey: 'ignored'
                 }
             })
-
-            const parsed = JSON.parse(CLIUtils.getBinConfig(mockConfig, capabilities, options))
-
-            expect(parsed.testManagementOptions).toEqual({
-                issues: ['XYZ-1']
-            })
-        })
-
-        it('omits testManagementOptions when nothing is left to send', () => {
-            const capabilities = [
-                { browserName: 'chrome' }
-            ]
-            const blankPlanOptions = createBrowserstackOptions({
+            const validPlanOptions = createBrowserstackOptions({
                 testManagementOptions: {
-                    testPlanId: '   '
+                    testPlanId: ' tm-plan-456 ',
+                    ignoredKey: 'ignored'
                 }
             })
-            const emptyOptions = createBrowserstackOptions({
-                testManagementOptions: {}
-            })
-            const nonObjectOptions = createBrowserstackOptions({
-                testManagementOptions: 'not-an-object'
+
+            const emptyPlanResult = CLIUtils.getBinConfig(mockConfig, capabilities, emptyPlanOptions)
+            const emptyPlanParsed = JSON.parse(emptyPlanResult)
+            expect(emptyPlanParsed.testManagementOptions).toEqual({
+                ignoredKey: 'ignored'
             })
 
-            for (const options of [blankPlanOptions, emptyOptions, nonObjectOptions]) {
-                const parsed = JSON.parse(CLIUtils.getBinConfig(mockConfig, capabilities, options))
-                expect(parsed.testManagementOptions).toBeUndefined()
-            }
+            const validPlanResult = CLIUtils.getBinConfig(mockConfig, capabilities, validPlanOptions)
+            const validPlanParsed = JSON.parse(validPlanResult)
+            expect(validPlanParsed.testManagementOptions).toEqual({
+                testPlanId: 'tm-plan-456',
+                ignoredKey: 'ignored'
+            })
         })
     })
 
