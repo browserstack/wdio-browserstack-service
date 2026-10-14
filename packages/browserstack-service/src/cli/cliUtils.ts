@@ -89,10 +89,7 @@ export class CLIUtils {
 
         const isNonBstackA11y = isTurboScale(options) || !shouldAddServiceVersion(config as Options.Testrunner, options.testObservability)
         const observabilityOptions: TestObservabilityOptions = options.testObservabilityOptions || {}
-        const testManagementOptions: TestManagementOptions = options.testManagementOptions || {}
-        const testPlanId = typeof testManagementOptions.testPlanId === 'string'
-            ? testManagementOptions.testPlanId.trim()
-            : ''
+        const testManagementOptions = this.getTestManagementOptions(options.testManagementOptions)
         const binconfig: Record<string, unknown> = {
             userName: observabilityOptions.user || config.user,
             accessKey: observabilityOptions.key || config.key,
@@ -105,10 +102,8 @@ export class CLIUtils {
         binconfig.buildName = observabilityOptions.buildName || binconfig.buildName
         binconfig.projectName = observabilityOptions.projectName || binconfig.projectName
         binconfig.buildTag = this.getObservabilityBuildTags(observabilityOptions, buildTag) || []
-        if (testPlanId.length > 0) {
-            binconfig.testManagementOptions = {
-                testPlanId
-            }
+        if (testManagementOptions) {
+            binconfig.testManagementOptions = testManagementOptions
         }
 
         let caps = capabilities
@@ -140,6 +135,22 @@ export class CLIUtils {
             }
         }
         return JSON.stringify(binconfig)
+    }
+
+    /**
+     * testManagementOptions forwarded to the binary as configured, with testPlanId trimmed and
+     * dropped when blank; undefined when nothing is left to send.
+     */
+    static getTestManagementOptions(testManagementOptions?: TestManagementOptions): TestManagementOptions | undefined {
+        if (!testManagementOptions || typeof testManagementOptions !== 'object' || Array.isArray(testManagementOptions)) {
+            return undefined
+        }
+        const { testPlanId, ...otherOptions } = testManagementOptions
+        const trimmedTestPlanId = typeof testPlanId === 'string' ? testPlanId.trim() : ''
+        const resolved: TestManagementOptions = trimmedTestPlanId.length > 0
+            ? { testPlanId: trimmedTestPlanId, ...otherOptions }
+            : otherOptions
+        return Object.keys(resolved).length > 0 ? resolved : undefined
     }
 
     static getSdkVersion() {
