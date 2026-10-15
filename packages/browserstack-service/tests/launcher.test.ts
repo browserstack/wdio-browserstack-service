@@ -986,6 +986,24 @@ describe('constructor', () => {
             expect(service._buildName).toEqual('build from env')
         })
 
+        it('should align top-level project / build keys that sit next to bstack:options', async () => {
+            setEnvNames()
+            const caps: any = [
+                { 'bstack:options': { buildName: 'build from config' }, project: 'project from config', build: 'build from config' },
+                { 'bstack:options': {} }
+            ]
+            new BrowserstackLauncher(options as any, caps, config)
+
+            expect(caps[0]).toEqual({
+                'bstack:options': { wdioService: pkg.version, projectName: 'project from env', buildName: 'build from env' },
+                project: 'project from env',
+                build: 'build from env'
+            })
+            expect(caps[1]).toEqual({
+                'bstack:options': { wdioService: pkg.version, projectName: 'project from env', buildName: 'build from env' }
+            })
+        })
+
         it('should prefer the env vars for an object of capabilities', async () => {
             setEnvNames()
             const caps: any = { browserA: { capabilities: { 'bstack:options': { projectName: 'project from config', buildName: 'build from config' } } } }
@@ -1005,15 +1023,38 @@ describe('constructor', () => {
             expect(service._buildName).toEqual('build from env')
         })
 
-        it('should not write the env vars into the caps of a non-BrowserStack session', async () => {
+        it('should leave a non-BrowserStack session untouched', async () => {
             setEnvNames()
             const spy = vi.spyOn(utils, 'isBStackSession').mockReturnValue(false)
-            const caps: any = [{}]
+            try {
+                const caps: any = [{ build: 'build from config' }]
+                const service: any = new BrowserstackLauncher(options as any, caps, config)
+
+                expect(caps).toEqual([{ build: 'build from config' }])
+                expect(service._buildName).toEqual('build from config')
+                expect(service._projectName).toBeUndefined()
+            } finally {
+                spy.mockRestore()
+            }
+        })
+
+        it('should trim padded env values', async () => {
+            process.env.BROWSERSTACK_PROJECT_NAME = '  project from env '
+            process.env.BROWSERSTACK_BUILD_NAME = ' build from env  '
+            const caps: any = [{ 'bstack:options': { projectName: 'project from config', buildName: 'build from config' } }]
+            new BrowserstackLauncher(options as any, caps, config)
+
+            expect(caps[0]['bstack:options']).toMatchObject({ projectName: 'project from env', buildName: 'build from env' })
+        })
+
+        it('should override only the name the env sets', async () => {
+            process.env.BROWSERSTACK_BUILD_NAME = 'build from env'
+            const caps: any = [{ 'bstack:options': { projectName: 'project from config', buildName: 'build from config' } }]
             const service: any = new BrowserstackLauncher(options as any, caps, config)
 
-            expect(caps).toEqual([{}])
+            expect(caps[0]['bstack:options']).toMatchObject({ projectName: 'project from config', buildName: 'build from env' })
+            expect(service._projectName).toEqual('project from config')
             expect(service._buildName).toEqual('build from env')
-            spy.mockRestore()
         })
     })
 
