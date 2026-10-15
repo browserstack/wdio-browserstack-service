@@ -33,9 +33,8 @@ import { BrowserstackCLI } from '../../../src/cli/index.js'
 import { BStackLogger } from '../../../src/cli/cliLogger.js'
 
 /**
- * 8-D. `setCustomTags` warns and no-ops for every framework except mocha, which
- * is what the legacy custom-tags-handler does. Discriminating: the SAME call merges tags under
- * mocha and merges nothing under cucumber.
+ * `setCustomTags` merges for the CLI-supported frameworks (mocha, cucumber) and warns and
+ * no-ops when no CLI test framework is registered.
  */
 describe('CustomTagsModule — framework gate', () => {
     let module: CustomTagsModule
@@ -82,16 +81,16 @@ describe('CustomTagsModule — framework gate', () => {
         expect(instance.updateMultipleEntries).toHaveBeenCalled()
     })
 
-    it('warns and no-ops for cucumber — the opposite answer on the same call', async () => {
+    it('merges tags into the current scenario for cucumber', async () => {
         useFramework(Object.create(WdioCucumberTestFramework.prototype))
         const setCustomTags = await register()
 
         await setCustomTags('TC', 'TC-1,TC-2')
 
-        expect(instance.updateMultipleEntries).not.toHaveBeenCalled()
-        expect(BStackLogger.warn).toHaveBeenCalledWith(
-            'setCustomTags is only supported for the mocha framework; ignoring call'
-        )
+        expect(instance.updateMultipleEntries).toHaveBeenCalledWith({
+            custom_metadata: { TC: { field_type: 'multi_dropdown', values: ['TC-1', 'TC-2'] } }
+        })
+        expect(BStackLogger.warn).not.toHaveBeenCalled()
     })
 
     it('warns and no-ops when no CLI test framework is registered', async () => {
@@ -102,7 +101,7 @@ describe('CustomTagsModule — framework gate', () => {
 
         expect(instance.updateMultipleEntries).not.toHaveBeenCalled()
         expect(BStackLogger.warn).toHaveBeenCalledWith(
-            'setCustomTags is only supported for the mocha framework; ignoring call'
+            'setCustomTags is only supported for the mocha and cucumber frameworks; ignoring call'
         )
     })
 })
