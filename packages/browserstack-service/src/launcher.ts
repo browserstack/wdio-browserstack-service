@@ -222,14 +222,19 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
      * SDK-7075: BROWSERSTACK_PROJECT_NAME / BROWSERSTACK_BUILD_NAME take precedence over the
      * config file, as every other SDK and the binary's own env->config map already do. They are
      * written back into the caps so the session itself carries them: into bstack:options for W3C
-     * caps (including one this constructor just created), or - on a BrowserStack session only -
-     * into the top-level project/build keys that legacy caps name a build with. Blank values are
-     * ignored. Returns the values applied, for the Test Reporting fields.
+     * caps (including one this constructor just created), and into the top-level project/build
+     * keys that legacy caps name a build with - added on a BrowserStack session that has no
+     * bstack:options, otherwise only overwritten where already present. Blank values are ignored.
+     * Returns the values applied, for the Test Reporting fields - none for the caps of a
+     * non-BrowserStack session, which are left untouched so the reported names match the session.
      */
-    private _applyEnvBuildNames (capability: Capabilities.DesiredCapabilities | WebdriverIO.Capabilities) {
+    private _applyEnvBuildNames (capability: Capabilities.DesiredCapabilities | WebdriverIO.Capabilities): { projectName?: string, buildName?: string } {
+        const bstackOptions = capability['bstack:options']
+        if (!bstackOptions && !isBStackSession(this._config)) {
+            return {}
+        }
         const projectName = process.env.BROWSERSTACK_PROJECT_NAME?.trim() || undefined
         const buildName = process.env.BROWSERSTACK_BUILD_NAME?.trim() || undefined
-        const bstackOptions = capability['bstack:options']
         if (bstackOptions) {
             if (projectName) {
                 bstackOptions.projectName = projectName
@@ -237,14 +242,17 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             if (buildName) {
                 bstackOptions.buildName = buildName
             }
-        } else if (isBStackSession(this._config)) {
-            const legacyCaps = capability as Record<string, unknown>
-            if (projectName) {
-                legacyCaps.project = projectName
-            }
-            if (buildName) {
-                legacyCaps.build = buildName
-            }
+        }
+        // Legacy caps name a build with top-level keys. Without bstack:options they are the only
+        // place the name can go; next to bstack:options, any the caps already carry are aligned
+        // too, so the session never sends two different names.
+        const legacyCaps = capability as Record<string, unknown>
+        const writeLegacy = (key: string) => !bstackOptions || key in legacyCaps
+        if (projectName && writeLegacy('project')) {
+            legacyCaps.project = projectName
+        }
+        if (buildName && writeLegacy('build')) {
+            legacyCaps.build = buildName
         }
         return { projectName, buildName }
     }
