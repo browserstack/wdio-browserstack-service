@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.40.0
+
+### Minor Changes
+
+- 366330e: - `browser.setCustomTags()` now works with WebdriverIO + CucumberJS: custom metadata set in steps or Cucumber `Before`/`After` hooks is reported on the scenario in Test Reporting & Analytics.
+
 ## 9.39.6
 
 ### Patch Changes
