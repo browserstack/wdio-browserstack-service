@@ -1,5 +1,20 @@
 # @wdio/browserstack-service
 
+## 8.53.2
+
+### Patch Changes
+
+- ccb370d: - SDK-6948: `*.bsstag.com` hubs are now recognised as BrowserStack on named internal staging envs (`BROWSERSTACK_STAGING_ENV` / `BROWSERSTACK_ENV`), so with the CLI flow (default) session marking and TRA linking work there. The classic (non-CLI) flow on a named staging env is not supported; its session update is skipped at debug.
+  - SDK-6948: `update_cli` failures fall back to `BROWSERSTACK_BINARY_URL`. A failed fallback download uses the cached binary.
+  - SDK-6948: `_printSessionURL` and `_update` log a failed session lookup or update (HTTP error) at debug instead of throwing.
+- 25529d2: fix(cli): fall back to `BROWSERSTACK_BINARY_URL` when `update_cli` fails (SDK-6948)
+
+  `update_cli` runs during bootstrap — before the binary is spawned and before GRR localizes the API hosts — so it always targets production `api.browserstack.com`. On an internal staging run (`BROWSERSTACK_STAGING_ENV`) the staging credentials are rejected there (`401`), which left the CLI binary path empty and crashed the launcher with `spawn('') … ERR_INVALID_ARG_VALUE: 'file' cannot be empty`. When `update_cli` fails and `BROWSERSTACK_BINARY_URL` is set, download the binary from that URL instead so the run can proceed; the same applies when a 2xx reply carries no download URL and no binary is cached. If that download fails, the cached binary is used when there is one, and both errors are logged. Opt-in only — with the variable unset the original error propagates exactly as before. Ports main/v9 #224 to the v8 line.
+
+- 7ef36e1: fix(util): recognize `*.bsstag.com` hosts as BrowserStack on internal staging envs (SDK-6948)
+
+  `getCloudProvider` and `isBrowserstackInfra` only matched `browserstack.com`, so a session pointed at an internal staging env (`*.bsstag.com`) was classified as non-BrowserStack: session marking and Automate <-> TRA session linking did not work there. `*.bsstag.com` hosts are now treated as BrowserStack when `BROWSERSTACK_STAGING_ENV` is a bare env name (e.g. `k8s`, trimmed; blank means unset) or `BROWSERSTACK_ENV` is `staging`/`stag`/`preprod`/`pre-prod`. Hosts are matched case-insensitively. Production behaviour is unchanged. With the CLI flow (the default), session marking and Automate <-> TRA session linking now work on those envs, because the binary supplies the staging session REST host. The classic (non-CLI) flow on a named staging env is not supported: it has no staging session REST host, so the session name/status update is skipped at debug instead of failing the hook. `_printSessionURL` and `_update` log a failed session lookup or update (HTTP error reply) at debug instead of throwing. Ports main/v9 #275 to the v8 line.
+
 ## 8.53.1
 
 ### Patch Changes
