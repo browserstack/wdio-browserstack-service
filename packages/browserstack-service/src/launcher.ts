@@ -126,21 +126,17 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                                 capability['browserstack.wdioService'] = BSTACK_SERVICE_VERSION
                             }
                         }
+                        const envNames = this._applyEnvBuildNames(capability)
 
                         // Need this details for sending data to Observability
                         this._buildIdentifier = capability['browserstack.buildIdentifier']?.toString()
-                        this._buildName = capability.build?.toString()
+                        this._buildName = envNames.buildName ?? capability.build?.toString()
+                        if (envNames.projectName) {
+                            this._projectName = envNames.projectName
+                        }
                     } else {
                         capability['bstack:options'].wdioService = BSTACK_SERVICE_VERSION
-                        // projectName/buildName must take the env value over the config file, as
-                        // every other SDK and the binary's own env->config map already do. Write
-                        // them back into the caps so the session carries them.
-                        if (process.env.BROWSERSTACK_PROJECT_NAME) {
-                            capability['bstack:options'].projectName = process.env.BROWSERSTACK_PROJECT_NAME
-                        }
-                        if (process.env.BROWSERSTACK_BUILD_NAME) {
-                            capability['bstack:options'].buildName = process.env.BROWSERSTACK_BUILD_NAME
-                        }
+                        this._applyEnvBuildNames(capability)
                         this._buildName = capability['bstack:options'].buildName
                         this._projectName = capability['bstack:options'].projectName
                         this._buildTag = capability['bstack:options'].buildTag
@@ -169,16 +165,18 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                             (caps.capabilities as WebdriverIO.Capabilities)['browserstack.wdioService'] = BSTACK_SERVICE_VERSION
                         }
                     }
+                    const envNames = this._applyEnvBuildNames(caps.capabilities as WebdriverIO.Capabilities)
+                    if (envNames.buildName) {
+                        this._buildName = envNames.buildName
+                    }
+                    if (envNames.projectName) {
+                        this._projectName = envNames.projectName
+                    }
                     this._buildIdentifier = (caps.capabilities as WebdriverIO.Capabilities)['browserstack.buildIdentifier']
                 } else {
                     const bstackOptions = (caps.capabilities as WebdriverIO.Capabilities)['bstack:options']
                     bstackOptions!.wdioService = BSTACK_SERVICE_VERSION
-                    if (process.env.BROWSERSTACK_PROJECT_NAME) {
-                        bstackOptions!.projectName = process.env.BROWSERSTACK_PROJECT_NAME
-                    }
-                    if (process.env.BROWSERSTACK_BUILD_NAME) {
-                        bstackOptions!.buildName = process.env.BROWSERSTACK_BUILD_NAME
-                    }
+                    this._applyEnvBuildNames(caps.capabilities as WebdriverIO.Capabilities)
                     this._buildName = bstackOptions!.buildName
                     this._projectName = bstackOptions!.projectName
                     this._buildTag = bstackOptions!.buildTag
@@ -218,6 +216,37 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         } catch (error: any) {
             BStackLogger.error(`[Crash_Report_Upload] Config processing failed due to ${error}`)
         }
+    }
+
+    /**
+     * SDK-7075: BROWSERSTACK_PROJECT_NAME / BROWSERSTACK_BUILD_NAME take precedence over the
+     * config file, as every other SDK and the binary's own env->config map already do. They are
+     * written back into the caps so the session itself carries them: into bstack:options for W3C
+     * caps (including one this constructor just created), or - on a BrowserStack session only -
+     * into the top-level project/build keys that legacy caps name a build with. Blank values are
+     * ignored. Returns the values applied, for the Test Reporting fields.
+     */
+    private _applyEnvBuildNames (capability: Capabilities.DesiredCapabilities | WebdriverIO.Capabilities) {
+        const projectName = process.env.BROWSERSTACK_PROJECT_NAME?.trim() || undefined
+        const buildName = process.env.BROWSERSTACK_BUILD_NAME?.trim() || undefined
+        const bstackOptions = capability['bstack:options']
+        if (bstackOptions) {
+            if (projectName) {
+                bstackOptions.projectName = projectName
+            }
+            if (buildName) {
+                bstackOptions.buildName = buildName
+            }
+        } else if (isBStackSession(this._config)) {
+            const legacyCaps = capability as Record<string, unknown>
+            if (projectName) {
+                legacyCaps.project = projectName
+            }
+            if (buildName) {
+                legacyCaps.build = buildName
+            }
+        }
+        return { projectName, buildName }
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_SETUP)
