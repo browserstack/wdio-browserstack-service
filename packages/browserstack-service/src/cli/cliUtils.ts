@@ -187,22 +187,63 @@ export class CLIUtils {
             const nullDevice = platform() === 'win32' ? 'NUL' : '/dev/null'
             queryParams.cli_version = await this.runShellCommand(`${existingCliPath} version 2>${nullDevice}`)
         }
-        const response = await this.requestToUpdateCLI(queryParams, config)
-        if (nestedKeyValue(response, ['updated_cli_version'])) {
-            logger.debug(`Need to update binary, current binary version: ${queryParams.cli_version}`)
+        const browserStackBinaryUrl = process.env.BROWSERSTACK_BINARY_URL || null
 
-            const browserStackBinaryUrl = process.env.BROWSERSTACK_BINARY_URL || null
-            if (!isNullOrEmpty(browserStackBinaryUrl)) {
-                logger.debug(`Using BROWSERSTACK_BINARY_URL: ${browserStackBinaryUrl}`)
-                response.url = browserStackBinaryUrl
+        const fallbackToBinaryUrl = async (reason: unknown) => {
+            logger.warn(`update_cli request failed (${reason}); falling back to BROWSERSTACK_BINARY_URL`)
+            try {
+                return await this.downloadLatestBinary(browserStackBinaryUrl as string, cliDir)
+            } catch (downloadErr) {
+                // A cached binary is still better than failing the run; keep the download error visible.
+                if (isNullOrEmpty(existingCliPath)) {
+                    logger.error(`BROWSERSTACK_BINARY_URL download failed (${util.format(downloadErr)}) after update_cli failed (${reason})`)
+                    throw downloadErr
+                }
+                logger.warn(`BROWSERSTACK_BINARY_URL download failed (${util.format(downloadErr)}); using cached binary ${existingCliPath}`)
+                return existingCliPath
+            }
+        }
+
+        // Single close for the span on every path, including a rejected download.
+        try {
+            let response
+            try {
+                response = await this.requestToUpdateCLI(queryParams, config)
+            } catch (err) {
+                // The version-check call (update_cli) failed — e.g. an internal staging run where
+                // update_cli is served from a host the provided creds are not valid on (staging creds
+                // against the prod api host -> 401). If an explicit binary URL was supplied, use it so
+                // the run is not blocked on this call. Opt-in only: with no BROWSERSTACK_BINARY_URL the
+                // error propagates exactly as before, so production behaviour is unchanged.
+                if (!isNullOrEmpty(browserStackBinaryUrl)) {
+                    logger.debug(`update_cli error: ${util.format(err)}`)
+                    const status = (err as { response?: { statusCode?: number } })?.response?.statusCode ?? (err as Error)?.message
+                    return await fallbackToBinaryUrl(status)
+                }
+                throw err
             }
 
-            const finalBinaryPath = await this.downloadLatestBinary(nestedKeyValue(response, ['url']), cliDir)
+            // A 2xx reply with neither `updated_cli_version` nor `url` means there is nothing to update:
+            // keep a cached binary, and only fetch from the explicit binary URL when there is none.
+            if (!isNullOrEmpty(browserStackBinaryUrl) && isNullOrEmpty(existingCliPath) &&
+                !nestedKeyValue(response, ['updated_cli_version']) && !nestedKeyValue(response, ['url'])) {
+                return await fallbackToBinaryUrl(JSON.stringify(response))
+            }
+
+            if (nestedKeyValue(response, ['updated_cli_version'])) {
+                logger.debug(`Need to update binary, current binary version: ${queryParams.cli_version}`)
+
+                if (!isNullOrEmpty(browserStackBinaryUrl)) {
+                    logger.debug(`Using BROWSERSTACK_BINARY_URL: ${browserStackBinaryUrl}`)
+                    response.url = browserStackBinaryUrl
+                }
+
+                return await this.downloadLatestBinary(nestedKeyValue(response, ['url']), cliDir)
+            }
+            return existingCliPath
+        } finally {
             PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
-            return finalBinaryPath
         }
-        PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
-        return existingCliPath
     }
 
     static getCliDir() {

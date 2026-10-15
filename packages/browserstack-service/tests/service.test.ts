@@ -220,6 +220,39 @@ describe('_update', () => {
             expect(got.put).toBeCalledTimes(1)
         })
 
+        it('logs at debug instead of rejecting when the session update gets an HTTP error (SDK-6948)', async () => {
+            service['_browser'] = browser
+            const debugSpy = vi.spyOn(bstackLogger.BStackLogger, 'debug')
+            vi.mocked(got.put).mockRejectedValueOnce(Object.assign(new Error('Response code 401 (Unauthorized)'), { response: { statusCode: 401 } }))
+
+            await expect(service._update('sessionId', { name: 'x' })).resolves.toBeUndefined()
+            expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Could not update Browserstack session (401)'))
+        })
+
+        it('logs at debug when a TurboScale session update gets an HTTP error (SDK-6948)', async () => {
+            service['_browser'] = browser
+            service['_turboScale'] = true
+            const debugSpy = vi.spyOn(bstackLogger.BStackLogger, 'debug')
+            const originalPatch = (got as any).patch
+            ;(got as any).patch = vi.fn().mockRejectedValueOnce(Object.assign(new Error('Response code 404 (Not Found)'), { response: { statusCode: 404 } }))
+            try {
+                await expect(service._update('sessionId', { name: 'x' })).resolves.toBeUndefined()
+                expect((got as any).patch).toHaveBeenCalledTimes(1)
+                expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Could not update Browserstack session (404)'))
+            } finally {
+                (got as any).patch = originalPatch
+                service['_turboScale'] = false
+            }
+        })
+
+        it('still rejects on a network error (no HTTP response)', async () => {
+            service['_browser'] = browser
+            const networkErr = new Error('ECONNRESET')
+            vi.mocked(got.put).mockRejectedValueOnce(networkErr)
+
+            await expect(service._update('sessionId', {})).rejects.toBe(networkErr)
+        })
+
         afterEach(() => {
             getCloudProviderSpy.mockClear()
         })
@@ -257,6 +290,34 @@ describe('_printSessionURL', () => {
             'Windows 10 chrome session: https://www.browserstack.com/automate/builds/1/sessions/2'
         )
         expect(isBrowserstackSessionSpy).toHaveBeenCalled()
+    })
+
+    it('logs at debug instead of throwing when the session REST call fails (SDK-6948)', async () => {
+        browser.isMultiremote = false
+        service['_browser'] = browser
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
+        const debugSpy = vi.spyOn(bstackLogger.BStackLogger, 'debug')
+        logInfoSpy.mockClear()
+        vi.mocked(got).mockRejectedValueOnce(Object.assign(new Error('Response code 404 (Not Found)'), { response: { statusCode: 404 } }))
+
+        await expect(service._printSessionURL()).resolves.toBeUndefined()
+        expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Could not fetch Browserstack session URL (404)'))
+        expect(logInfoSpy).not.toHaveBeenCalledWith(expect.stringContaining('session: '))
+    })
+
+    it('logs at debug when the session REST reply has no automation_session (SDK-6948)', async () => {
+        browser.isMultiremote = false
+        service['_browser'] = browser
+        vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
+        const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
+        const debugSpy = vi.spyOn(bstackLogger.BStackLogger, 'debug')
+        logInfoSpy.mockClear()
+        vi.mocked(got).mockResolvedValueOnce({ statusCode: 200, body: { message: 'Unauthorized' } } as any)
+
+        await expect(service._printSessionURL()).resolves.toBeUndefined()
+        expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('Could not fetch Browserstack session URL (200)'))
+        expect(logInfoSpy).not.toHaveBeenCalledWith(expect.stringContaining('session: '))
     })
 
     describe('if cant print', () => {

@@ -1011,18 +1011,27 @@ export default class BrowserstackService implements Services.ServiceInstance {
         }
         const sessionUrl = `${this._sessionBaseUrl}/${sessionId}.json`
         BStackLogger.debug(`Updating Browserstack session at ${sessionUrl} with request body: `, requestBody)
+        // SDK-6948: an HTTP error reply (e.g. 401/404 from a named staging env's session REST host)
+        // must not fail the calling hook. got rejects on non-2xx; main/v9 uses fetch, which resolves,
+        // so only HTTP-status errors are swallowed here and network errors still propagate.
+        const onHttpError = (err: { response?: { statusCode?: number } }) => {
+            if (!err?.response) {
+                throw err
+            }
+            BStackLogger.debug(`Could not update Browserstack session (${err.response.statusCode}) at ${sessionUrl}`)
+        }
         if (this._turboScale) {
             return got.patch(sessionUrl, {
                 json: requestBody,
                 username: this._config.user,
                 password: this._config.key
-            })
+            }).catch(onHttpError)
         }
         return got.put(sessionUrl, {
             json: requestBody,
             username: this._config.user,
             password: this._config.key
-        })
+        }).catch(onHttpError)
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.AUTOMATE_EVENTS.PRINT_BUILDLINK)
@@ -1041,12 +1050,25 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 responseType: 'json'
             }
 
-            if (this._turboScale) {
-                const response = await got<TurboScaleSessionResponse>(sessionUrl, reqOpts)
-                browserUrl = response.body.url
-            } else {
-                const response = await got<SessionResponse>(sessionUrl, reqOpts)
-                browserUrl = response.body.automation_session.browser_url
+            try {
+                if (this._turboScale) {
+                    const response = await got<TurboScaleSessionResponse>(sessionUrl, reqOpts)
+                    browserUrl = response.body.url
+                } else {
+                    const response = await got<SessionResponse>(sessionUrl, reqOpts)
+                    const session = response.body?.automation_session
+                    if (!session) {
+                        BStackLogger.debug(`Could not fetch Browserstack session URL (${response.statusCode}) at ${sessionUrl}`)
+                        return
+                    }
+                    browserUrl = session.browser_url
+                }
+            } catch (err) {
+                // SDK-6948: on a named staging env the session REST host may not serve this session
+                // (e.g. classic non-CLI flow). Printing the link is informational, so don't fail the hook.
+                const status = (err as { response?: { statusCode?: number } })?.response?.statusCode ?? (err as Error)?.message
+                BStackLogger.debug(`Could not fetch Browserstack session URL (${status}) at ${sessionUrl}`)
+                return
             }
 
             if (!this._browser) {
