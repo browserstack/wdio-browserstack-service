@@ -1250,9 +1250,10 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
          * to that name. BROWSERSTACK_BUILD_NAME used to force this branch as well, which
          * silently discarded every explicitly configured buildIdentifier whenever that env var
          * happened to be exported (SDK-4748). SDK-7075 then made BROWSERSTACK_BUILD_NAME a
-         * buildName source - the constructor folds it into the caps - so the env var no longer
-         * suppresses the identifier; it supplies the very name the identifier is appended to.
-         * This branch therefore fires only when neither the caps nor the environment name a build.
+         * buildName source - the constructor folds it into the caps of a BrowserStack session, or
+         * of any caps carrying bstack:options - so the env var no longer suppresses the identifier;
+         * it supplies the very name the identifier is appended to. This branch therefore fires
+         * only when neither the caps nor (for those caps) the environment name a build.
          */
         if (!this._buildName) {
             this._updateCaps(capabilities, 'buildIdentifier')
