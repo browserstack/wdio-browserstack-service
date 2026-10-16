@@ -199,7 +199,7 @@ describe('CLIUtils', () => {
             })
         })
 
-        it('omits empty testManagementOptions and strips unrelated keys', () => {
+        it('drops a blank testPlanId and keeps the other testManagementOptions keys', () => {
             const capabilities = [
                 { browserName: 'chrome' }
             ]
@@ -218,12 +218,15 @@ describe('CLIUtils', () => {
 
             const emptyPlanResult = CLIUtils.getBinConfig(mockConfig, capabilities, emptyPlanOptions)
             const emptyPlanParsed = JSON.parse(emptyPlanResult)
-            expect(emptyPlanParsed.testManagementOptions).toBeUndefined()
+            expect(emptyPlanParsed.testManagementOptions).toEqual({
+                ignoredKey: 'ignored'
+            })
 
             const validPlanResult = CLIUtils.getBinConfig(mockConfig, capabilities, validPlanOptions)
             const validPlanParsed = JSON.parse(validPlanResult)
             expect(validPlanParsed.testManagementOptions).toEqual({
-                testPlanId: 'tm-plan-456'
+                testPlanId: 'tm-plan-456',
+                ignoredKey: 'ignored'
             })
         })
     })
