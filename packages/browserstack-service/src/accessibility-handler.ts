@@ -69,7 +69,8 @@ import {
     executeAccessibilityScript,
     isFalse,
     getHookType,
-    frameworkSupportsHook
+    frameworkSupportsHook,
+    overwriteCommandCompat
 } from './util.js'
 import accessibilityScripts from './scripts/accessibility-scripts.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
@@ -319,7 +320,7 @@ class _AccessibilityHandler {
                     const orig = browser[command.name as keyof WebdriverIO.Browser]
                     const prevImpl = orig ? orig.bind(browser) : undefined
                     // @ts-expect-error fix type
-                    browser.overwriteCommand(command.name, this.commandWrapper.bind(this, command, prevImpl), command.class === 'Element')
+                    overwriteCommandCompat(browser, command.name, this.commandWrapper.bind(this, command, prevImpl), command.class === 'Element')
                 } catch (error) {
                     BStackLogger.debug(`Exception in overwrite command ${command.name} - ${error}`)
                 }
