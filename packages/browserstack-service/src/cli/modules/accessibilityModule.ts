@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
+import { _getParamsForAppAccessibility, commandScopeOptions, overwriteBrowsingContextCommand, executeAccessibilityScript, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -262,8 +262,16 @@ export default class AccessibilityModule extends BaseModule {
                                 // @ts-expect-error fix type
                                 command.name,
                                 this.commandWrapper.bind(this, command),
-                                command.class === 'Element'
+                                commandScopeOptions(command.class === 'Element')
                             )
+                            if (command.class !== 'Element') {
+                                // WebdriverIO v10 browsing contexts have their own browser commands;
+                                // scan the context that runs the command
+                                const accessibilityModule = this
+                                overwriteBrowsingContextCommand(browser, command.name, function (this: WebdriverIO.Browser, originFunction: Function, ...args: unknown[]) {
+                                    return accessibilityModule.wrapCommand(this, command, originFunction, args)
+                                })
+                            }
                         } catch (wrapError) {
                             this.logger.debug(`Skipping command wrap for ${command.name}: ${wrapError}`)
                         }
@@ -289,6 +297,14 @@ export default class AccessibilityModule extends BaseModule {
     }
 
     private async commandWrapper(command: Command, originFunction: Function, ...args: unknown[]) {
+        return this.wrapCommand(undefined, command, originFunction, args)
+    }
+
+    /**
+     * @param scanTarget the WebdriverIO v10 browsing context that runs the command, or undefined to
+     * scan the tracked driver
+     */
+    private async wrapCommand(scanTarget: WebdriverIO.Browser | undefined, command: Command, originFunction: Function, args: unknown[]) {
         try {
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
@@ -302,11 +318,8 @@ export default class AccessibilityModule extends BaseModule {
                 // driver is the only thing that knows: no sessionId, no session.
                 if (!browser?.sessionId) {
                     this.logger.debug('Skipping accessibility scan: the session has ended')
-                    return await originFunction(...args)
-                }
-
-                // Perform accessibility scan before command if script is available
-                if (
+                } else if (
+                    // Perform accessibility scan before command if script is available
                     !command.name.includes('execute') ||
                     !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
                 ) {
@@ -314,24 +327,21 @@ export default class AccessibilityModule extends BaseModule {
                         // Parentless only before the framework has started anything: no hook run
                         // and no test seen yet. The wrapper never knows which hook it is in, and
                         // does not need to.
-                        await this.performScanCli(browser, command.name, this.currentHookRunUuid, this.hasNoParent)
+                        await this.performScanCli(scanTarget ?? browser, command.name, this.currentHookRunUuid, this.hasNoParent)
                         this.logger.debug(`Accessibility scan performed after ${command.name} command`)
                     } catch (scanError) {
                         this.logger.debug(`Error performing accessibility scan after ${command.name}: ${scanError}`)
                     }
                 }
             }
-
-            // Execute the original command
-            const result = await originFunction(...args)
-
-            return result
-
         } catch (error) {
+            // A failed scan setup must not stop the command: it still runs below
             this.logger.error(`Error in commandWrapper for ${command.name}: ${error}`)
-            // Still execute the original command even if accessibility scan fails
-            return await originFunction(...args)
         }
+
+        // Execute the original command outside the try: its errors belong to the caller (for
+        // example a WebdriverIO 10 StrictSelectorError), and must not run the command again
+        return await originFunction(...args)
     }
 
     async onBeforeTest(args: Record<string, unknown>) {
@@ -565,11 +575,12 @@ export default class AccessibilityModule extends BaseModule {
                         BStackLogger.debug(util.format(results as string))
                         return (results as Record<string, unknown> | undefined)
                     }
-                    const results = await (browser as WebdriverIO.Browser).executeAsync(
+                    // WebdriverIO v10 removed executeAsync; the helper runs the callback-style script through execute
+                    return await executeAccessibilityScript<Record<string, unknown> | undefined>(
+                        browser,
                         this.scriptInstance.performScan as string,
                         { 'method': commandName || '' }
                     )
-                    return (results as Record<string, unknown> | undefined)
                 } catch (err: unknown) {
                     this.logger.error('Accessibility Scan could not be performed : ' + err)
                     return
@@ -598,7 +609,7 @@ export default class AccessibilityModule extends BaseModule {
             }
 
             await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.SAVE_RESULTS, async () => {
-                const results: unknown = await (browser as WebdriverIO.Browser).executeAsync(accessibilityScripts.saveTestResults as string, dataForExtension)
+                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults as string, dataForExtension)
                 this.logger.debug(`save results : ${util.format(results as string)}`)
             })()
         } catch (error) {
@@ -617,7 +628,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results')
                     await this.performScanCli(browser)
-                    const results: Array<Record<string, unknown>> = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResults as string)
+                    const results = await executeAccessibilityScript<Array<Record<string, unknown>>>(browser, this.scriptInstance.getResults as string)
                     return results
                 } catch (error: unknown) {
                     this.logger.error('No accessibility results were found.')
@@ -639,7 +650,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results summary')
                     await this.performScanCli(browser)
-                    const summaryResults: Record<string, unknown> = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResultsSummary as string)
+                    const summaryResults = await executeAccessibilityScript<Record<string, unknown>>(browser, this.scriptInstance.getResultsSummary as string)
                     return summaryResults
                 } catch {
                     this.logger.error('No accessibility summary was found.')

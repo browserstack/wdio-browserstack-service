@@ -651,7 +651,11 @@ describe('AiHandler', () => {
                 }
             }
 
+            // WebdriverIO v9 multiremote browser: named instance properties and getInstance
             browserMock = {
+                isMultiremote: true,
+                instances: ['myChromeBrowser', 'myFirefoxBrowser'],
+                getInstance: (name: string) => browserMock[name],
                 myChromeBrowser: {
                     sessionId: 'chrome-session-id',
                     capabilities: { browserName: 'chrome' },
@@ -703,6 +707,30 @@ describe('AiHandler', () => {
             expect(setTokenSpy).toHaveBeenCalledWith('firefox-session-id', 'mock-session-token')
             expect(installFirefoxExtensionSpy).toHaveBeenCalledTimes(1)
             expect(installFirefoxExtensionSpy).toHaveBeenCalledWith(browserMock.myFirefoxBrowser)
+        })
+
+        it('should call handleSelfHeal for each instance of a WebdriverIO v10 multiremote browser', async () => {
+            AiHandler['authResult'] = {
+                isAuthenticated: true,
+                sessionToken: 'mock-session-token',
+                defaultLogDataEnabled: true,
+                isHealingEnabled: true
+            } as any
+            vi.spyOn(AiHandler, 'setToken')
+            vi.spyOn(AiHandler, 'installFirefoxExtension')
+            const handleSelfHealSpy = vi.spyOn(AiHandler, 'handleSelfHeal')
+            // v10 has no named instance properties on the multiremote browser
+            const v10Browser = {
+                isMultiRemote: true,
+                instances: ['myChromeBrowser', 'myFirefoxBrowser'],
+                getInstance: (name: string) => browserMock[name]
+            } as any
+
+            await AiHandler.selfHeal(config, caps, v10Browser)
+
+            expect(handleSelfHealSpy).toHaveBeenCalledTimes(2)
+            expect(handleSelfHealSpy).toHaveBeenCalledWith(config, browserMock.myChromeBrowser)
+            expect(handleSelfHealSpy).toHaveBeenCalledWith(config, browserMock.myFirefoxBrowser)
         })
 
         it('should skip setup for multiremote session if accessKey is not present', async () => {
