@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 8.53.3
+
+### Patch Changes
+
+- c8c2933: - Fixed `BROWSERSTACK_PROJECT_NAME` and `BROWSERSTACK_BUILD_NAME` being ignored — the environment now takes precedence over the project and build names in your config file, matching the other BrowserStack SDKs.
+
 ## 8.53.2
 
 ### Patch Changes
