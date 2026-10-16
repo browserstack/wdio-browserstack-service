@@ -28,6 +28,8 @@ interface SessionData {
     appliedName?: string // last name successfully PUT for this session, for de-duping
     testResults: Map<string, TestResult> // testName -> TestResult
     scenariosRan: number // non-skipped cucumber scenarios, for preferScenarioName
+    hookFailures?: TestResult[] // failed mocha hooks; folded into the verdict in onAfterExecute
+    ignoreHooksStatus?: boolean
     lastScenarioName?: string
     preferScenarioName?: boolean
 }
@@ -37,6 +39,8 @@ export default class AutomateModule extends BaseModule {
     logger = BStackLogger
     browserStackConfig: Options.Testrunner
     private sessionMap: Map<string, SessionData> = new Map()
+    // Worker-scoped like legacy `_specsRan`: never reset across reloadSession
+    private mochaTestsRan = 0
 
     static readonly MODULE_NAME = 'AutomateModule'
     /**
@@ -53,6 +57,9 @@ export default class AutomateModule extends BaseModule {
         // through their own state. See onBuildLevelHookEnd — cucumber-gated inside the handler.
         TestFramework.registerObserver(TestFrameworkState.BEFORE_ALL, HookState.POST, this.onBuildLevelHookEnd.bind(this, 'BEFORE_ALL'))
         TestFramework.registerObserver(TestFrameworkState.AFTER_ALL, HookState.POST, this.onBuildLevelHookEnd.bind(this, 'AFTER_ALL'))
+        for (const hookKey of ['BEFORE_ALL', 'AFTER_ALL', 'BEFORE_EACH', 'AFTER_EACH'] as const) {
+            TestFramework.registerObserver(TestFrameworkState[hookKey], HookState.POST, this.onMochaHookEnd.bind(this, hookKey))
+        }
     }
 
     getModuleName(): string {
@@ -219,6 +226,9 @@ export default class AutomateModule extends BaseModule {
         // Scenario bookkeeping feeds the session NAME, not its status, so it sits above the status
         // opt-out: `setSessionStatus: false` must still get the preferScenarioName rename.
         const isCucumber = this.isCucumberInstance(instace)
+        if (!skipped && this.isMochaInstance(instace)) {
+            this.mochaTestsRan++
+        }
         if (!skipped && isCucumber) {
             const nameData = this.sessionMap.get(sessionId)
             if (nameData) {
@@ -266,9 +276,7 @@ export default class AutomateModule extends BaseModule {
      * `after()` marked the session failed; that whole accumulation is gated
      * `setSessionStatus && !BrowserstackCLI.isRunning()`, so it is dead while the binary is up.
      *
-     * Cucumber-gated deliberately. `wdio_mocha` has the identical latent shape on this flow, but
-     * legacy mocha behaved the same way, so repairing it here would be an unrequested behaviour
-     * change to the one framework already working on the CLI flow.
+     * Cucumber only — mocha hooks go through onMochaHookEnd.
      */
     async onBuildLevelHookEnd(hookKey: string, args: Record<string, unknown>) {
         try {
@@ -324,6 +332,64 @@ export default class AutomateModule extends BaseModule {
         }
     }
 
+    /**
+     * A failed mocha hook produces no test result — the tests it aborts are reported skipped,
+     * which counts as passed — so the session was marked PASSED even though the run failed.
+     * Legacy fails the session on any hook error unless ignoreHooksStatus is set and a test ran;
+     * `mochaTestsRan` is only final at teardown, so the verdict is decided in onAfterExecute.
+     */
+    async onMochaHookEnd(hookKey: string, args: Record<string, unknown>) {
+        try {
+            const instance = args.instance as TestFrameworkInstance
+            if (!this.isMochaInstance(instance)) {
+                return
+            }
+
+            const result = args.result as { passed?: boolean, skipped?: boolean, error?: Error } | undefined
+            // this.skip() inside a hook is a deliberate skip, not a failure
+            const skippedHook = result?.skipped || !!result?.error?.message?.includes('sync skip; aborting execution')
+            if (!result || result.passed || skippedHook) {
+                return
+            }
+
+            const testContextOptions = this.config.testContextOptions as TestContextOptions
+            if (testContextOptions?.skipSessionStatus) {
+                return
+            }
+
+            const autoInstance = AutomationFramework.getTrackedInstance()
+            if (!isBrowserstackSession(AutomationFramework.getDriver(autoInstance) as WebdriverIO.Browser)) {
+                return
+            }
+            const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
+            if (!sessionId) {
+                this.logger.debug(`onMochaHookEnd: no session id resolved for ${hookKey}; nothing to mark`)
+                return
+            }
+
+            if (!this.sessionMap.has(sessionId)) {
+                // Empty lastTestName: flushSessionName early-returns on it, so this cannot rename.
+                this.sessionMap.set(sessionId, { lastTestName: '', testResults: new Map(), scenariosRan: 0 })
+            }
+            const sessionData = this.sessionMap.get(sessionId)!
+            const name = this.resolveHookName(instance, hookKey)
+            sessionData.hookFailures = [...(sessionData.hookFailures ?? []), {
+                testName: name,
+                status: 'failed',
+                reason: (result.error && result.error.message) || 'Hook failed'
+            }]
+            sessionData.ignoreHooksStatus = isTrue(args?.ignoreHooksStatus)
+            this.logger.info(`onMochaHookEnd: recorded ${hookKey} failure against session ${sessionId}`)
+        } catch (error) {
+            this.logger.error(`Exception in automate onMochaHookEnd: ${error}`)
+        }
+    }
+
+    private isMochaInstance(instance: TestFrameworkInstance): boolean {
+        const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
+        return frameworkName.toLowerCase().includes('mocha')
+    }
+
     private isCucumberInstance(instance: TestFrameworkInstance): boolean {
         const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
         return frameworkName.toLowerCase().includes('cucumber')
@@ -351,6 +417,11 @@ export default class AutomateModule extends BaseModule {
         for (const [sessionId, sessionData] of this.sessionMap.entries()) {
             try {
                 const failedTests = Array.from(sessionData.testResults.values()).filter(test => test.status === 'failed')
+                // Legacy's `ignoreHooksStatus && _specsRan` arm: hook errors are ignored only once a
+                // test actually ran in this worker; a run where every test was aborted still fails.
+                if (sessionData.hookFailures?.length && !(sessionData.ignoreHooksStatus && this.mochaTestsRan > 0)) {
+                    failedTests.push(...sessionData.hookFailures)
+                }
                 const hasFailures = failedTests.length > 0
                 const sessionStatus = hasFailures ? 'failed' : 'passed'
 

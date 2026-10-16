@@ -87,6 +87,18 @@ async function emitSkipReport({ framework, test, result, suiteTitle }: QueuedSki
     }
 }
 
+/**
+ * Queue a report on the one chain every report wdio may not await goes through, so reports never
+ * interleave on the tracker's per-worker tracked-instance slot. service.after() waits for the chain
+ * through drainSkipReports(). Also used by the reporter's `fail` (SDK-7843).
+ */
+export function enqueueReport(work: () => Promise<void>, what: string): Promise<void> {
+    reportChain = reportChain.then(work).catch((err: unknown) => {
+        BStackLogger.debug(`Failed reporting ${what}: ${err}`)
+    })
+    return reportChain
+}
+
 export function markTestStarted(identifier: string) {
     startedTests.add(identifier)
 }
@@ -128,16 +140,14 @@ export function reportSkippedTest(
     const queued: QueuedSkip = { framework, test, result, suiteTitle }
 
     // SDK-7493: only the DETACHED caller needs deferring. `immediate` is for callers wdio
-    // awaits — the hook cascade (afterHook) and the bail cascade (afterTest). Those never had
+    // awaits — the hook cascade (afterHook) and the bail cascade (afterTest; when the failure was
+    // reported after mocha moved on, from service.after() instead, SDK-7843). Those never had
     // the interleave, because wdio holds the lifecycle open until they resolve, so nothing else
     // can claim the tracked slot underneath them. Deferring those too would be a behaviour
     // change for no benefit: their skips would move to end-of-run and their reports would no
     // longer be part of the hook/test they belong to.
     if (options?.immediate) {
-        reportChain = reportChain.then(() => emitSkipReport(queued)).catch((err: unknown) => {
-            BStackLogger.debug(`Failed reporting skipped test '${identifier}': ${err}`)
-        })
-        return reportChain
+        return enqueueReport(() => emitSkipReport(queued), `skipped test '${identifier}'`)
     }
 
     // The un-awaited `onTestSkip` path: queue it — see the QueuedSkip docs above. Emitting here
@@ -158,7 +168,8 @@ export function reportSkippedTest(
  * suite — report each state-undefined test as skipped, recursing into nested describes.
  *
  * Reports IMMEDIATELY (SDK-7493): every caller of this — the failed-hook cascade in
- * `afterHook` and the bail cascade in `afterTest` — is awaited by wdio, so these reports
+ * `afterHook` and the bail cascade in `afterTest` (or in `after()`, for a failure reported after
+ * mocha moved on, SDK-7843) — is awaited by wdio, so these reports
  * cannot interleave with a live test the way the un-awaited `onTestSkip` path could. They
  * belong to the hook/test being reported, so they must not slide to end-of-run.
  */

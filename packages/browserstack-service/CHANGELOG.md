@@ -1,5 +1,24 @@
 # @wdio/browserstack-service
 
+## 9.40.0
+
+### Minor Changes
+
+- 366330e: - `browser.setCustomTags()` now works with WebdriverIO + CucumberJS: custom metadata set in steps or Cucumber `Before`/`After` hooks is reported on the scenario in Test Reporting & Analytics.
+
+## 9.39.6
+
+### Patch Changes
+
+- 937350b: - Fixed mocha tests that fail by exceeding their timeout being marked "passed" on the Automate / App Automate dashboard, and their builds ending as "timeout" in Test Reporting about an hour after the run. Such tests are now reported as failed, with the timeout error as the reason.
+  - Removed the `resolveInstance: unable to resolve/create instance ... LOG POST` error printed when a wdio `before` hook writes to the console.
+
+## 9.39.5
+
+### Patch Changes
+
+- c6ccf90: - Fixed BrowserStack Automate and App Automate sessions being marked as passed when a Mocha hook (`before`, `beforeEach`, `after`, `afterEach`) failed.
+
 ## 9.39.4
 
 ### Patch Changes

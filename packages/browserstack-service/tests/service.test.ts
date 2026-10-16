@@ -1,6 +1,7 @@
 import path from 'node:path'
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import type { Frameworks } from '@wdio/types'
 import logger from '@wdio/logger'
 
 import BrowserstackService from '../src/service.js'
@@ -9,10 +10,12 @@ import InsightsHandler from '../src/insights-handler.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
 import AccessibilityModule from '../src/cli/modules/accessibilityModule.js'
 import * as bstackLogger from '../src/bstackLogger.js'
+import * as skipReporter from '../src/cli/skipReporter.js'
 import AutomationFramework from '../src/cli/frameworks/automationFramework.js'
 import WdioCucumberTestFramework from '../src/cli/frameworks/wdioCucumberTestFramework.js'
 import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
+import TestFramework from '../src/cli/frameworks/testFramework.js'
 import { AutomationFrameworkConstants } from '../src/cli/frameworks/constants/automationFrameworkConstants.js'
 import { AutomationFrameworkState } from '../src/cli/states/automationFrameworkState.js'
 
@@ -58,6 +61,7 @@ vi.mock('../src/instrumentation/performance/performance-tester.js', () => ({
         start: vi.fn(),
         end: vi.fn(),
         startMonitoring: vi.fn(),
+        stopAndGenerate: vi.fn().mockResolvedValue(undefined),
         measureWrapper: vi.fn().mockImplementation((_name: string, fn: Function) => fn),
         Measure: vi.fn().mockImplementation(() => (_target: any, _propertyKey: string, descriptor: PropertyDescriptor) => descriptor),
         browser: undefined,
@@ -1952,6 +1956,26 @@ describe('ignoreHooksStatus feature', () => {
             })
         })
 
+        it.each([true, false])('forwards ignoreHooksStatus=%s on the CLI mocha hook event', async (ignoreHooksStatus) => {
+            const trackEvent = vi.fn().mockResolvedValue(undefined)
+            const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                getTestFramework: () => ({ trackEvent })
+            } as any)
+            service = new BrowserstackService({
+                testObservabilityOptions: { ignoreHooksStatus },
+                setSessionStatus: true
+            } as any, [] as any, { user: 'foo', key: 'bar' } as any)
+            service['_browser'] = browser
+
+            await service.afterHook({ title: '"after each" hook for "test"', parent: 'suite' } as any,
+                undefined as never, { passed: false, error: { message: 'Hook failed' } } as any)
+
+            expect(trackEvent).toHaveBeenCalledWith(TestFrameworkState.AFTER_EACH, HookState.POST,
+                expect.objectContaining({ ignoreHooksStatus }))
+            getInstanceSpy.mockRestore()
+        })
+
         it('should mark session as failed when tests fail even with ignoreHooksStatus=true', async () => {
             // Simulate hook failure
             await service.afterHook({ title: 'hook', parent: 'suite' } as any,
@@ -2652,27 +2676,9 @@ describe('_isAppAutomate honors skipAppOverride', () => {
     })
 })
 
-describe('afterTest bail skip cascade (SDK-7063)', () => {
+describe('beforeTest passes mocha\'s bail to the CLI framework (SDK-7063)', () => {
+    // the cascade itself runs in WdioMochaTestFramework (tests/cli/wdioMochaTestFramework.bailCascade.test.ts)
     let getInstanceSpy: ReturnType<typeof vi.spyOn>
-
-    // reportSkippedTest de-dupes on `${parent} - ${title}` in a module-scope Set that outlives
-    // each test, so every case here needs its own titles.
-    const buildTree = (tag: string) => {
-        const root: any = { title: '', tests: [], suites: [], parent: undefined }
-        const suiteA: any = { title: `${tag} Suite A`, tests: [], suites: [], parent: root }
-        const suiteB: any = { title: `${tag} Suite B`, tests: [], suites: [], parent: root }
-        root.suites.push(suiteA, suiteB)
-
-        const ran: any = { title: `${tag} A1`, state: 'passed', parent: suiteA, file: '/spec/a.js' }
-        const failing: any = { title: `${tag} A2`, state: 'failed', parent: suiteA, file: '/spec/a.js' }
-        const dropped: any = { title: `${tag} A3`, parent: suiteA, file: '/spec/a.js' }
-        suiteA.tests.push(ran, failing, dropped)
-        // sibling top-level describe — only reachable because the cascade walks up to root
-        suiteB.tests.push({ title: `${tag} B1`, parent: suiteB, file: '/spec/a.js' })
-
-        failing.ctx = { test: { parent: suiteA } }
-        return { failing, root }
-    }
 
     const makeService = (config: Record<string, unknown>) => new BrowserstackService(
         { testObservability: false } as any,
@@ -2680,129 +2686,33 @@ describe('afterTest bail skip cascade (SDK-7063)', () => {
         { user: 'foo', key: 'bar', ...config } as any
     )
 
-    const runAfterTest = async (svc: BrowserstackService, failing: any, results: Record<string, unknown>) => {
+    const bailSent = async (config: Record<string, unknown>) => {
         const trackEvent = vi.fn().mockResolvedValue(undefined)
         getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
             isRunning: () => true,
             getTestFramework: () => ({ trackEvent })
         } as any)
-        await svc.afterTest(failing, undefined as never, results as any)
-        return trackEvent
+        vi.spyOn(TestFramework, 'getTrackedInstance').mockReturnValue({} as any)
+        vi.spyOn(TestFramework, 'getState').mockReturnValue('uuid' as any)
+        await makeService(config).beforeTest({ title: 'test', parent: 'suite' } as any)
+        const [, , args] = trackEvent.mock.calls.find(([state, hook]: any[]) => state === TestFrameworkState.TEST && hook === HookState.PRE)!
+        return args.bail
     }
-
-    // WHICH tests got reported, not just how many events fired — a cascade that swept the wrong
-    // tests still produces the same call count. Pairs with the count assertions, which catch the
-    // opposite failure (a test emitted twice).
-    const skippedTitles = (trackEvent: ReturnType<typeof vi.fn>) => [...new Set(
-        trackEvent.mock.calls
-            .filter(([, , payload]: any[]) => payload?.result?.skipped === true)
-            .map(([, , payload]: any[]) => payload.test.title as string)
-    )].sort()
 
     afterEach(() => {
         getInstanceSpy?.mockRestore()
+        vi.mocked(TestFramework.getTrackedInstance).mockRestore()
+        vi.mocked(TestFramework.getState).mockRestore()
     })
 
-    it('reports un-run tests across sibling describes when mocha bail is on', async () => {
-        const { failing } = buildTree('bail1')
-        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
-        const trackEvent = await runAfterTest(svc, failing, { passed: false })
-
-        // 2 events close the failing test (LOG_REPORT/POST + TEST/POST), then 4 per skipped test.
-        // A3 (same describe) and B1 (SIBLING describe) => 2 skipped => 8.
-        expect(trackEvent).toHaveBeenCalledTimes(2 + 8)
-        // exactly the un-run tests: A1 already passed and A2 is the failure being reported,
-        // so sweeping either of them in would be a defect the count alone cannot see
-        expect(skippedTitles(trackEvent)).toEqual(['bail1 A3', 'bail1 B1'])
+    it('sends bail when mocha bail is on', async () => {
+        expect(await bailSent({ framework: 'mocha', mochaOpts: { bail: true } })).toBe(true)
     })
 
-    it('does not cascade when only wdio-level bail is set', async () => {
+    it('does not send bail when only wdio-level bail is set', async () => {
         // wdio's `bail` never halts a spec, so those tests still run — reporting them
-        // as skipped here would double-report them.
-        const { failing } = buildTree('bail2')
-        const svc = makeService({ framework: 'mocha', bail: 1 })
-        const trackEvent = await runAfterTest(svc, failing, { passed: false })
-
-        expect(trackEvent).toHaveBeenCalledTimes(2)
-        expect(skippedTitles(trackEvent)).toEqual([])
-    })
-
-    it('does not cascade while a wdio spec-file retry is still queued', async () => {
-        const { failing } = buildTree('bail3')
-        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
-        const trackEvent = await runAfterTest(svc, failing, {
-            passed: false,
-            retries: { attempts: 0, limit: 2 }
-        })
-
-        expect(trackEvent).toHaveBeenCalledTimes(2)
-        expect(skippedTitles(trackEvent)).toEqual([])
-    })
-
-    it('does not cascade while a MOCHA-level retry is still queued', async () => {
-        // wdio's `results.retries` only tracks spec-file retries — @wdio/mocha-framework never
-        // feeds mochaOpts.retries into it, so it reads {0,0} here and cannot be relied on.
-        // Without reading mocha's own runnable state the cascade fires on attempt 1 and reports
-        // tests as skipped that the retry then actually runs.
-        const { failing } = buildTree('bail5')
-        failing.ctx.test.currentRetry = () => 0
-        failing.ctx.test.retries = () => 1
-        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true, retries: 1 } })
-        const trackEvent = await runAfterTest(svc, failing, {
-            passed: false,
-            retries: { attempts: 0, limit: 0 }
-        })
-
-        expect(trackEvent).toHaveBeenCalledTimes(2)
-        expect(skippedTitles(trackEvent)).toEqual([])
-    })
-
-    it('cascades once the final mocha retry has been used', async () => {
-        const { failing } = buildTree('bail6')
-        failing.ctx.test.currentRetry = () => 1
-        failing.ctx.test.retries = () => 1
-        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true, retries: 1 } })
-        const trackEvent = await runAfterTest(svc, failing, {
-            passed: false,
-            retries: { attempts: 0, limit: 0 }
-        })
-
-        expect(trackEvent).toHaveBeenCalledTimes(2 + 8)
-        expect(skippedTitles(trackEvent)).toEqual(['bail6 A3', 'bail6 B1'])
-    })
-
-    it('does not cascade when the test passed', async () => {
-        const { failing } = buildTree('bail4')
-        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
-        const trackEvent = await runAfterTest(svc, failing, { passed: true })
-
-        expect(trackEvent).toHaveBeenCalledTimes(2)
-        expect(skippedTitles(trackEvent)).toEqual([])
-    })
-
-    it('does not cascade when the test was itself skipped', async () => {
-        // a skipped test does not abort the spec, and the pre-existing skip paths already
-        // report it — cascading here would double-report the rest of the suite
-        const { failing } = buildTree('bail7')
-        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
-        const trackEvent = await runAfterTest(svc, failing, { passed: false, skipped: true })
-
-        // A2 is the test being reported and its own result is legitimately `skipped`; what must
-        // NOT appear is A3/B1, which the cascade would have added.
-        expect(trackEvent).toHaveBeenCalledTimes(2)
-        expect(skippedTitles(trackEvent)).toEqual(['bail7 A2'])
-    })
-
-    it('never throws out of afterTest when mocha state is hostile', async () => {
-        // afterTest is awaited by wdio; anything escaping this cascade would surface as a
-        // framework-level error in the user's run
-        const { failing } = buildTree('bail8')
-        failing.ctx.test.currentRetry = () => { throw new Error('mocha exploded') }
-        failing.ctx.test.retries = () => 1
-        const svc = makeService({ framework: 'mocha', mochaOpts: { bail: true } })
-
-        const trackEvent = await runAfterTest(svc, failing, { passed: false })
-        expect(skippedTitles(trackEvent)).toEqual([])
+        // as skipped would double-report them.
+        expect(await bailSent({ framework: 'mocha', bail: 1 })).toBe(false)
     })
 })
 
@@ -3124,5 +3034,155 @@ describe('_cucumberTestResult failure reason adjacent', () => {
         const result = makeService(false)['_cucumberTestResult'](world('UNDEFINED') as never)
 
         expect(result.error?.message).toBe('Unknown Error')
+    })
+})
+
+/**
+ * SDK-7843 — with a mocha timeout, mocha fails the test (the reporter sends its finish) while its
+ * body and wdio's afterTest are still pending; with `bail`, wdio then runs after() before that
+ * afterTest. after() must let that finish land before the flush and before EXECUTE/POST, where
+ * AutomateModule marks the session status.
+ */
+describe('service after() — settles test finishes before the session status is marked (SDK-7843)', () => {
+    let events: string[]
+    let settle: ReturnType<typeof vi.fn>
+    let trackEvent: ReturnType<typeof vi.fn>
+    // restored one by one: vi.restoreAllMocks() would also undo this file's module-wide logger spies
+    let spies: Array<{ mockRestore: () => void }>
+    // the `after` suite above replaces BrowserstackService.prototype.after in its beforeEach; this
+    // runs at collection, before any hook, so it keeps the real one
+    const realAfter = BrowserstackService.prototype.after
+
+    const makeService = () => new BrowserstackService(
+        { testObservability: false } as never,
+        [] as never,
+        { user: 'foo', key: 'bar', framework: 'mocha', mochaOpts: { bail: true } } as never
+    )
+
+    beforeEach(() => {
+        // this file fakes every timer; the finish below is timed with a real setTimeout
+        vi.useRealTimers()
+        events = []
+        // the reporter's finish is still being sent when after() starts
+        settle = vi.fn().mockImplementation(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 30))
+            events.push('settleTestFinishes')
+        })
+        trackEvent = vi.fn().mockImplementation(async (state: unknown, hook: unknown) => {
+            events.push(`${String(state)}/${String(hook)}`)
+        })
+        spies = []
+        spies.push(vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => ({ trackEvent, settleTestFinishes: settle }),
+            getAutomationFramework: () => ({
+                trackEvent: vi.fn().mockImplementation(async (state: unknown, hook: unknown) => {
+                    events.push(`${String(state)}/${String(hook)}`)
+                })
+            }),
+            modules: { TestHubModule: { flushPendingTestFinishEvent: vi.fn().mockImplementation(async () => { events.push('flushPendingTestFinishEvent') }) } }
+        } as never))
+        spies.push(vi.spyOn(TestFramework, 'getTrackedInstance').mockReturnValue({} as never))
+        spies.push(vi.spyOn(TestFramework, 'getState').mockReturnValue('uuid-1' as never))
+    })
+
+    afterEach(() => {
+        spies.forEach((spy) => spy.mockRestore())
+        vi.useFakeTimers().setSystemTime(new Date('2020-01-01'))
+    })
+
+    it('settles before the deferred-finish flush and before EXECUTE/POST', async () => {
+        await realAfter.call(makeService(), 1)
+
+        expect(events).toEqual(['settleTestFinishes', 'flushPendingTestFinishEvent', `${AutomationFrameworkState.EXECUTE}/${HookState.POST}`])
+    })
+
+    it('leaves the tracked test run alone in afterTest; the CLI framework picks the test\'s own', async () => {
+        const setState = vi.spyOn(TestFramework, 'setState')
+        spies.push(setState)
+        const service = makeService()
+        const test = { title: 'times out', parent: 'Suite', ctx: { test: {} } } as unknown as Frameworks.Test
+
+        await service.beforeTest(test)
+        await service.afterTest(test, undefined as never, { passed: false, error: new Error('Timeout'), duration: 1 } as Frameworks.TestResult)
+
+        expect(setState).not.toHaveBeenCalled()
+        expect(events.filter((e) => e.startsWith(String(TestFrameworkState.TEST)))).toEqual([
+            `${TestFrameworkState.TEST}/${HookState.PRE}`,
+            `${TestFrameworkState.TEST}/${HookState.POST}`
+        ])
+    })
+})
+
+/**
+ * SDK-7493 — `service.after()` must drain the skip-report chain BEFORE flushing the
+ * deferred test-finish.
+ *
+ * wdio does not await `onTestSkip`, so skip reports are still in flight when `after()`
+ * starts, and each one ENDS by emitting mocha TEST/POST — which TestHubModule stashes in
+ * its single-slot `pendingTestFinish` instead of sending. Flushing first therefore flushes
+ * an empty slot and strands the stash that lands moments later; with `describe.skip()`
+ * there is no next test to flush it either, so the test stays "in progress" until Test
+ * Hub's ~60-min idle reap stamps the whole build `timeout`.
+ *
+ * This asserts the ORDER, which is the whole fix — both calls being present is not enough.
+ */
+describe('service.after() — skip drain must precede the deferred-finish flush (SDK-7493)', () => {
+    // the `after` suite above replaces BrowserstackService.prototype.after; keep the real one
+    const realAfter = BrowserstackService.prototype.after
+    const flushPendingTestFinishEvent = vi.fn().mockResolvedValue(undefined)
+    let spies: Array<{ mockRestore: () => void }>
+    let drainSkipReports: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+        flushPendingTestFinishEvent.mockClear()
+        drainSkipReports = vi.spyOn(skipReporter, 'drainSkipReports').mockResolvedValue(undefined)
+        spies = [
+            drainSkipReports,
+            vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                modules: { TestHubModule: { flushPendingTestFinishEvent } },
+                getAutomationFramework: () => ({ trackEvent: vi.fn().mockResolvedValue(undefined) })
+            } as never)
+        ]
+    })
+
+    afterEach(() => {
+        spies.forEach((spy) => spy.mockRestore())
+    })
+
+    function fakeService() {
+        return {
+            _options: { setSessionStatus: false, setSessionName: false, preferScenarioName: false },
+            _scenariosRanCount: 0,
+            _lastScenarioName: undefined,
+            _fullTitle: 'suite - test',
+            _specsRan: true,
+            _failReasons: [],
+            _pureTestFailReasons: [],
+            _hookFailReasons: [],
+            _insightsHandler: undefined,
+            _percyHandler: undefined,
+            saveWorkerData: vi.fn()
+        }
+    }
+
+    it('drains queued skip reports before flushing the deferred test finish', async () => {
+        await realAfter.call(fakeService() as never, 0)
+
+        expect(drainSkipReports).toHaveBeenCalledTimes(1)
+        expect(flushPendingTestFinishEvent).toHaveBeenCalledTimes(1)
+
+        const drainOrder = drainSkipReports.mock.invocationCallOrder[0]
+        const flushOrder = flushPendingTestFinishEvent.mock.invocationCallOrder[0]
+        expect(drainOrder).toBeLessThan(flushOrder)
+    })
+
+    it('still flushes when the skip drain rejects — a drain failure must not strand the finish', async () => {
+        drainSkipReports.mockRejectedValueOnce(new Error('skip chain blew up'))
+
+        await realAfter.call(fakeService() as never, 0)
+
+        expect(flushPendingTestFinishEvent).toHaveBeenCalledTimes(1)
     })
 })
