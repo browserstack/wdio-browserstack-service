@@ -57,8 +57,32 @@ export interface TestReportingOptions {
     key?: string
 }
 
+export interface IssueTrackerOptions {
+    /**
+     * Issue tracker the linked issues live in, e.g. 'jira'.
+     */
+    name?: string,
+    /**
+     * Base URL of the issue tracker, e.g. 'https://your-domain.atlassian.net'.
+     */
+    host?: string,
+    [key: string]: unknown
+}
+
 export interface TestManagementOptions {
+    /**
+     * Test plan to add this run's test cases to.
+     */
     testPlanId?: string,
+    /**
+     * Issue keys to link to the build, e.g. ['XYZ-1', 'XYZ-2'].
+     */
+    issues?: string[],
+    /**
+     * Issue tracker that `issues` belong to.
+     */
+    issueTracker?: IssueTrackerOptions,
+    [key: string]: unknown
 }
 
 export interface RunSmartSelectionOptions {
@@ -110,8 +134,14 @@ export interface BrowserstackConfig {
      */
     testReportingOptions?: TestReportingOptions;
     /**
-     * Set the Test Management related config options under this key.
-     * Currently supports testPlanId.
+     * Set the Test Management related config options under this key, e.g. testPlanId, issues
+     * and issueTracker.
+     *
+     * For Mocha and Cucumber runs every key is forwarded to Test Management as is, and the same
+     * JSON object can also be passed through the BROWSERSTACK_TEST_MANAGEMENT_OPTIONS environment
+     * variable or the --browserstack.testManagementOptions CLI argument; each top-level key is
+     * taken from the CLI argument first, then the environment variable, then this option.
+     * Other runs use testPlanId only.
      */
     testManagementOptions?: TestManagementOptions;
     /**
