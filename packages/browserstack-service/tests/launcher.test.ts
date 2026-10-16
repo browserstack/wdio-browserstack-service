@@ -918,6 +918,146 @@ describe('constructor', () => {
         delete process.env[RERUN_TESTS_ENV]
     })
 
+    describe('BROWSERSTACK_PROJECT_NAME / BROWSERSTACK_BUILD_NAME (SDK-7075)', () => {
+        const setEnvNames = () => {
+            process.env.BROWSERSTACK_PROJECT_NAME = 'project from env'
+            process.env.BROWSERSTACK_BUILD_NAME = 'build from env'
+        }
+
+        afterEach(() => {
+            delete process.env.BROWSERSTACK_PROJECT_NAME
+            delete process.env.BROWSERSTACK_BUILD_NAME
+        })
+
+        it('should prefer the env vars over the values in the caps', async () => {
+            setEnvNames()
+            const caps: any = [{ 'bstack:options': { projectName: 'project from config', buildName: 'build from config' } }]
+            const service: any = new BrowserstackLauncher(options as any, caps, config)
+
+            expect(caps).toEqual([
+                { 'bstack:options': { wdioService: pkg.version, projectName: 'project from env', buildName: 'build from env' } }
+            ])
+            expect(service._projectName).toEqual('project from env')
+            expect(service._buildName).toEqual('build from env')
+        })
+
+        it('should keep the caps projectName / buildName when the env vars are not set', async () => {
+            const caps: any = [{ 'bstack:options': { projectName: 'project from config', buildName: 'build from config' } }]
+            new BrowserstackLauncher(options as any, caps, config)
+
+            expect(caps).toEqual([
+                { 'bstack:options': { wdioService: pkg.version, projectName: 'project from config', buildName: 'build from config' } }
+            ])
+        })
+
+        it('should ignore blank env values', async () => {
+            process.env.BROWSERSTACK_PROJECT_NAME = '  '
+            process.env.BROWSERSTACK_BUILD_NAME = ''
+            const caps: any = [{ 'bstack:options': { projectName: 'project from config', buildName: 'build from config' } }]
+            new BrowserstackLauncher(options as any, caps, config)
+
+            expect(caps[0]['bstack:options']).toMatchObject({ projectName: 'project from config', buildName: 'build from config' })
+        })
+
+        it('should apply the env vars to the bstack:options the service creates for extension caps', async () => {
+            setEnvNames()
+            const caps: any = [{ 'goog:chromeOptions': {} }]
+            const service: any = new BrowserstackLauncher(options as any, caps, config)
+
+            expect(caps).toEqual([{
+                'goog:chromeOptions': {},
+                'bstack:options': { wdioService: pkg.version, projectName: 'project from env', buildName: 'build from env' }
+            }])
+            expect(service._projectName).toEqual('project from env')
+            expect(service._buildName).toEqual('build from env')
+        })
+
+        it('should apply the env vars to the top-level project / build keys of legacy caps', async () => {
+            setEnvNames()
+            const caps: any = [{ project: 'project from config', build: 'build from config' }]
+            const service: any = new BrowserstackLauncher(options as any, caps, config)
+
+            expect(caps).toEqual([{
+                'browserstack.wdioService': pkg.version,
+                project: 'project from env',
+                build: 'build from env'
+            }])
+            expect(service._projectName).toEqual('project from env')
+            expect(service._buildName).toEqual('build from env')
+        })
+
+        it('should align top-level project / build keys that sit next to bstack:options', async () => {
+            setEnvNames()
+            const caps: any = [
+                { 'bstack:options': { buildName: 'build from config' }, project: 'project from config', build: 'build from config' },
+                { 'bstack:options': {} }
+            ]
+            new BrowserstackLauncher(options as any, caps, config)
+
+            expect(caps[0]).toEqual({
+                'bstack:options': { wdioService: pkg.version, projectName: 'project from env', buildName: 'build from env' },
+                project: 'project from env',
+                build: 'build from env'
+            })
+            expect(caps[1]).toEqual({
+                'bstack:options': { wdioService: pkg.version, projectName: 'project from env', buildName: 'build from env' }
+            })
+        })
+
+        it('should prefer the env vars for an object of capabilities', async () => {
+            setEnvNames()
+            const caps: any = { browserA: { capabilities: { 'bstack:options': { projectName: 'project from config', buildName: 'build from config' } } } }
+            new BrowserstackLauncher(options as BrowserstackConfig & Options.Testrunner, caps, config)
+
+            expect(caps).toEqual({ 'browserA': { 'capabilities': { 'bstack:options': { 'wdioService': pkg.version, 'projectName': 'project from env', 'buildName': 'build from env' } } } })
+        })
+
+        it('should apply the env vars for an object of capabilities without bstack:options', async () => {
+            setEnvNames()
+            const caps: any = { browserA: { capabilities: { 'goog:chromeOptions': {} } }, browserB: { capabilities: {} } }
+            const service: any = new BrowserstackLauncher(options as BrowserstackConfig & Options.Testrunner, caps, config)
+
+            expect(caps.browserA.capabilities['bstack:options']).toEqual({ wdioService: pkg.version, projectName: 'project from env', buildName: 'build from env' })
+            expect(caps.browserB.capabilities).toMatchObject({ project: 'project from env', build: 'build from env' })
+            expect(service._projectName).toEqual('project from env')
+            expect(service._buildName).toEqual('build from env')
+        })
+
+        it('should leave a non-BrowserStack session untouched', async () => {
+            setEnvNames()
+            const spy = vi.spyOn(utils, 'isBStackSession').mockReturnValue(false)
+            try {
+                const caps: any = [{ build: 'build from config' }]
+                const service: any = new BrowserstackLauncher(options as any, caps, config)
+
+                expect(caps).toEqual([{ build: 'build from config' }])
+                expect(service._buildName).toEqual('build from config')
+                expect(service._projectName).toBeUndefined()
+            } finally {
+                spy.mockRestore()
+            }
+        })
+
+        it('should trim padded env values', async () => {
+            process.env.BROWSERSTACK_PROJECT_NAME = '  project from env '
+            process.env.BROWSERSTACK_BUILD_NAME = ' build from env  '
+            const caps: any = [{ 'bstack:options': { projectName: 'project from config', buildName: 'build from config' } }]
+            new BrowserstackLauncher(options as any, caps, config)
+
+            expect(caps[0]['bstack:options']).toMatchObject({ projectName: 'project from env', buildName: 'build from env' })
+        })
+
+        it('should override only the name the env sets', async () => {
+            process.env.BROWSERSTACK_BUILD_NAME = 'build from env'
+            const caps: any = [{ 'bstack:options': { projectName: 'project from config', buildName: 'build from config' } }]
+            const service: any = new BrowserstackLauncher(options as any, caps, config)
+
+            expect(caps[0]['bstack:options']).toMatchObject({ projectName: 'project from config', buildName: 'build from env' })
+            expect(service._projectName).toEqual('project from config')
+            expect(service._buildName).toEqual('build from env')
+        })
+    })
+
     describe('#non-bstack session', () => {
         const spy = vi.spyOn(utils, 'isBStackSession')
         it('should not add service version to caps', async () => {
@@ -1394,8 +1534,8 @@ describe('_handleBuildIdentifier', () => {
 
     /**
      * SDK-4748: BROWSERSTACK_BUILD_NAME used to delete an explicitly configured
-     * buildIdentifier outright. It is not a buildName source for this service, so it must
-     * not influence the identifier at all once a buildName is present in the caps.
+     * buildIdentifier outright. Since SDK-7075 it is a buildName source, so it must not
+     * suppress the identifier - it names the build the identifier is appended to.
      */
     it('should keep buildIdentifier when BROWSERSTACK_BUILD_NAME is defined as env var and buildName is in caps', async() => {
         process.env.BROWSERSTACK_BUILD_NAME = 'browserstack wdio build'
@@ -1428,23 +1568,28 @@ describe('_handleBuildIdentifier', () => {
         expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('2026-09-27_14-35-36')
     })
 
-    it('should still delete buildIdentifier if buildName is absent and BROWSERSTACK_BUILD_NAME is defined as env var', async() => {
+    /**
+     * SDK-7075: the constructor now folds BROWSERSTACK_BUILD_NAME into the caps, so a buildName
+     * IS present even when the caps themselves carried none, and the identifier is appended to
+     * that env-sourced name instead of being dropped. A buildName counts as absent only when
+     * neither the caps nor the environment supply one - see the BUILD_RUN_IDENTIFIER test below.
+     */
+    it('should resolve buildIdentifier against the env buildName when the caps carry no buildName', async() => {
         process.env.BROWSERSTACK_BUILD_NAME = 'browserstack wdio build'
         const caps: any = [{
             'bstack:options': {
                 buildIdentifier: '#${BUILD_NUMBER}'
             }
         }]
-        const updatedcaps: any = [{
-            'bstack:options': {
-                wdioService: pkg.version
-            }
-        }]
         const service = new BrowserstackLauncher(options as any, caps, config)
 
+        vi.spyOn(utils, 'getCiInfo').mockReturnValueOnce(null)
+        vi.spyOn(service, '_getLocalBuildNumber').mockReturnValueOnce('1')
+        vi.spyOn(service, '_updateLocalBuildCache').mockImplementation(() => {})
         service._handleBuildIdentifier(caps)
-        expect(caps[0]).toMatchObject(updatedcaps[0])
-        expect(caps[0]['bstack:options']?.buildIdentifier).toBeUndefined()
+
+        expect(caps[0]['bstack:options']?.buildName).toEqual('browserstack wdio build')
+        expect(caps[0]['bstack:options']?.buildIdentifier).toEqual('#1')
     })
 
     it('should prefer BROWSERSTACK_BUILD_RUN_IDENTIFIER over the configured buildIdentifier', async() => {
