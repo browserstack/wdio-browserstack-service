@@ -37,6 +37,15 @@ export default class WdioMochaTestFramework extends TestFramework {
         logger.info(`trackEvent: testFrameworkState=${testFrameworkState} hookState=${hookState}`)
         await super.trackEvent(testFrameworkState, hookState, args)
 
+        // Console output from wdio's `before` hook (after the service has patched console)
+        // arrives before mocha's first hook, so there is no test or hook to attach it to yet and
+        // resolveInstance cannot create one for LOG. The classic path drops such a log silently; do the same instead of
+        // printing an ERROR on every worker (SDK-7843).
+        if (testFrameworkState === TestFrameworkState.LOG && !TestFramework.getTrackedInstance()) {
+            logger.debug(`trackEvent: no test or hook started yet, dropping log for testFrameworkState=${testFrameworkState} hookState=${hookState}`)
+            return
+        }
+
         const instance = this.resolveInstance(testFrameworkState, hookState, args)
         if (instance === null) {
             logger.error(`trackEvent: instance not found for testFrameworkState=${testFrameworkState} hookState=${hookState}`)
