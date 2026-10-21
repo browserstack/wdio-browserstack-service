@@ -13,7 +13,7 @@ import {
     frameworkSupportsHook,
     getCloudProvider, getFailureObject,
     getGitMetaData,
-    getHookType, getPlatformVersion,
+    getHookType, getPlatformVersion, createHookAffectedTestError,
     getResolvedDeviceName,
     getScenarioExamples,
     getTestTags,
@@ -341,7 +341,11 @@ class _InsightsHandler {
         this.listener.hookStarted(this.getRunData(test, 'HookRunStarted'))
     }
 
-    async afterHook (test: Frameworks.Test|CucumberHook|undefined, result: Frameworks.TestResult) {
+    /**
+     * @param failHookAffectedTests true when Mocha fails the tests that a failed before/beforeEach
+     * hook skipped (Mocha 12, WebdriverIO 10). See mochaFailsHookAffectedTests().
+     */
+    async afterHook (test: Frameworks.Test|CucumberHook|undefined, result: Frameworks.TestResult, failHookAffectedTests = false) {
         if (!frameworkSupportsHook('after', this._framework)) {
             return
         }
@@ -378,8 +382,12 @@ class _InsightsHandler {
             If any of the `beforeAll`, `beforeEach`, `afterEach` then the tests after the hook won't run in mocha (https://github.com/mochajs/mocha/issues/4392)
             So if any of this hook fails, then we are sending the next tests in the suite as skipped.
             This won't be needed for `afterAll`, as even if `afterAll` fails all the tests that we need are already run by then, so we don't need to send the stats for them separately
+            Mocha 12 (WebdriverIO 10) fails the tests that a failed `beforeAll` or `beforeEach` skipped, so they are sent as failed with the hook error.
          */
         if (!result.passed && (hookType === 'BEFORE_EACH' || hookType === 'BEFORE_ALL' || hookType === 'AFTER_EACH')) {
+            const affectedTestResult = failHookAffectedTests && hookType !== 'AFTER_EACH'
+                ? { passed: false, error: createHookAffectedTestError(test.title, result.error), duration: 0, retries: { attempts: 0, limit: 0 } } as Frameworks.TestResult
+                : undefined
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const sendTestSkip = async (skippedTest: any) => {
 
@@ -391,7 +399,9 @@ class _InsightsHandler {
                         startedAt: (new Date()).toISOString(),
                         finishedAt: (new Date()).toISOString()
                     }
-                    this.listener.testFinished(this.getRunData(skippedTest, 'TestRunSkipped'))
+                    this.listener.testFinished(affectedTestResult
+                        ? this.getRunData(skippedTest, 'TestRunFinished', affectedTestResult)
+                        : this.getRunData(skippedTest, 'TestRunSkipped'))
                 }
             }
 

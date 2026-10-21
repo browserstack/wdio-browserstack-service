@@ -42,6 +42,10 @@ export const DEFAULT_WAIT_TIMEOUT_FOR_PENDING_UPLOADS = 5000 // 5s
 export const DEFAULT_WAIT_INTERVAL_FOR_PENDING_UPLOADS = 100 // 100ms
 export const BSTACK_SERVICE_VERSION = bstackServiceVersion
 
+/* WebdriverIO 10 supports Appium 3 only, and App Automate uses Appium 1.22.0 by default.
+ * 3.3.0 is the newest 3.x version that BrowserStack offers for iOS 15 (3.5.2 needs iOS 16+). */
+export const DEFAULT_APPIUM_3_VERSION = '3.3.0'
+
 export const NOT_ALLOWED_KEYS_IN_CAPS = ['includeTagsInTestingScope', 'excludeTagsInTestingScope', 'testManagementOptions', 'skipAppOverride', 'preferScenarioName']
 export const BROWSERSTACK_TEST_PLAN_ID = 'BROWSERSTACK_TEST_PLAN_ID'
 
