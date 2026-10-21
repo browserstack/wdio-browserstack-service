@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 8.54.0
+
+### Minor Changes
+
+- 8ff1b20: - `testManagementOptions` set in the BrowserStack service options is now forwarded in full, so `issues` and `issueTracker` can link Jira issues to the build. The same JSON can be passed with the `BROWSERSTACK_TEST_MANAGEMENT_OPTIONS` environment variable or the `--browserstack.testManagementOptions` CLI argument (Mocha and Cucumber).
+
 ## 8.53.3
 
 ### Patch Changes
