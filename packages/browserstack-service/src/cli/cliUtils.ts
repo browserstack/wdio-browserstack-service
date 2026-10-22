@@ -172,14 +172,22 @@ export class CLIUtils {
             if (key === 'browserStackLocalOptions') {
                 updates.opts = this.mergeServerConfigValue(options.opts, server[key])
             } else if (key === 'testContextOptions') {
-                Object.assign(updates, this.getOptionsFromTestContextOptions(server[key]))
+                this.assignSafeKeys(updates, this.getOptionsFromTestContextOptions(server[key]))
             } else if (key !== 'platforms') {
                 updates[key] = this.mergeServerConfigValue(options[key], server[key])
             }
             applied.push(key)
         }
-        Object.assign(options, updates)
+        this.assignSafeKeys(options, updates)
         return applied
+    }
+
+    static assignSafeKeys(target: Record<string, unknown>, source: Record<string, unknown>) {
+        for (const [key, value] of Object.entries(source)) {
+            if (isSafeKey(key)) {
+                target[key] = value
+            }
+        }
     }
 
     /**
