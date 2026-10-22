@@ -279,8 +279,11 @@ export class CLIUtils {
             const bstackOptions = isObject(capability['bstack:options']) ? capability['bstack:options'] as Record<string, unknown> : undefined
             const intoBstackOptions = bstackOptions && key !== 'bstack:options'
                 && (key in bstackOptions || (!(key in capability) && !key.includes(':')))
-            const target = intoBstackOptions ? bstackOptions : capability
-            target[key] = this.mergeServerConfigValue(target[key], value)
+            if (intoBstackOptions) {
+                capability['bstack:options'] = { ...bstackOptions, [key]: this.mergeServerConfigValue(bstackOptions[key], value) }
+            } else {
+                capability[key] = this.mergeServerConfigValue(capability[key], value)
+            }
         }
     }
 

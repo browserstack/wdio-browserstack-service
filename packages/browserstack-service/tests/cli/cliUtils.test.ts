@@ -347,6 +347,15 @@ describe('CLIUtils', () => {
             expect(capability['bstack:options']).toEqual({ os: 'Windows', osVersion: '10', debug: true })
         })
 
+        it('does not write into a bstack:options object shared with another capability', () => {
+            const shared = { os: 'Windows', osVersion: '11' }
+            const first: Record<string, unknown> = { browserName: 'chrome', 'bstack:options': shared }
+            const second: Record<string, unknown> = { browserName: 'edge', 'bstack:options': shared }
+            CLIUtils.applyServerPlatform(first, { osVersion: '10' })
+            expect(first['bstack:options']).toEqual({ os: 'Windows', osVersion: '10' })
+            expect(second['bstack:options']).toEqual({ os: 'Windows', osVersion: '11' })
+        })
+
         it('does not share objects with the server platform entry', () => {
             const capability: Record<string, unknown> = { browserName: 'chrome' }
             const platform = { 'goog:chromeOptions': { args: ['--incognito'] } }
