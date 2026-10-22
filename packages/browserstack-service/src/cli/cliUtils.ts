@@ -26,6 +26,8 @@ import {
     isFalse,
     isTurboScale,
     shouldAddServiceVersion,
+    isObject,
+    isSafeKey,
 } from '../util.js'
 import PerformanceTester from '../instrumentation/performance/performance-tester.js'
 import { EVENTS as PerformanceEvents } from '../instrumentation/performance/constants.js'
@@ -151,6 +153,101 @@ export class CLIUtils {
             ? { testPlanId: trimmedTestPlanId, ...otherOptions }
             : otherOptions
         return Object.keys(resolved).length > 0 ? resolved : undefined
+    }
+
+    /**
+     * Applies the server config the binary forwards to the service options: exactly the listed
+     * keys, deep-merged, with the keys getBinConfig renames mapped back to their option names.
+     * `platforms` has no option; the launcher maps it onto the capabilities.
+     * @returns the keys applied
+     */
+    static applyServerSdkConfig(options: Record<string, unknown>, serverConfig: Record<string, unknown>, keys: unknown[]): string[] {
+        const server = JSON.parse(JSON.stringify(serverConfig)) as Record<string, unknown>
+        const updates: Record<string, unknown> = {}
+        const applied: string[] = []
+        for (const key of keys) {
+            if (typeof key !== 'string' || !isSafeKey(key) || !Object.prototype.hasOwnProperty.call(server, key)) {
+                continue
+            }
+            if (key === 'browserStackLocalOptions') {
+                updates.opts = this.mergeServerConfigValue(options.opts, server[key])
+            } else if (key === 'testContextOptions') {
+                Object.assign(updates, this.getOptionsFromTestContextOptions(server[key]))
+            } else if (key !== 'platforms') {
+                updates[key] = this.mergeServerConfigValue(options[key], server[key])
+            }
+            applied.push(key)
+        }
+        Object.assign(options, updates)
+        return applied
+    }
+
+    /**
+     * Objects merge recursively, arrays element-wise (extra source elements are appended), any
+     * other value, null included, replaces.
+     */
+    static mergeServerConfigValue(target: unknown, source: unknown): unknown {
+        if (isObject(target) && isObject(source)) {
+            const merged: Record<string, unknown> = { ...(target as Record<string, unknown>) }
+            for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+                if (isSafeKey(key)) {
+                    merged[key] = this.mergeServerConfigValue(merged[key], value)
+                }
+            }
+            return merged
+        }
+        if (Array.isArray(target) && Array.isArray(source)) {
+            const merged = [...target]
+            source.forEach((value, index) => {
+                merged[index] = this.mergeServerConfigValue(target[index], value)
+            })
+            return merged
+        }
+        return source
+    }
+
+    /**
+     * The service options getBinConfig derives testContextOptions from.
+     */
+    static getOptionsFromTestContextOptions(testContextOptions: unknown): Record<string, unknown> {
+        if (!isObject(testContextOptions)) {
+            return {}
+        }
+        const contextOptions = testContextOptions as Record<string, unknown>
+        const options: Record<string, unknown> = {}
+        if ('skipSessionName' in contextOptions) {
+            options.setSessionName = !isTrue(contextOptions.skipSessionName)
+        }
+        if ('skipSessionStatus' in contextOptions) {
+            options.setSessionStatus = !isTrue(contextOptions.skipSessionStatus)
+        }
+        for (const key of ['sessionNameOmitTestTitle', 'sessionNamePrependTopLevelSuiteTitle', 'sessionNameFormat']) {
+            if (key in contextOptions) {
+                options[key] = contextOptions[key]
+            }
+        }
+        return options
+    }
+
+    /**
+     * Layers a server platforms[i] entry onto capability i, undoing getBinConfig's flattening: a
+     * key the capability's bstack:options holds goes back there, and so does a new key when the
+     * capability has bstack:options, unless it is vendor-prefixed.
+     */
+    static applyServerPlatform(capability: Record<string, unknown>, platform: unknown) {
+        if (!isObject(platform)) {
+            return
+        }
+        const bstackOptions = isObject(capability['bstack:options']) ? capability['bstack:options'] as Record<string, unknown> : undefined
+        for (const [key, value] of Object.entries(platform as Record<string, unknown>)) {
+            if (!isSafeKey(key)) {
+                continue
+            }
+            const intoBstackOptions = bstackOptions && key !== 'bstack:options'
+                && (key in bstackOptions || (!(key in capability) && !key.includes(':')))
+            const target = intoBstackOptions ? bstackOptions : capability
+            target[key] = this.mergeServerConfigValue(target[key], value)
+        }
     }
 
     static getSdkVersion() {

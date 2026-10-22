@@ -17,6 +17,7 @@ import * as bstackLogger from '../src/bstackLogger.js'
 import { RERUN_ENV, RERUN_TESTS_ENV, BROWSERSTACK_TESTHUB_UUID } from '../src/constants.js'
 import * as FunnelInstrumentation from '../src/instrumentation/funnelInstrumentation.js'
 import TestOpsConfig from '../src/testOps/testOpsConfig.js'
+import { BrowserstackCLI } from '../src/cli/index.js'
 
 vi.mock('@wdio/logger', () => import(path.join(process.cwd(), '__mocks__', '@wdio/logger')))
 vi.mock('browserstack-local')
@@ -86,6 +87,81 @@ describe('onPrepare', () => {
         await service.onPrepare(config, caps)
 
         expect(log.debug).toHaveBeenCalledWith('app is not defined in browserstack-service config, skipping ...')
+    })
+
+    describe('server config from the CLI', () => {
+        const mochaConfig = () => ({ user: 'foobaruser', key: '12345', framework: 'mocha', maxInstances: 10, capabilities: [] }) as any
+        const twoCaps = () => [
+            { browserName: 'chrome', browserVersion: 'latest', maxInstances: 5, 'bstack:options': { os: 'Windows', osVersion: '11' } },
+            { browserName: 'edge', browserVersion: 'latest', 'bstack:options': { os: 'Windows', osVersion: '11' } },
+        ] as any[]
+        const bootstrapWith = (serverSdkConfig: Record<string, unknown> | undefined, serverSdkConfigKeys: unknown) =>
+            vi.spyOn(BrowserstackCLI.getInstance(), 'bootstrap').mockImplementation(async function (this: BrowserstackCLI, options: any) {
+                this.options = options
+                this.config = { serverSdkConfig, serverSdkConfigKeys }
+                this.applyServerConfig()
+            })
+
+        afterEach(() => {
+            vi.mocked(BrowserstackCLI.getInstance().bootstrap).mockRestore()
+            BrowserstackCLI.getInstance().config = {}
+            BrowserstackCLI.getInstance().serverConfigKeys = []
+            BrowserstackCLI.getInstance().options = {}
+        })
+
+        it('maps a server parallelsPerPlatform onto each capability\'s maxInstances and raises maxInstances to fit', async () => {
+            bootstrapWith({ parallelsPerPlatform: 6 }, ['parallelsPerPlatform'])
+            const config = mochaConfig()
+            const capabilities = twoCaps()
+            const service = new BrowserstackLauncher({ testObservability: false, parallelsPerPlatform: 1 } as any, capabilities, config)
+            await service.onPrepare(config, capabilities)
+            expect(capabilities.map((cap) => cap.maxInstances)).toEqual([6, 6])
+            expect(config.maxInstances).toBe(12)
+        })
+
+        it('lowers maxInstances to a smaller server parallelsPerPlatform and keeps a larger config.maxInstances', async () => {
+            bootstrapWith({ parallelsPerPlatform: 1 }, ['parallelsPerPlatform'])
+            const config = mochaConfig()
+            const capabilities = twoCaps()
+            const service = new BrowserstackLauncher({ testObservability: false, parallelsPerPlatform: 3 } as any, capabilities, config)
+            await service.onPrepare(config, capabilities)
+            expect(capabilities.map((cap) => cap.maxInstances)).toEqual([1, 1])
+            expect(config.maxInstances).toBe(10)
+        })
+
+        it('layers server platforms onto the capability at the same index and ignores appended ones', async () => {
+            bootstrapWith({ platforms: [{ browserVersion: 'latest-1', osVersion: '10' }, {}, { browserName: 'safari' }] }, ['platforms'])
+            const config = mochaConfig()
+            const capabilities = twoCaps()
+            const service = new BrowserstackLauncher({ testObservability: false } as any, capabilities, config)
+            await service.onPrepare(config, capabilities)
+            expect(capabilities).toHaveLength(2)
+            expect(capabilities[0]).toMatchObject({ browserName: 'chrome', browserVersion: 'latest-1', maxInstances: 5, 'bstack:options': { os: 'Windows', osVersion: '10' } })
+            expect(capabilities[1]).toMatchObject({ browserName: 'edge', browserVersion: 'latest', 'bstack:options': { os: 'Windows', osVersion: '11' } })
+            expect(config.maxInstances).toBe(10)
+        })
+
+        it('leaves the runner config alone when parallelsPerPlatform is only echoed or no key list arrives', async () => {
+            for (const [serverSdkConfig, keys] of [[{ parallelsPerPlatform: 6, buildName: 'b' }, ['buildName']], [{ parallelsPerPlatform: 6 }, undefined]] as const) {
+                bootstrapWith(serverSdkConfig, keys)
+                const config = mochaConfig()
+                const capabilities = twoCaps()
+                const service = new BrowserstackLauncher({ testObservability: false, parallelsPerPlatform: 1 } as any, capabilities, config)
+                await service.onPrepare(config, capabilities)
+                expect(capabilities.map((cap) => cap.maxInstances)).toEqual([5, undefined])
+                expect(config.maxInstances).toBe(10)
+            }
+        })
+
+        it('does not bootstrap the CLI, nor map parallelsPerPlatform, for a framework outside the CLI flow', async () => {
+            const bootstrapSpy = bootstrapWith({ parallelsPerPlatform: 6 }, ['parallelsPerPlatform'])
+            const config = { ...mochaConfig(), framework: 'jasmine' }
+            const capabilities = twoCaps()
+            const service = new BrowserstackLauncher({ testObservability: false } as any, capabilities, config)
+            await service.onPrepare(config, capabilities)
+            expect(bootstrapSpy).not.toHaveBeenCalled()
+            expect(capabilities.map((cap) => cap.maxInstances)).toEqual([5, undefined])
+        })
     })
 
     it('should not call local if browserstackLocal is undefined', async () => {

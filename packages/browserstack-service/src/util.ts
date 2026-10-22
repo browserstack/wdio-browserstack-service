@@ -1658,6 +1658,10 @@ export const isObject = (object: any) => {
     return object !== null && typeof object === 'object' && !Array.isArray(object)
 }
 
+export function isSafeKey(key: string): boolean {
+    return !['__proto__', 'constructor', 'prototype'].includes(key)
+}
+
 export const ObjectsAreEqual = (object1: any, object2: any) => {
     const objectKeys1 = Object.keys(object1)
     const objectKeys2 = Object.keys(object2)

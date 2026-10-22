@@ -12,7 +12,7 @@ import TestHubModule from './modules/testHubModule.js'
 import type { ChildProcess } from 'node:child_process'
 import type { StartBinSessionResponse } from '../grpc/index.js'
 import type BaseModule from './modules/baseModule.js'
-import { BROWSERSTACK_ACCESSIBILITY, BROWSERSTACK_OBSERVABILITY, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_TESTHUB_UUID, CLI_STOP_TIMEOUT, TESTOPS_BUILD_COMPLETED_ENV, TESTOPS_SCREENSHOT_ENV } from '../constants.js'
+import { BROWSERSTACK_ACCESSIBILITY, BROWSERSTACK_OBSERVABILITY, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_TESTHUB_UUID, CLI_STOP_TIMEOUT, TESTOPS_BUILD_COMPLETED_ENV, TESTOPS_SCREENSHOT_ENV, SERVER_SDK_CONFIG_KEY, SERVER_SDK_CONFIG_KEYS_KEY } from '../constants.js'
 import type { Options } from '@wdio/types'
 import TestOpsConfig from '../testOps/testOpsConfig.js'
 import WdioMochaTestFramework from './frameworks/wdioMochaTestFramework.js'
@@ -21,7 +21,7 @@ import type TestFramework from './frameworks/testFramework.js'
 import WdioAutomationFramework from './frameworks/wdioAutomationFramework.js'
 import WebdriverIOModule from './modules/webdriverIOModule.js'
 import AccessibilityModule from './modules/accessibilityModule.js'
-import { isTurboScale, processAccessibilityResponse, shouldAddServiceVersion } from '../util.js'
+import { isObject, isTurboScale, processAccessibilityResponse, shouldAddServiceVersion } from '../util.js'
 import ObservabilityModule from './modules/observabilityModule.js'
 import type { BrowserstackConfig, BrowserstackOptions } from '../types.js'
 import PercyModule from './modules/percyModule.js'
@@ -52,6 +52,7 @@ export class BrowserstackCLI {
     SDK_CLI_BIN_PATH: string | null = null
     logger = BStackLogger
     options: BrowserstackConfig & BrowserstackOptions | {}
+    serverConfigKeys: string[] = []
 
     constructor() {
         this.initialized = false
@@ -130,6 +131,7 @@ export class BrowserstackCLI {
         this.logger.info(`loadModules: binSessionId=${this.binSessionId}`)
 
         this.setConfig(startBinResponse)
+        this.applyServerConfig()
         APIUtils.updateURLSForGRR(this.config.apis as GRRUrls)
 
         this.setupTestFramework()
@@ -171,6 +173,28 @@ export class BrowserstackCLI {
             this.modules[PercyModule.MODULE_NAME] = new PercyModule(startBinResponse.percy)
         }
         this.configureModules()
+    }
+
+    /**
+     * Deep-merges the server config the binary forwards into this process's service options,
+     * applying exactly the keys the binary lists as overridden. Runs before any reader of the
+     * options; without both fields (older binaries, no override) nothing changes. Any failure
+     * keeps the local options.
+     */
+    applyServerConfig() {
+        try {
+            const serverConfig = this.config[SERVER_SDK_CONFIG_KEY]
+            const keys = this.config[SERVER_SDK_CONFIG_KEYS_KEY]
+            if (!isObject(serverConfig) || !Array.isArray(keys)) {
+                return
+            }
+            this.serverConfigKeys = CLIUtils.applyServerSdkConfig(this.options as Record<string, unknown>, serverConfig as Record<string, unknown>, keys)
+            if (this.serverConfigKeys.length) {
+                this.logger.info(`applyServerConfig: server config applied keys=${this.serverConfigKeys.join(',')}`)
+            }
+        } catch (error) {
+            this.logger.error(`applyServerConfig: keeping the local config, error=${util.format(error)}`)
+        }
     }
 
     private logBuildStartErrors(testhub: unknown) {
