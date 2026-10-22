@@ -271,11 +271,12 @@ export class CLIUtils {
         if (!isObject(platform)) {
             return
         }
-        const bstackOptions = isObject(capability['bstack:options']) ? capability['bstack:options'] as Record<string, unknown> : undefined
-        for (const [key, value] of Object.entries(platform as Record<string, unknown>)) {
+        const entry = JSON.parse(JSON.stringify(platform)) as Record<string, unknown>
+        for (const [key, value] of Object.entries(entry)) {
             if (!isSafeKey(key)) {
                 continue
             }
+            const bstackOptions = isObject(capability['bstack:options']) ? capability['bstack:options'] as Record<string, unknown> : undefined
             const intoBstackOptions = bstackOptions && key !== 'bstack:options'
                 && (key in bstackOptions || (!(key in capability) && !key.includes(':')))
             const target = intoBstackOptions ? bstackOptions : capability

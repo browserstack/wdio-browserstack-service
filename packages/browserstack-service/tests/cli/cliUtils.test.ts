@@ -341,6 +341,20 @@ describe('CLIUtils', () => {
             expect(capability).toEqual({ browserName: 'chrome' })
         })
 
+        it('keeps routing into bstack:options after the entry merges a bstack:options key', () => {
+            const capability: Record<string, unknown> = { browserName: 'chrome', 'bstack:options': { os: 'Windows', osVersion: '11' } }
+            CLIUtils.applyServerPlatform(capability, { 'bstack:options': { debug: true }, osVersion: '10' })
+            expect(capability['bstack:options']).toEqual({ os: 'Windows', osVersion: '10', debug: true })
+        })
+
+        it('does not share objects with the server platform entry', () => {
+            const capability: Record<string, unknown> = { browserName: 'chrome' }
+            const platform = { 'goog:chromeOptions': { args: ['--incognito'] } }
+            CLIUtils.applyServerPlatform(capability, platform)
+            platform['goog:chromeOptions'].args.push('--mutated')
+            expect(capability['goog:chromeOptions']).toEqual({ args: ['--incognito'] })
+        })
+
         it('updates bstack:options when the capability holds the key at both levels', () => {
             const capability: Record<string, unknown> = {
                 browserName: 'chrome',
