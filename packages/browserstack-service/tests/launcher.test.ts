@@ -143,6 +143,7 @@ describe('onPrepare', () => {
 
         it('leaves the runner config alone when parallelsPerPlatform is only echoed or no key list arrives', async () => {
             for (const [serverSdkConfig, keys] of [[{ parallelsPerPlatform: 6, buildName: 'b' }, ['buildName']], [{ parallelsPerPlatform: 6 }, undefined]] as const) {
+                BrowserstackCLI.getInstance().serverConfigKeys = []
                 bootstrapWith(serverSdkConfig, keys)
                 const config = mochaConfig()
                 const capabilities = twoCaps()
