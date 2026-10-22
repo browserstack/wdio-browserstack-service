@@ -191,6 +191,7 @@ describe('onPrepare', () => {
             })
 
         afterEach(() => {
+            vi.mocked(BrowserstackCLI.getInstance().bootstrap).mockRestore()
             BrowserstackCLI.getInstance().config = {}
             BrowserstackCLI.getInstance().serverConfigKeys = []
             BrowserstackCLI.getInstance().options = {}
