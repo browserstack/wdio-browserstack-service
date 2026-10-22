@@ -94,6 +94,67 @@ describe('BrowserstackCLI bootstrap error surfacing', () => {
         })
     })
 
+    describe('applyServerConfig', () => {
+        afterEach(() => {
+            instance.options = {}
+            instance.serverConfigKeys = []
+            instance.modulesLoaded = false
+        })
+
+        const configWith = (extra: Record<string, unknown>) => JSON.stringify({ apis: {}, ...extra })
+
+        it('merges exactly the listed keys into the service options', () => {
+            const options = { parallelsPerPlatform: 1, buildName: 'local', setSessionName: true }
+            instance.options = options
+            instance.setConfig({ config: configWith({
+                serverSdkConfig: { parallelsPerPlatform: 3, buildName: 'echo', testContextOptions: { skipSessionName: true } },
+                serverSdkConfigKeys: ['parallelsPerPlatform', 'testContextOptions'],
+            }) } as any)
+            instance.applyServerConfig()
+            expect(options).toEqual({ parallelsPerPlatform: 3, buildName: 'local', setSessionName: false })
+            expect(instance.serverConfigKeys).toEqual(['parallelsPerPlatform', 'testContextOptions'])
+        })
+
+        it('changes nothing without a key list, as from an older binary', () => {
+            const options = { parallelsPerPlatform: 1 }
+            instance.options = options
+            for (const extra of [{ serverSdkConfig: { parallelsPerPlatform: 3 } }, { serverSdkConfig: { parallelsPerPlatform: 3 }, serverSdkConfigKeys: 'parallelsPerPlatform' }, {}]) {
+                instance.setConfig({ config: configWith(extra) } as any)
+                instance.applyServerConfig()
+            }
+            expect(options).toEqual({ parallelsPerPlatform: 1 })
+            expect(instance.serverConfigKeys).toEqual([])
+        })
+
+        it('keeps the local options when the merge fails', () => {
+            const options = { parallelsPerPlatform: 1 }
+            instance.options = options
+            instance.config = { serverSdkConfig: { parallelsPerPlatform: 3 }, serverSdkConfigKeys: ['parallelsPerPlatform'] }
+            vi.spyOn(JSON, 'stringify').mockImplementationOnce(() => { throw new Error('boom') })
+            instance.applyServerConfig()
+            expect(options).toEqual({ parallelsPerPlatform: 1 })
+            expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringContaining('applyServerConfig: keeping the local config'))
+        })
+
+        it('runs right after setConfig in loadModules, and again for the options of a repeated load', () => {
+            const response = { binSessionId: 'b1', config: configWith({ serverSdkConfig: { parallelsPerPlatform: 2 }, serverSdkConfigKeys: ['parallelsPerPlatform'] }) } as any
+            const mainOptions = { parallelsPerPlatform: 1 }
+            instance.options = mainOptions
+            try {
+                instance.loadModules(response)
+            } catch {
+                // modules need a full bin session; only the merge is under test
+            }
+            expect(mainOptions.parallelsPerPlatform).toBe(2)
+
+            const workerOptions = { parallelsPerPlatform: 1 }
+            instance.options = workerOptions
+            instance.modulesLoaded = true
+            instance.loadModules(response)
+            expect(workerOptions.parallelsPerPlatform).toBe(2)
+        })
+    })
+
     // SDK-6821: apis arrives under the sessionData bucket (flat kept for backward
     // compat until every SDK migrates). The bucket-only case is the Phase-4 shape —
     // the one a broken hoist cannot mask via the flat fallback.

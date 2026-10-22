@@ -241,6 +241,8 @@ export const GIT_META_DATA_TRUNCATED = '...[TRUNCATED]'
 
 // CLI related constants
 export const CLI_STOP_TIMEOUT = 5000 // 5 seconds
+export const SERVER_SDK_CONFIG_KEY = 'serverSdkConfig'
+export const SERVER_SDK_CONFIG_KEYS_KEY = 'serverSdkConfigKeys'
 export const BINARY_BUSY_ERROR_CODES = ['ETXTBSY', 'EBUSY']
 export const MAX_SPAWN_RETRIES = 3
 export const SPAWN_RETRY_DELAY_MS = 1000
