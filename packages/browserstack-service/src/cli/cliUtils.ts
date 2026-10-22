@@ -207,7 +207,8 @@ export class CLIUtils {
     }
 
     /**
-     * The service options getBinConfig derives testContextOptions from.
+     * The service options getBinConfig derives testContextOptions from. sessionNameFormat is not
+     * mapped: the option is a function, and a server value can only be a string.
      */
     static getOptionsFromTestContextOptions(testContextOptions: unknown): Record<string, unknown> {
         if (!isObject(testContextOptions)) {
@@ -221,7 +222,7 @@ export class CLIUtils {
         if ('skipSessionStatus' in contextOptions) {
             options.setSessionStatus = !isTrue(contextOptions.skipSessionStatus)
         }
-        for (const key of ['sessionNameOmitTestTitle', 'sessionNamePrependTopLevelSuiteTitle', 'sessionNameFormat']) {
+        for (const key of ['sessionNameOmitTestTitle', 'sessionNamePrependTopLevelSuiteTitle']) {
             if (key in contextOptions) {
                 options[key] = contextOptions[key]
             }

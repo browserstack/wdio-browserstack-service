@@ -490,6 +490,18 @@ describe('BrowserstackCLI', () => {
             expect(browserstackCLI.serverConfigKeys).toEqual(['parallelsPerPlatform', 'testContextOptions'])
         })
 
+        it('keeps the local sessionNameFormat formatter when the server sends one, which can only be a string', () => {
+            const sessionNameFormat = () => 'local-name'
+            const options = { setSessionName: false, sessionNameFormat }
+            browserstackCLI.options = options
+            browserstackCLI.config = {
+                serverSdkConfig: { testContextOptions: { skipSessionName: false, sessionNameFormat: 'srv-fmt' } },
+                serverSdkConfigKeys: ['testContextOptions'],
+            }
+            browserstackCLI.applyServerConfig()
+            expect(options).toEqual({ setSessionName: true, sessionNameFormat })
+        })
+
         it('changes nothing without a key list, as from an older binary', () => {
             const options = { parallelsPerPlatform: 1 }
             browserstackCLI.options = options
