@@ -267,8 +267,8 @@ export class CLIUtils {
             if (!isSafeKey(key)) {
                 continue
             }
-            const intoBstackOptions = bstackOptions && key !== 'bstack:options' && !(key in capability)
-                && (key in bstackOptions || !key.includes(':'))
+            const intoBstackOptions = bstackOptions && key !== 'bstack:options'
+                && (key in bstackOptions || (!(key in capability) && !key.includes(':')))
             const target = intoBstackOptions ? bstackOptions : capability
             target[key] = this.mergeServerConfigValue(target[key], value)
         }

@@ -330,6 +330,20 @@ describe('CLIUtils', () => {
             CLIUtils.applyServerPlatform(capability, ['x'])
             expect(capability).toEqual({ browserName: 'chrome' })
         })
+
+        it('updates bstack:options when the capability holds the key at both levels', () => {
+            const capability: Record<string, unknown> = {
+                browserName: 'chrome',
+                browserVersion: 'latest',
+                'bstack:options': { browserVersion: 'latest' }
+            }
+            CLIUtils.applyServerPlatform(capability, { browserVersion: 'latest-1' })
+            expect(capability).toEqual({
+                browserName: 'chrome',
+                browserVersion: 'latest',
+                'bstack:options': { browserVersion: 'latest-1' }
+            })
+        })
     })
 
     describe('getSdkVersion', () => {
