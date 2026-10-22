@@ -220,6 +220,11 @@ export class BrowserstackCLI {
                 return
             }
             this.serverConfigKeys = CLIUtils.applyServerSdkConfig(this.options as Record<string, unknown>, serverConfig as Record<string, unknown>, keys)
+            // The modules call testContextOptions.sessionNameFormat; the merged JSON can only hold a string there.
+            const contextOptions = this.config.testContextOptions
+            if (isObject(contextOptions) && typeof (contextOptions as Record<string, unknown>).sessionNameFormat !== 'function') {
+                delete (contextOptions as Record<string, unknown>).sessionNameFormat
+            }
             if (this.serverConfigKeys.length) {
                 this.logger.info(`applyServerConfig: server config applied keys=${this.serverConfigKeys.join(',')}`)
             }

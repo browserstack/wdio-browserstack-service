@@ -115,6 +115,24 @@ describe('BrowserstackCLI bootstrap error surfacing', () => {
             expect(instance.serverConfigKeys).toEqual(['parallelsPerPlatform', 'testContextOptions'])
         })
 
+        it('drops a server sessionNameFormat from the binary config, which can only be a string', () => {
+            instance.options = { setSessionName: false }
+            instance.setConfig({ config: configWith({
+                testContextOptions: { skipSessionName: false, sessionNameFormat: 'srv-fmt' },
+                serverSdkConfig: { testContextOptions: { skipSessionName: false, sessionNameFormat: 'srv-fmt' } },
+                serverSdkConfigKeys: ['testContextOptions'],
+            }) } as any)
+            instance.applyServerConfig()
+            expect(instance.config.testContextOptions).toEqual({ skipSessionName: false })
+            expect(instance.options).toEqual({ setSessionName: true })
+        })
+
+        it('leaves the binary config testContextOptions alone without an override', () => {
+            instance.setConfig({ config: configWith({ testContextOptions: { skipSessionName: false, sessionNameFormat: '' } }) } as any)
+            instance.applyServerConfig()
+            expect(instance.config.testContextOptions).toEqual({ skipSessionName: false, sessionNameFormat: '' })
+        })
+
         it('changes nothing without a key list, as from an older binary', () => {
             const options = { parallelsPerPlatform: 1 }
             instance.options = options

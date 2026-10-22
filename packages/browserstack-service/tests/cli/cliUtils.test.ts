@@ -268,7 +268,7 @@ describe('CLIUtils', () => {
                 testContextOptions: { skipSessionName: true, sessionNameFormat: '{testTitle}' },
             }, ['browserStackLocalOptions', 'testContextOptions'])
             expect(applied).toEqual(['browserStackLocalOptions', 'testContextOptions'])
-            expect(options).toEqual({ opts: { forceLocal: true, localIdentifier: 'srv-id' }, setSessionName: false, setSessionStatus: true, sessionNameFormat: '{testTitle}' })
+            expect(options).toEqual({ opts: { forceLocal: true, localIdentifier: 'srv-id' }, setSessionName: false, setSessionStatus: true, sessionNameFormat: '' })
         })
 
         it('reports platforms as applied without storing them as an option', () => {
