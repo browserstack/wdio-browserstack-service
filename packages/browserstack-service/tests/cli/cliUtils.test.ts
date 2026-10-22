@@ -294,6 +294,16 @@ describe('CLIUtils', () => {
         })
     })
 
+    describe('assignSafeKeys', () => {
+        it('copies every key except prototype keys', () => {
+            const target: Record<string, unknown> = { a: 1 }
+            const source = JSON.parse('{"b":2,"__proto__":{"polluted":true},"constructor":{"x":1},"prototype":{"y":1}}')
+            CLIUtils.assignSafeKeys(target, source)
+            expect(target).toEqual({ a: 1, b: 2 })
+            expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+        })
+    })
+
     describe('applyServerPlatform', () => {
         it('puts flattened bstack:options keys back under bstack:options and keeps top-level keys on top', () => {
             const capability: Record<string, unknown> = {
