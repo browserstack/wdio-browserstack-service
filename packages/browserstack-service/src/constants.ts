@@ -46,6 +46,8 @@ export const BSTACK_SERVICE_VERSION = bstackServiceVersion
 
 export const UPDATED_CLI_ENDPOINT =  'sdk/v1/update_cli'
 export const CLI_STOP_TIMEOUT = 3000
+export const SERVER_SDK_CONFIG_KEY = 'serverSdkConfig'
+export const SERVER_SDK_CONFIG_KEYS_KEY = 'serverSdkConfigKeys'
 
 export const NOT_ALLOWED_KEYS_IN_CAPS = ['includeTagsInTestingScope', 'excludeTagsInTestingScope', 'skipAppOverride', 'testManagementOptions', 'preferScenarioName', 'sessionNamePrependTopLevelSuiteTitle', 'sessionNameOmitTestTitle']
 export const BROWSERSTACK_TEST_PLAN_ID = 'BROWSERSTACK_TEST_PLAN_ID'
