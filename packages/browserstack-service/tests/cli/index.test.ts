@@ -458,6 +458,73 @@ describe('BrowserstackCLI', () => {
                 errorSpy.mockRestore()
             }
         })
+
+        it('merges the server config into the options right after setConfig', () => {
+            const options = { parallelsPerPlatform: 1 }
+            browserstackCLI.options = options
+            mockStartBinResponse.config = JSON.stringify({ ...mockConfig, serverSdkConfig: { parallelsPerPlatform: 2 }, serverSdkConfigKeys: ['parallelsPerPlatform'] })
+
+            browserstackCLI.loadModules(mockStartBinResponse)
+
+            expect(options.parallelsPerPlatform).toBe(2)
+            expect(browserstackCLI.serverConfigKeys).toEqual(['parallelsPerPlatform'])
+        })
+    })
+
+    describe('applyServerConfig', () => {
+        let browserstackCLI: BrowserstackCLI
+
+        beforeEach(() => {
+            browserstackCLI = new BrowserstackCLI()
+        })
+
+        it('merges exactly the listed keys into the service options', () => {
+            const options = { parallelsPerPlatform: 1, buildName: 'local', setSessionName: true }
+            browserstackCLI.options = options
+            browserstackCLI.config = {
+                serverSdkConfig: { parallelsPerPlatform: 3, buildName: 'echo', testContextOptions: { skipSessionName: true } },
+                serverSdkConfigKeys: ['parallelsPerPlatform', 'testContextOptions'],
+            }
+            browserstackCLI.applyServerConfig()
+            expect(options).toEqual({ parallelsPerPlatform: 3, buildName: 'local', setSessionName: false })
+            expect(browserstackCLI.serverConfigKeys).toEqual(['parallelsPerPlatform', 'testContextOptions'])
+        })
+
+        it('keeps the local sessionNameFormat formatter when the server sends one, which can only be a string', () => {
+            const sessionNameFormat = () => 'local-name'
+            const options = { setSessionName: false, sessionNameFormat }
+            browserstackCLI.options = options
+            browserstackCLI.config = {
+                serverSdkConfig: { testContextOptions: { skipSessionName: false, sessionNameFormat: 'srv-fmt' } },
+                serverSdkConfigKeys: ['testContextOptions'],
+            }
+            browserstackCLI.applyServerConfig()
+            expect(options).toEqual({ setSessionName: true, sessionNameFormat })
+        })
+
+        it('changes nothing without a key list, as from an older binary', () => {
+            const options = { parallelsPerPlatform: 1 }
+            browserstackCLI.options = options
+            for (const config of [{ serverSdkConfig: { parallelsPerPlatform: 3 } }, { serverSdkConfig: { parallelsPerPlatform: 3 }, serverSdkConfigKeys: 'parallelsPerPlatform' }, {}]) {
+                browserstackCLI.config = config
+                browserstackCLI.applyServerConfig()
+            }
+            expect(options).toEqual({ parallelsPerPlatform: 1 })
+            expect(browserstackCLI.serverConfigKeys).toEqual([])
+        })
+
+        it('keeps the local options when the merge fails', () => {
+            const errorSpy = vi.spyOn(cliLogger.BStackLogger, 'error').mockImplementation(() => {})
+            const options = { parallelsPerPlatform: 1 }
+            browserstackCLI.options = options
+            browserstackCLI.config = { serverSdkConfig: { parallelsPerPlatform: 3 }, serverSdkConfigKeys: ['parallelsPerPlatform'] }
+            const mergeSpy = vi.spyOn(CLIUtils, 'applyServerSdkConfig').mockImplementation(() => { throw new Error('boom') })
+            browserstackCLI.applyServerConfig()
+            expect(options).toEqual({ parallelsPerPlatform: 1 })
+            expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('applyServerConfig: keeping the local config'))
+            errorSpy.mockRestore()
+            mergeSpy.mockRestore()
+        })
     })
 
     describe('isRunning', () => {
