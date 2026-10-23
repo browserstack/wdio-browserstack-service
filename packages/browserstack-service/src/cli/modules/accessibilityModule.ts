@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
+import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -567,7 +567,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     const results = await (browser as WebdriverIO.Browser).executeAsync(
                         this.scriptInstance.performScan as string,
-                        { 'method': commandName || '' }
+                        { 'method': commandName || '', ...getMobileA11yScriptArgs() }
                     )
                     return (results as Record<string, unknown> | undefined)
                 } catch (err: unknown) {
@@ -598,8 +598,9 @@ export default class AccessibilityModule extends BaseModule {
             }
 
             await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.SAVE_RESULTS, async () => {
-                const results: unknown = await (browser as WebdriverIO.Browser).executeAsync(accessibilityScripts.saveTestResults as string, dataForExtension)
+                const results: unknown = await (browser as WebdriverIO.Browser).executeAsync(accessibilityScripts.saveTestResults as string, { ...dataForExtension, ...getMobileA11yScriptArgs() })
                 this.logger.debug(`save results : ${util.format(results as string)}`)
+                logRejectedMobileSave(results)
             })()
         } catch (error) {
             this.logger.error(`Error while sending test stop event: ${error}`)
@@ -617,7 +618,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results')
                     await this.performScanCli(browser)
-                    const results: Array<Record<string, unknown>> = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResults as string)
+                    const results: Array<Record<string, unknown>> = await this.executeResultsScript(browser, this.scriptInstance.getResults as string)
                     return results
                 } catch (error: unknown) {
                     this.logger.error('No accessibility results were found.')
@@ -639,7 +640,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results summary')
                     await this.performScanCli(browser)
-                    const summaryResults: Record<string, unknown> = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResultsSummary as string)
+                    const summaryResults: Record<string, unknown> = await this.executeResultsScript(browser, this.scriptInstance.getResultsSummary as string)
                     return summaryResults
                 } catch {
                     this.logger.error('No accessibility summary was found.')
@@ -647,6 +648,12 @@ export default class AccessibilityModule extends BaseModule {
                 }
             }
         )()
+    }
+
+    // Desktop result scripts take no argument; mobile ones need the session flag and run uuid.
+    private async executeResultsScript<T>(browser: WebdriverIO.Browser, script: string): Promise<T> {
+        const mobileArg = getMobileResultsArg()
+        return (mobileArg ? browser.executeAsync(script, mobileArg) : browser.executeAsync(script)) as Promise<T>
     }
 
     async getDriverExecuteParams(): Promise<Record<string, unknown>> {

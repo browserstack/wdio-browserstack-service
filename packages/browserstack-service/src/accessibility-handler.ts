@@ -67,6 +67,8 @@ import {
     validateCapsWithAppA11y,
     getAppA11yResults,
     executeAccessibilityScript,
+    getMobileA11yScriptArgs,
+    logRejectedMobileSave,
     isFalse,
     getHookType,
     frameworkSupportsHook
@@ -582,8 +584,9 @@ class _AccessibilityHandler {
 
         await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.SAVE_RESULTS, async () => {
             if (accessibilityScripts.saveTestResults) {
-                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults, dataForExtension)
+                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults, { ...dataForExtension, ...getMobileA11yScriptArgs() })
                 BStackLogger.debug(util.format(results as string))
+                logRejectedMobileSave(results)
             } else {
                 BStackLogger.error('saveTestResults script is null or undefined')
             }
