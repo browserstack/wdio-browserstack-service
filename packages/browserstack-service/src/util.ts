@@ -2183,7 +2183,7 @@ export function coerceStringBooleans<T extends Record<string, unknown>>(obj: T):
  * @param key - The key to check
  * @returns true if the key is safe, false otherwise
  */
-function isSafeKey(key: string): boolean {
+export function isSafeKey(key: string): boolean {
     const dangerousKeys = ['__proto__', 'constructor', 'prototype']
     return !dangerousKeys.includes(key)
 }
