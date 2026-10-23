@@ -231,6 +231,154 @@ describe('CLIUtils', () => {
         })
     })
 
+    describe('applyServerSdkConfig', () => {
+        it('applies exactly the listed keys and leaves echoes alone', () => {
+            const options: Record<string, unknown> = { parallelsPerPlatform: 1, buildName: 'local', testObservability: true }
+            const applied = CLIUtils.applyServerSdkConfig(options, { parallelsPerPlatform: 3, buildName: 'server-echo', testObservability: false }, ['parallelsPerPlatform'])
+            expect(applied).toEqual(['parallelsPerPlatform'])
+            expect(options).toEqual({ parallelsPerPlatform: 3, buildName: 'local', testObservability: true })
+        })
+
+        it('deep-merges objects, merges arrays element-wise and lets null replace', () => {
+            const options: Record<string, unknown> = {
+                accessibilityOptions: { wcagVersion: 'wcag21aa', includeIssueType: { bestPractice: true } },
+                testObservabilityOptions: { buildTag: ['a', 'b'] },
+                percyOptions: { version: 'v2' },
+            }
+            CLIUtils.applyServerSdkConfig(options, {
+                accessibilityOptions: { wcagVersion: 'wcag2a' },
+                testObservabilityOptions: { buildTag: ['x'] },
+                percyOptions: null,
+            }, ['accessibilityOptions', 'testObservabilityOptions', 'percyOptions'])
+            expect(options).toEqual({
+                accessibilityOptions: { wcagVersion: 'wcag2a', includeIssueType: { bestPractice: true } },
+                testObservabilityOptions: { buildTag: ['x', 'b'] },
+                percyOptions: null,
+            })
+        })
+
+        it('maps the keys getBinConfig renamed back to the service options', () => {
+            const options: Record<string, unknown> = { opts: { forceLocal: true }, setSessionName: true, setSessionStatus: true, sessionNameFormat: '' }
+            const sent = JSON.parse(CLIUtils.getBinConfig({ user: 'u', key: 'k' } as Options.Testrunner, [{ browserName: 'chrome' }], options as BrowserstackConfig & BrowserstackOptions))
+            expect(sent.browserStackLocalOptions).toEqual({ forceLocal: true })
+            expect(sent.testContextOptions.skipSessionName).toBe(false)
+
+            const applied = CLIUtils.applyServerSdkConfig(options, {
+                browserStackLocalOptions: { localIdentifier: 'srv-id' },
+                testContextOptions: { skipSessionName: true, sessionNameFormat: '{testTitle}' },
+            }, ['browserStackLocalOptions', 'testContextOptions'])
+            expect(applied).toEqual(['browserStackLocalOptions', 'testContextOptions'])
+            expect(options).toEqual({ opts: { forceLocal: true, localIdentifier: 'srv-id' }, setSessionName: false, setSessionStatus: true, sessionNameFormat: '' })
+        })
+
+        it('reports platforms as applied without storing them as an option', () => {
+            const options: Record<string, unknown> = {}
+            expect(CLIUtils.applyServerSdkConfig(options, { platforms: [{ browserVersion: 'latest-1' }] }, ['platforms'])).toEqual(['platforms'])
+            expect(options).toEqual({})
+        })
+
+        it('skips listed keys the server config does not carry, non-string keys and unsafe keys', () => {
+            const options: Record<string, unknown> = { debug: false }
+            const server = JSON.parse('{"__proto__":{"polluted":true},"debug":true}')
+            expect(CLIUtils.applyServerSdkConfig(options, server, ['missing', 7, '__proto__', 'debug'])).toEqual(['debug'])
+            expect(options).toEqual({ debug: true })
+            expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+        })
+
+        it('does not share objects with the server config', () => {
+            const server = { accessibilityOptions: { wcagVersion: 'wcag2a' } }
+            const options: Record<string, unknown> = {}
+            CLIUtils.applyServerSdkConfig(options, server, ['accessibilityOptions'])
+            ;(options.accessibilityOptions as Record<string, unknown>).wcagVersion = 'changed'
+            expect(server.accessibilityOptions.wcagVersion).toBe('wcag2a')
+        })
+    })
+
+    describe('assignSafeKeys', () => {
+        it('copies every key except prototype keys', () => {
+            const target: Record<string, unknown> = { a: 1 }
+            const source = JSON.parse('{"b":2,"__proto__":{"polluted":true},"constructor":{"x":1},"prototype":{"y":1}}')
+            CLIUtils.assignSafeKeys(target, source)
+            expect(target).toEqual({ a: 1, b: 2 })
+            expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+        })
+    })
+
+    describe('applyServerPlatform', () => {
+        it('puts flattened bstack:options keys back under bstack:options and keeps top-level keys on top', () => {
+            const capability: Record<string, unknown> = {
+                browserName: 'chrome',
+                browserVersion: 'latest',
+                'goog:chromeOptions': { args: ['--headless'] },
+                'bstack:options': { os: 'Windows', osVersion: '11', buildName: 'local' },
+            }
+            CLIUtils.applyServerPlatform(capability, {
+                browserVersion: 'latest-1',
+                osVersion: '10',
+                'goog:chromeOptions': { args: ['--incognito'] },
+                seleniumVersion: '4.21.0',
+                'ms:edgeOptions': { args: [] },
+            })
+            expect(capability).toEqual({
+                browserName: 'chrome',
+                browserVersion: 'latest-1',
+                'goog:chromeOptions': { args: ['--incognito'] },
+                'ms:edgeOptions': { args: [] },
+                'bstack:options': { os: 'Windows', osVersion: '10', buildName: 'local', seleniumVersion: '4.21.0' },
+            })
+        })
+
+        it('keeps every key at the top level of a capability without bstack:options', () => {
+            const capability: Record<string, unknown> = { browserName: 'chrome' }
+            CLIUtils.applyServerPlatform(capability, { browserVersion: 'latest-1' })
+            expect(capability).toEqual({ browserName: 'chrome', browserVersion: 'latest-1' })
+        })
+
+        it('ignores a non-object platform', () => {
+            const capability: Record<string, unknown> = { browserName: 'chrome' }
+            CLIUtils.applyServerPlatform(capability, undefined)
+            CLIUtils.applyServerPlatform(capability, ['x'])
+            expect(capability).toEqual({ browserName: 'chrome' })
+        })
+
+        it('keeps routing into bstack:options after the entry merges a bstack:options key', () => {
+            const capability: Record<string, unknown> = { browserName: 'chrome', 'bstack:options': { os: 'Windows', osVersion: '11' } }
+            CLIUtils.applyServerPlatform(capability, { 'bstack:options': { debug: true }, osVersion: '10' })
+            expect(capability['bstack:options']).toEqual({ os: 'Windows', osVersion: '10', debug: true })
+        })
+
+        it('does not write into a bstack:options object shared with another capability', () => {
+            const shared = { os: 'Windows', osVersion: '11' }
+            const first: Record<string, unknown> = { browserName: 'chrome', 'bstack:options': shared }
+            const second: Record<string, unknown> = { browserName: 'edge', 'bstack:options': shared }
+            CLIUtils.applyServerPlatform(first, { osVersion: '10' })
+            expect(first['bstack:options']).toEqual({ os: 'Windows', osVersion: '10' })
+            expect(second['bstack:options']).toEqual({ os: 'Windows', osVersion: '11' })
+        })
+
+        it('does not share objects with the server platform entry', () => {
+            const capability: Record<string, unknown> = { browserName: 'chrome' }
+            const platform = { 'goog:chromeOptions': { args: ['--incognito'] } }
+            CLIUtils.applyServerPlatform(capability, platform)
+            platform['goog:chromeOptions'].args.push('--mutated')
+            expect(capability['goog:chromeOptions']).toEqual({ args: ['--incognito'] })
+        })
+
+        it('updates bstack:options when the capability holds the key at both levels', () => {
+            const capability: Record<string, unknown> = {
+                browserName: 'chrome',
+                browserVersion: 'latest',
+                'bstack:options': { browserVersion: 'latest' }
+            }
+            CLIUtils.applyServerPlatform(capability, { browserVersion: 'latest-1' })
+            expect(capability).toEqual({
+                browserName: 'chrome',
+                browserVersion: 'latest',
+                'bstack:options': { browserVersion: 'latest-1' }
+            })
+        })
+    })
+
     describe('getSdkVersion', () => {
         it('returns the bstack service version', () => {
             const version = CLIUtils.getSdkVersion()
