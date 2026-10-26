@@ -81,6 +81,19 @@ export default class TestHubModule extends BaseModule {
         return TestHubModule.MODULE_NAME
     }
 
+    /**
+     * The state this observer call was dispatched for (stamped by TestFramework.runHooks). The
+     * instance's current state is shared by every concurrent trackEvent, so an observer that runs
+     * after an earlier one awaited I/O can find it already moved on, e.g. to LOG by a screenshot
+     * from the user's own afterTest.
+     */
+    private static dispatchedState(args: Record<string, unknown>, instance: TestFrameworkInstance): { testState: State, hookState: State } {
+        return {
+            testState: (args.testFrameworkState as State | undefined) ?? instance.getCurrentTestState(),
+            hookState: (args.hookState as State | undefined) ?? instance.getCurrentHookState()
+        }
+    }
+
     onBeforeTest(args: Record<string, unknown>) {
         this.logger.debug('onBeforeTest: Called after test hook from cli configured module!!!')
         const autoInstance = AutomationFramework.getTrackedInstance() as AutomationFrameworkInstance
@@ -92,8 +105,7 @@ export default class TestHubModule extends BaseModule {
     onAllTestEvents(args: Record<string, unknown>) {
         this.logger.debug('onAllTestEvents: Called after all test events from cli configured module!!!')
         const instance = args.instance as TestFrameworkInstance
-        const testState = instance.getCurrentTestState()
-        const hookState = instance.getCurrentHookState()
+        const { testState, hookState } = TestHubModule.dispatchedState(args, instance)
         const keyTestDeferred = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_DEFERRED)
 
         // A NEW test is starting (INIT_TEST minted a fresh instance) — the previous test's
@@ -126,7 +138,7 @@ export default class TestHubModule extends BaseModule {
         ) {
             // Create a modified args object with updated test framework state
             instance.setCurrentTestState(TestFrameworkState.TEST)
-            this.onAllTestEvents(args)
+            this.onAllTestEvents({ ...args, testFrameworkState: TestFrameworkState.TEST })
         }
 
         if (testState === TestFrameworkState.TEST || CLIUtils.matchHookRegex(testState.toString().split('.')[1])) {
@@ -206,8 +218,9 @@ export default class TestHubModule extends BaseModule {
             const testFrameworkVersion = testData.get(TestFrameworkConstants.KEY_TEST_FRAMEWORK_VERSION) || ''
             const startedAt = testData.get(TestFrameworkConstants.KEY_TEST_STARTED_AT) || ''
             const endedAt = testData.get(TestFrameworkConstants.KEY_TEST_ENDED_AT) || ''
-            const testFrameworkState = stateOverride?.testFrameworkState || instance.getCurrentTestState().toString().split('.')[1]
-            const testHookState = stateOverride?.testHookState || instance.getCurrentHookState().toString().split('.')[1]
+            const dispatched = TestHubModule.dispatchedState(args, instance)
+            const testFrameworkState = stateOverride?.testFrameworkState || dispatched.testState.toString().split('.')[1]
+            const testHookState = stateOverride?.testHookState || dispatched.hookState.toString().split('.')[1]
 
             this.logger.debug(`sendTestFrameworkEvent for testState: ${testFrameworkState} hookState: ${testHookState}`)
             const platformIndex = process.env.WDIO_WORKER_ID ? parseInt(process.env.WDIO_WORKER_ID.split('-')[0]) : 0
@@ -264,8 +277,9 @@ export default class TestHubModule extends BaseModule {
             const trackedContext = instance.getContext()
             const testFWName = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) as string
             const testFWVersion = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_VERSION) as string
-            const testState = instance.getCurrentTestState().toString().split('.')[1]
-            const hookState = instance.getCurrentHookState().toString().split('.')[1]
+            const dispatched = TestHubModule.dispatchedState(args, instance)
+            const testState = dispatched.testState.toString().split('.')[1]
+            const hookState = dispatched.hookState.toString().split('.')[1]
             this.logger.debug('sendTestSessionEvent: setup')
 
             const executionContext = {
@@ -367,8 +381,9 @@ export default class TestHubModule extends BaseModule {
             const testData = instance.getAllData()
             const testFrameworkName = testData.get(TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || ''
             const testFrameworkVersion = testData.get(TestFrameworkConstants.KEY_TEST_FRAMEWORK_VERSION) || ''
-            const testFrameworkState = instance.getCurrentTestState().toString().split('.')[1]
-            const testHookState = instance.getCurrentHookState().toString().split('.')[1]
+            const dispatched = TestHubModule.dispatchedState(args, instance)
+            const testFrameworkState = dispatched.testState.toString().split('.')[1]
+            const testHookState = dispatched.hookState.toString().split('.')[1]
 
             this.logger.debug(`sendLogCreatedEvent testId: testFrameworkState: ${testFrameworkState} testHookState: ${testHookState}`)
             const platformIndex = process.env.WDIO_WORKER_ID ? parseInt(process.env.WDIO_WORKER_ID.split('-')[0]) : 0
