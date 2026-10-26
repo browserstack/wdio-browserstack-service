@@ -82,6 +82,66 @@ describe('SDK-7233 — test_file_path must be the absolute spec path', () => {
     })
 })
 
+describe('root-level mocha hooks fall back to the suite file, as on the non-CLI flow', () => {
+    const ROOT_HOOK = { title: '"before each" hook: wrappedHook for "t1"' } as Frameworks.Test
+    let framework: WdioMochaTestFramework
+
+    beforeEach(() => {
+        framework = Object.create(WdioMochaTestFramework.prototype)
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    const startHook = async (test: Frameworks.Test) => {
+        const data = new Map<string, unknown>([
+            [TestFrameworkConstants.KEY_HOOKS_STARTED, new Map()],
+            [TestFrameworkConstants.KEY_HOOKS_FINISHED, new Map()],
+            [TestFrameworkConstants.KEY_HOOK_ID, 'hook-1'],
+        ])
+        const instance = {
+            getAllData: () => data,
+            updateMultipleEntries: (entries: Record<string, unknown>) => Object.entries(entries).forEach(([k, v]) => data.set(k, v)),
+        } as unknown as TestFrameworkInstance
+        await framework.trackHookEvents(instance, TestFrameworkState.BEFORE_EACH, HookState.PRE, { test })
+        return (data.get(TestFrameworkConstants.KEY_HOOKS_STARTED) as Map<string, Record<string, unknown>[]>).get('BEFORE_EACH')![0]
+    }
+
+    it('sends the current suite file for a hook mocha gives no file', async () => {
+        // a beforeEach/afterEach declared outside any describe hangs off mocha's root suite, which
+        // has no file; without a path the binary threw, dropped the hook events, and the test's
+        // reference to the never-sent hook timed the build out
+        framework.setSuiteFile(SPEC)
+
+        const hook = await startHook(ROOT_HOOK)
+
+        expect(hook[TestFrameworkConstants.KEY_HOOK_ID]).toBe('hook-1')
+        expect(hook[TestFrameworkConstants.KEY_TEST_FILE_PATH]).toBe(SPEC)
+        expect(hook[TestFrameworkConstants.KEY_TEST_LOCATION]).toBe(path.relative(process.cwd(), SPEC))
+    })
+
+    it('keeps the file mocha gives a hook declared inside a describe', async () => {
+        framework.setSuiteFile('/Users/someone/projects/arenaclub/test/specs/other.test.ts')
+
+        const hook = await startHook({ ...ROOT_HOOK, file: SPEC } as Frameworks.Test)
+
+        expect(hook[TestFrameworkConstants.KEY_TEST_FILE_PATH]).toBe(SPEC)
+    })
+
+    it('applies the same fallback to test data', async () => {
+        vi.spyOn(TestFramework, 'getState').mockReturnValue('WebdriverIO-mocha')
+        vi.spyOn(util, 'getUniqueIdentifier').mockReturnValue('t1')
+        vi.spyOn(util, 'getMochaTestHierarchy').mockReturnValue([])
+        framework.setSuiteFile(SPEC)
+
+        // @ts-expect-error — partial TestFrameworkInstance / Frameworks.Test are enough here
+        const data = await framework.getTestData({}, { title: 't1', body: '' })
+
+        expect(data[TestFrameworkConstants.KEY_TEST_FILE_PATH]).toBe(SPEC)
+    })
+})
+
 describe('SDK-4177 — loadLogEntries must not relabel a log that carries its own kind', () => {
     let entries: unknown[]
     let instance: any

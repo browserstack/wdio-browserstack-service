@@ -46,6 +46,7 @@ import { HookState } from './cli/states/hookState.js'
 import { AutomationFrameworkConstants } from './cli/frameworks/constants/automationFrameworkConstants.js'
 import TestFramework from './cli/frameworks/testFramework.js'
 import WdioCucumberTestFramework from './cli/frameworks/wdioCucumberTestFramework.js'
+import WdioMochaTestFramework from './cli/frameworks/wdioMochaTestFramework.js'
 import { TestFrameworkState } from './cli/states/testFrameworkState.js'
 import { TestFrameworkConstants } from './cli/frameworks/constants/testFrameworkConstants.js'
 import AccessibilityModule from './cli/modules/accessibilityModule.js'
@@ -430,6 +431,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
         this._suiteTitle = suite.title
         this._insightsHandler?.setSuiteFile(suite.file)
         this._accessibilityHandler?.setSuiteFile(suite.file)
+        const cliFramework = BrowserstackCLI.getInstance().isRunning() ? BrowserstackCLI.getInstance().getTestFramework() : null
+        if (cliFramework instanceof WdioMochaTestFramework) {
+            cliFramework.setSuiteFile(suite.file)
+        }
 
         if (suite.title && suite.title !== 'Jasmine__TopLevel__Suite') {
             if (!BrowserstackCLI.getInstance().isRunning() || this._config.framework !== 'mocha'){
