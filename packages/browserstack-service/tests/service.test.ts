@@ -10,6 +10,7 @@ import InsightsHandler from '../src/insights-handler.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
 import WdioCucumberTestFramework from '../src/cli/frameworks/wdioCucumberTestFramework.js'
+import WdioMochaTestFramework from '../src/cli/frameworks/wdioMochaTestFramework.js'
 import { TestFrameworkState } from '../src/cli/states/testFrameworkState.js'
 import { HookState } from '../src/cli/states/hookState.js'
 import TestFramework from '../src/cli/frameworks/testFramework.js'
@@ -635,6 +636,19 @@ describe('beforeScenario', () => {
 })
 
 describe('beforeSuite', () => {
+    it('hands the suite file to the CLI mocha framework, as the non-CLI flow does to its insights handler', async () => {
+        const framework = Object.create(WdioMochaTestFramework.prototype) as WdioMochaTestFramework
+        const getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => framework,
+        } as any)
+
+        await service.beforeSuite({ title: 'foobar', file: '/specs/foobar.spec.ts' } as any)
+
+        expect(framework['_suiteFile']).toBe('/specs/foobar.spec.ts')
+        getInstanceSpy.mockRestore()
+    })
+
     it('should send request to set the session name as suite name for Mocha tests', async () => {
         await service.before(service['_config'] as any, [], browser)
         expect(service['_suiteTitle']).toBeUndefined()
