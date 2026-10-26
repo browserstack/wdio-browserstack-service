@@ -52,6 +52,7 @@ import { TestFrameworkConstants } from './cli/frameworks/constants/testFramework
 import AccessibilityModule from './cli/modules/accessibilityModule.js'
 
 import util from 'node:util'
+import { fileURLToPath } from 'node:url'
 
 export default class BrowserstackService implements Services.ServiceInstance {
     private _sessionBaseUrl = 'https://api.browserstack.com/automate/sessions'
@@ -217,6 +218,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // added to maintain backward compatibility with webdriverIO v5
         this._browser = browser ? browser : globalThis.browser
         PerformanceTester.browser = this._browser
+
+        // a root-level mocha `before` runs ahead of the first beforeSuite
+        this._setCliSuiteFile(specs?.[0])
 
         UploadAttachmentModule.installNoopFallback(this._browser)
 
@@ -431,10 +435,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
         this._suiteTitle = suite.title
         this._insightsHandler?.setSuiteFile(suite.file)
         this._accessibilityHandler?.setSuiteFile(suite.file)
-        const cliFramework = BrowserstackCLI.getInstance().isRunning() ? BrowserstackCLI.getInstance().getTestFramework() : null
-        if (cliFramework instanceof WdioMochaTestFramework) {
-            cliFramework.setSuiteFile(suite.file)
-        }
+        this._setCliSuiteFile(suite.file)
 
         if (suite.title && suite.title !== 'Jasmine__TopLevel__Suite') {
             if (!BrowserstackCLI.getInstance().isRunning() || this._config.framework !== 'mocha'){
@@ -1274,6 +1275,21 @@ export default class BrowserstackService implements Services.ServiceInstance {
             const browserString = getBrowserDescription(capabilities)
             BStackLogger.info(`${browserString} session: ${browserUrl}`)
         })
+    }
+
+    /** The file the CLI mocha framework gives root-level hooks, which mocha leaves without one. */
+    private _setCliSuiteFile(file?: string) {
+        const cli = BrowserstackCLI.getInstance()
+        const cliFramework = cli.isRunning() ? cli.getTestFramework() : null
+        if (!file || !(cliFramework instanceof WdioMochaTestFramework)) {
+            return
+        }
+        try {
+            // a runner spec is a file URL; MochaAdapter converts it the same way for suite.file
+            cliFramework.setSuiteFile(file.startsWith('file://') ? fileURLToPath(file) : file)
+        } catch (err) {
+            BStackLogger.debug(`Could not resolve the suite file from ${file}: ${err}`)
+        }
     }
 
     private async _setSessionName(suiteTitle: string | undefined, test?: Frameworks.Test) {
