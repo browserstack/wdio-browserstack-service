@@ -177,6 +177,82 @@ describe('onPrepare', () => {
         expect(setupPercySpy).toHaveBeenCalledTimes(1)
     })
 
+    describe('server config from the CLI', () => {
+        const mochaConfig = () => ({ user: 'foobaruser', key: '12345', framework: 'mocha', maxInstances: 10, capabilities: [] }) as any
+        const twoCaps = () => [
+            { browserName: 'chrome', browserVersion: 'latest', 'wdio:maxInstances': 5, 'bstack:options': { os: 'Windows', osVersion: '11' } },
+            { browserName: 'edge', browserVersion: 'latest', 'bstack:options': { os: 'Windows', osVersion: '11' } },
+        ] as any[]
+        const bootstrapWith = (serverSdkConfig: Record<string, unknown> | undefined, serverSdkConfigKeys: unknown) =>
+            vi.spyOn(BrowserstackCLI.getInstance(), 'bootstrap').mockImplementation(async function (this: BrowserstackCLI, options: any) {
+                this.options = options
+                this.config = { serverSdkConfig, serverSdkConfigKeys }
+                this.applyServerConfig()
+            })
+
+        afterEach(() => {
+            vi.mocked(BrowserstackCLI.getInstance().bootstrap).mockRestore()
+            BrowserstackCLI.getInstance().config = {}
+            BrowserstackCLI.getInstance().serverConfigKeys = []
+            BrowserstackCLI.getInstance().options = {}
+        })
+
+        it('maps a server parallelsPerPlatform onto wdio:maxInstances and raises maxInstances to fit', async () => {
+            bootstrapWith({ parallelsPerPlatform: 6 }, ['parallelsPerPlatform'])
+            const config = mochaConfig()
+            const capabilities = twoCaps()
+            const service = new BrowserstackLauncher({ testObservability: false, parallelsPerPlatform: 1 } as any, capabilities, config)
+            await service.onPrepare(config, capabilities)
+            expect(capabilities.map((cap) => cap['wdio:maxInstances'])).toEqual([6, 6])
+            expect(config.maxInstances).toBe(12)
+        })
+
+        it('lowers wdio:maxInstances to a smaller server parallelsPerPlatform and keeps a larger maxInstances', async () => {
+            bootstrapWith({ parallelsPerPlatform: 1 }, ['parallelsPerPlatform'])
+            const config = mochaConfig()
+            const capabilities = twoCaps()
+            const service = new BrowserstackLauncher({ testObservability: false, parallelsPerPlatform: 3 } as any, capabilities, config)
+            await service.onPrepare(config, capabilities)
+            expect(capabilities.map((cap) => cap['wdio:maxInstances'])).toEqual([1, 1])
+            expect(config.maxInstances).toBe(10)
+        })
+
+        it('layers server platforms onto the capability at the same index and ignores appended ones', async () => {
+            bootstrapWith({ platforms: [{ browserVersion: 'latest-1', osVersion: '10' }, {}, { browserName: 'safari' }] }, ['platforms'])
+            const config = mochaConfig()
+            const capabilities = twoCaps()
+            const service = new BrowserstackLauncher({ testObservability: false } as any, capabilities, config)
+            await service.onPrepare(config, capabilities)
+            expect(capabilities).toHaveLength(2)
+            expect(capabilities[0]).toMatchObject({ browserName: 'chrome', browserVersion: 'latest-1', 'wdio:maxInstances': 5, 'bstack:options': { os: 'Windows', osVersion: '10' } })
+            expect(capabilities[1]).toMatchObject({ browserName: 'edge', browserVersion: 'latest', 'bstack:options': { os: 'Windows', osVersion: '11' } })
+            expect(config.maxInstances).toBe(10)
+        })
+
+        it('leaves the runner config alone when parallelsPerPlatform is only echoed or no key list arrives', async () => {
+            for (const [serverSdkConfig, keys] of [[{ parallelsPerPlatform: 6, buildName: 'b' }, ['buildName']], [{ parallelsPerPlatform: 6 }, undefined]] as const) {
+                BrowserstackCLI.getInstance().serverConfigKeys = []
+                bootstrapWith(serverSdkConfig, keys)
+                const config = mochaConfig()
+                const capabilities = twoCaps()
+                const service = new BrowserstackLauncher({ testObservability: false, parallelsPerPlatform: 1 } as any, capabilities, config)
+                await service.onPrepare(config, capabilities)
+                expect(capabilities.map((cap) => cap['wdio:maxInstances'])).toEqual([5, undefined])
+                expect(config.maxInstances).toBe(10)
+            }
+        })
+
+        it('does not bootstrap the CLI, nor map parallelsPerPlatform, for a framework outside the CLI flow', async () => {
+            const bootstrapSpy = bootstrapWith({ parallelsPerPlatform: 6 }, ['parallelsPerPlatform'])
+            const config = { ...mochaConfig(), framework: 'jasmine' }
+            const capabilities = twoCaps()
+            const service = new BrowserstackLauncher({ testObservability: false } as any, capabilities, config)
+            await service.onPrepare(config, capabilities)
+            expect(bootstrapSpy).not.toHaveBeenCalled()
+            expect(capabilities.map((cap) => cap['wdio:maxInstances'])).toEqual([5, undefined])
+        })
+    })
+
     it('should add the "app" property to a multiremote capability if no "bstack:options"', async () => {
         const options: BrowserstackConfig = { app: 'bs://<app-id>' }
         const service = new BrowserstackLauncher(options as any, caps, config)
