@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave } from '../../util.js'
+import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -199,6 +199,7 @@ export default class AccessibilityModule extends BaseModule {
                 const device = this.getCapability(inputCaps, 'deviceName')
                 const chromeOptions = this.getCapability(inputCaps, 'goog:chromeOptions')
                 this.accessibility = validateCapsWithA11y(device, platformA11yMeta, chromeOptions)
+                await setMobileA11yScriptTimeout(browser)
             }
 
             //patching getA11yResultsSummary

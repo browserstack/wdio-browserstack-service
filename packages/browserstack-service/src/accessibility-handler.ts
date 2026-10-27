@@ -69,6 +69,7 @@ import {
     executeAccessibilityScript,
     getMobileA11yScriptArgs,
     logRejectedMobileSave,
+    setMobileA11yScriptTimeout,
     isFalse,
     getHookType,
     frameworkSupportsHook
@@ -224,6 +225,7 @@ class _AccessibilityHandler {
                 const chromeOptions = this._getCapabilityValue(this._caps, 'goog:chromeOptions', '') as Capabilities.ChromeOptions
 
                 this._accessibility = validateCapsWithA11y(deviceName as string, this._platformA11yMeta as unknown as Record<string, string>, chromeOptions)
+                await setMobileA11yScriptTimeout(this._browser as WebdriverIO.Browser)
             }
             if (isAppAccessibilityAutomationSession(this._accessibility, this.isAppAutomate)) {
                 this._accessibility = validateCapsWithAppA11y(this._platformA11yMeta)

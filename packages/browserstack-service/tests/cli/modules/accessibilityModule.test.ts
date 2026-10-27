@@ -40,7 +40,8 @@ vi.mock('../../../src/util.js', () => ({
     isBrowserstackSession: vi.fn().mockReturnValue(true),
     getMobileA11yScriptArgs: vi.fn().mockReturnValue({}),
     getMobileResultsArg: vi.fn().mockReturnValue(undefined),
-    logRejectedMobileSave: vi.fn()
+    logRejectedMobileSave: vi.fn(),
+    setMobileA11yScriptTimeout: vi.fn()
 }))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({

@@ -359,7 +359,9 @@ export const processAccessibilityResponse = (response: LaunchResponse | StartBin
         }
         // Group entitlements for mobile web a11y; set in the launcher, so workers inherit them.
         process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isMobileScanningEnabledForGroup))
-        process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isIosSafariScanningEnabledForGroup))
+        if (isIosSafariScanningEnabledForGroup !== undefined) {
+            process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isIosSafariScanningEnabledForGroup))
+        }
         if (scriptsJson) {
             // @ts-expect-error fix type
             AccessibilityScripts.update(scriptsJson)
@@ -488,9 +490,10 @@ export const MOBILE_SCANNING_DISABLED_WARNING = 'Mobile Accessibility Automation
 
 export const isMobileScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP === 'true'
 
-export const isIosSafariScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP === 'true'
+// On unless the backend opts the group out, so backends that don't send the flag still scan iOS.
+export const isIosSafariScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP !== 'false'
 
-/* Mobile browsers accessibility scans in-page: Chrome on Android, and Safari on iPhone (not iPad) for the iOS cohort. */
+/* Mobile browsers accessibility scans in-page: Chrome on Android, and Safari on iPhone (not iPad) unless the group is opted out. */
 export const isMobileA11yPlatformPair = (platformName?: string, browserName?: string, deviceName?: string) => {
     const platform = String(platformName || '').toLowerCase()
     const browser = String(browserName || '').toLowerCase()
@@ -517,6 +520,20 @@ export const logRejectedMobileSave = (results: unknown) => {
 
 /* Desktop result scripts take no argument; mobile ones need the session flag and run uuid. */
 export const getMobileResultsArg = () => (mobileA11ySession ? getMobileA11yScriptArgs() : undefined)
+
+export const MOBILE_A11Y_SCRIPT_TIMEOUT_MS = 30000
+
+/* Appium XCUITest starts iOS sessions with a ~0 ms async script timeout, so every executeAsync scan times out until one is set. */
+export const setMobileA11yScriptTimeout = async (browser: WebdriverIO.Browser) => {
+    if (!mobileA11ySession) {
+        return
+    }
+    try {
+        await browser.setTimeout({ script: MOBILE_A11Y_SCRIPT_TIMEOUT_MS })
+    } catch (error) {
+        BStackLogger.debug(`Could not set the script timeout for the mobile accessibility session: ${error}`)
+    }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const validateCapsWithA11y = (deviceName?: any, platformMeta?: { [key: string]: any; }, chromeOptions?: any) => {

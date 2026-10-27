@@ -1466,12 +1466,26 @@ describe('validateCapsWithA11y', () => {
             expect(utils.getMobileResultsArg()).toEqual({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
         })
 
-        it('allows Safari on iPhone only for the iOS cohort and never on iPad', async () => {
+        it('allows Safari on iPhone unless the group is opted out, and never on iPad', async () => {
             process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
-            expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })).toEqual(false)
+            expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })).toEqual(true)
+            process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = 'false'
+            expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari' })).toEqual(false)
             process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = 'true'
             expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari' })).toEqual(true)
             expect(validateCapsWithA11y('iPad Pro 13 2024', { browser_name: 'safari', platform_name: 'ios' })).toEqual(false)
+        })
+
+        it('sets a script timeout only for a mobile session', async () => {
+            const browser = { setTimeout: vi.fn() } as unknown as WebdriverIO.Browser
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })
+            await utils.setMobileA11yScriptTimeout(browser)
+            expect(browser.setTimeout).toHaveBeenCalledWith({ script: utils.MOBILE_A11Y_SCRIPT_TIMEOUT_MS })
+            vi.mocked(browser.setTimeout).mockClear()
+            validateCapsWithA11y(undefined, { browser_name: 'chrome' })
+            await utils.setMobileA11yScriptTimeout(browser)
+            expect(browser.setTimeout).not.toHaveBeenCalled()
         })
 
         it('clears the mobile script args for a desktop session', async () => {
