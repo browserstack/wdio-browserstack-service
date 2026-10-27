@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.42.0
+
+### Minor Changes
+
+- 481e05c: - Server-side configuration overrides from BrowserStack now take effect for WebdriverIO builds, for example `parallelsPerPlatform` (parallel sessions per capability). Your wdio.conf remains the fallback.
+
 ## 9.41.0
 
 ### Minor Changes
