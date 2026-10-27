@@ -339,7 +339,7 @@ export const processAccessibilityResponse = (response: LaunchResponse | StartBin
     }
 
     if (response.accessibility.options) {
-        const { accessibilityToken, pollingTimeout, scannerVersion, isMobileScanningEnabledForGroup, isIosSafariScanningEnabledForGroup } = jsonifyAccessibilityArray(response.accessibility.options.capabilities as Array<Record<string, unknown>>, 'name', 'value')
+        const { accessibilityToken, pollingTimeout, scannerVersion, scannerProcessingTimeout, isMobileScanningEnabledForGroup, isIosSafariScanningEnabledForGroup } = jsonifyAccessibilityArray(response.accessibility.options.capabilities as Array<Record<string, unknown>>, 'name', 'value')
         const result = jsonifyAccessibilityArray(response.accessibility.options.capabilities as Array<Record<string, unknown>>, 'name', 'value')
         const scriptsJson = {
             'scripts': jsonifyAccessibilityArray(response.accessibility.options.scripts as Array<Record<string, unknown>>, 'name', 'command'),
@@ -356,6 +356,9 @@ export const processAccessibilityResponse = (response: LaunchResponse | StartBin
         }
         if (pollingTimeout) {
             process.env.BSTACK_A11Y_POLLING_TIMEOUT = pollingTimeout as string
+        }
+        if (scannerProcessingTimeout) {
+            process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT = scannerProcessingTimeout as string
         }
         // Group entitlements for mobile web a11y; set in the launcher, so workers inherit them.
         process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isMobileScanningEnabledForGroup))
@@ -521,7 +524,8 @@ export const logRejectedMobileSave = (results: unknown) => {
 /* Desktop result scripts take no argument; mobile ones need the session flag and run uuid. */
 export const getMobileResultsArg = () => (mobileA11ySession ? getMobileA11yScriptArgs() : undefined)
 
-export const MOBILE_A11Y_SCRIPT_TIMEOUT_MS = 30000
+/* The backend's scannerProcessingTimeout (seconds) from build start; 30s when it isn't sent, as in the Node SDK. */
+export const getMobileA11yScriptTimeoutMs = () => (parseInt(process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT || '', 10) || 30) * 1000
 
 /* Appium XCUITest starts iOS sessions with a ~0 ms async script timeout, so every executeAsync scan times out until one is set. */
 export const setMobileA11yScriptTimeout = async (browser: WebdriverIO.Browser) => {
@@ -529,7 +533,7 @@ export const setMobileA11yScriptTimeout = async (browser: WebdriverIO.Browser) =
         return
     }
     try {
-        await browser.setTimeout({ script: MOBILE_A11Y_SCRIPT_TIMEOUT_MS })
+        await browser.setTimeout({ script: getMobileA11yScriptTimeoutMs() })
     } catch (error) {
         BStackLogger.debug(`Could not set the script timeout for the mobile accessibility session: ${error}`)
     }

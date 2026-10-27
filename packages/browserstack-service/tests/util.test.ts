@@ -1476,12 +1476,16 @@ describe('validateCapsWithA11y', () => {
             expect(validateCapsWithA11y('iPad Pro 13 2024', { browser_name: 'safari', platform_name: 'ios' })).toEqual(false)
         })
 
-        it('sets a script timeout only for a mobile session', async () => {
+        it('sets the backend scanner timeout as the script timeout only for a mobile session', async () => {
             const browser = { setTimeout: vi.fn() } as unknown as WebdriverIO.Browser
             process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
             validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })
             await utils.setMobileA11yScriptTimeout(browser)
-            expect(browser.setTimeout).toHaveBeenCalledWith({ script: utils.MOBILE_A11Y_SCRIPT_TIMEOUT_MS })
+            expect(browser.setTimeout).toHaveBeenCalledWith({ script: 30000 })
+            process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT = '45'
+            await utils.setMobileA11yScriptTimeout(browser)
+            expect(browser.setTimeout).toHaveBeenLastCalledWith({ script: 45000 })
+            delete process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT
             vi.mocked(browser.setTimeout).mockClear()
             validateCapsWithA11y(undefined, { browser_name: 'chrome' })
             await utils.setMobileA11yScriptTimeout(browser)
