@@ -23,7 +23,8 @@ import {
     VALID_APP_EXTENSION,
     BROWSERSTACK_PERCY,
     BROWSERSTACK_OBSERVABILITY,
-    WDIO_NAMING_PREFIX
+    WDIO_NAMING_PREFIX,
+    SERVER_SDK_CONFIG_KEY
 } from './constants.js'
 import {
     launchTestSession,
@@ -358,6 +359,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 CLIUtils.setFrameworkDetail(WDIO_NAMING_PREFIX + config.framework, 'WebdriverIO') // TODO: make this constant
                 const binconfig = CLIUtils.getBinConfig(config, capabilities, this._options, this._buildTag)
                 await BrowserstackCLI.getInstance().bootstrap(this._options, config, binconfig)
+                this._applyServerConfigToRunner(config, capabilities)
                 BStackLogger.debug(`Is CLI running ${BrowserstackCLI.getInstance().isRunning()}`)
                 PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.START)
             }
@@ -970,6 +972,38 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }
         } catch (error) {
             BStackLogger.debug(`Exception while retrieving capability value. Error - ${error}`)
+        }
+    }
+
+    /**
+     * The runner schedules workers after onPrepare from each capability's maxInstances and
+     * config.maxInstances, so a server parallelsPerPlatform is mapped onto them here, and server
+     * platforms onto the capability at the same index. Platforms the server appends have no
+     * capability and stay inert.
+     */
+    _applyServerConfigToRunner(config: Options.Testrunner, capabilities: Capabilities.RemoteCapabilities) {
+        const cli = BrowserstackCLI.getInstance()
+        const keys = cli.serverConfigKeys
+        if (!keys.length || !Array.isArray(capabilities)) {
+            return
+        }
+        const caps = capabilities as Record<string, unknown>[]
+        if (keys.includes('accessibility')) {
+            this._accessibilityAutomation = isTrue(this._options.accessibility)
+        }
+        if (keys.includes('platforms')) {
+            const platforms = (cli.getConfig()[SERVER_SDK_CONFIG_KEY] as Record<string, unknown> | undefined)?.platforms
+            if (Array.isArray(platforms)) {
+                caps.forEach((capability, index) => CLIUtils.applyServerPlatform(capability, platforms[index]))
+            }
+        }
+        const parallelsPerPlatform = Number((this._options as unknown as Record<string, unknown>).parallelsPerPlatform)
+        if (keys.includes('parallelsPerPlatform') && Number.isInteger(parallelsPerPlatform) && parallelsPerPlatform > 0) {
+            caps.forEach((capability) => {
+                capability.maxInstances = parallelsPerPlatform
+            })
+            config.maxInstances = Math.max(config.maxInstances || 0, caps.length * parallelsPerPlatform)
+            BStackLogger.info(`Server parallelsPerPlatform=${parallelsPerPlatform}: maxInstances=${parallelsPerPlatform} per capability, maxInstances=${config.maxInstances}`)
         }
     }
 
