@@ -21,33 +21,6 @@ const config = {
     appAutomate: false,
 }
 
-const expectedEventData = {
-    userName: '[REDACTED]',
-    accessKey: '[REDACTED]',
-    event_type: 'SDKTestAttempted',
-    detectedFramework: 'WebdriverIO-framework',
-    event_properties: {
-        language_framework: 'WebdriverIO_framework',
-        referrer: expect.stringContaining('WebdriverIO-'),
-        language: 'WebdriverIO',
-        languageVersion: process.version,
-        buildName: config.buildName,
-        buildIdentifier: config.buildIdentifier,
-        os: expect.any(String),
-        hostname: expect.any(String),
-        productMap: {
-            'observability': true,
-            'accessibility': true,
-            'percy': true,
-            'automate': true,
-            'app_automate': false
-        },
-        product: expect.arrayContaining(['observability', 'automate', 'percy', 'accessibility']),
-        framework: 'framework',
-        isCLIEnabled: false
-    }
-}
-
 describe('funnelInstrumentation', () => {
     let originalCwd: { (): string; (): string }
 

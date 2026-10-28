@@ -198,12 +198,3 @@ function getReferrer(framework?: string) {
     const fullName = framework ? WDIO_NAMING_PREFIX + framework : 'WebdriverIO'
     return `${fullName}/${BSTACK_SERVICE_VERSION}`
 }
-
-const sendEvent = {
-    tcgDown: (config: BrowserStackConfig) => fireFunnelTestEvent('SDKTestTcgDownResponse', config),
-    invalidTcgAuth: (config: BrowserStackConfig) => fireFunnelTestEvent('SDKTestInvalidTcgAuthResponseWithUserImpact', config),
-    tcgAuthFailure: (config: BrowserStackConfig) => fireFunnelTestEvent('SDKTestTcgAuthFailure', config),
-    tcgtInitSuccessful: (config: BrowserStackConfig) => fireFunnelTestEvent('SDKTestTcgtInitSuccessful', config),
-    initFailed: (config: BrowserStackConfig) => fireFunnelTestEvent('SDKTestInitFailedResponse', config),
-    tcgProxyFailure: (config: BrowserStackConfig) => fireFunnelTestEvent('SDKTestTcgProxyFailure', config),
-}
