@@ -182,9 +182,6 @@ export const SMART_SELECTION_MODE_RELEVANT_ONLY = 'relevantOnly'
 // To store the JWT token returned the session launch
 export const BROWSERSTACK_TESTHUB_JWT = 'BROWSERSTACK_TESTHUB_JWT'
 
-// To store tcg auth result for selfHealing feature:
-export const BSTACK_TCG_AUTH_RESULT = 'BSTACK_TCG_AUTH_RESULT'
-
 // To store the setting of whether to send screenshots or not
 export const TESTOPS_SCREENSHOT_ENV = 'BS_TESTOPS_ALLOW_SCREENSHOTS'
 
