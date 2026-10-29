@@ -1215,10 +1215,69 @@ describe('validateCapsWithA11y', () => {
         logInfoMock = vi.spyOn(log, 'warn')
     })
 
-    it('returns false if deviceName is defined', async () => {
-        expect(validateCapsWithA11y('Samsung S22')).toEqual(false)
-        expect(logInfoMock.mock.calls[0][0])
-            .toContain('Accessibility Automation will run only on Desktop browsers.')
+    describe('mobile browsers', () => {
+        afterEach(() => {
+            delete process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP
+            delete process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP
+            delete process.env.TEST_ANALYTICS_ID
+            validateCapsWithA11y(undefined, { browser_name: 'chrome' })
+        })
+
+        it('returns false for a device that is not Chrome on Android or Safari on iPhone', async () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            expect(validateCapsWithA11y('Samsung S22', { browser_name: 'samsung', platform_name: 'android' })).toEqual(false)
+            expect(logInfoMock.mock.calls[0][0])
+                .toContain('Accessibility Automation will run only on Desktop browsers, Chrome on Android or Safari on iPhone.')
+        })
+
+        it('returns false for Chrome on Android when the group has no mobile scanning', async () => {
+            expect(validateCapsWithA11y('Google Pixel 7', { browser_name: 'chrome', platform_name: 'android' })).toEqual(false)
+            expect(logInfoMock.mock.calls[0][0]).toContain('Mobile Accessibility Automation is not enabled for your account')
+            expect(utils.getMobileA11yScriptArgs()).toEqual({})
+        })
+
+        it('returns true for Chrome on Android and adds the mobile script args', async () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            process.env.TEST_ANALYTICS_ID = 'test-run-uuid'
+            // Appium-backed sessions can report the host OS as platformName
+            expect(validateCapsWithA11y('Google Pixel 7', { browser_name: 'chrome', platform_name: 'LINUX' })).toEqual(true)
+            expect(utils.getMobileA11yScriptArgs()).toEqual({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
+            expect(utils.getMobileResultsArg()).toEqual({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
+        })
+
+        it('allows Safari on iPhone unless the group is opted out, and never on iPad', async () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })).toEqual(true)
+            process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = 'false'
+            expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari' })).toEqual(false)
+            process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = 'true'
+            expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari' })).toEqual(true)
+            expect(validateCapsWithA11y('iPad Pro 13 2024', { browser_name: 'safari', platform_name: 'ios' })).toEqual(false)
+        })
+
+        it('sets the backend scanner timeout as the script timeout only for a mobile session', async () => {
+            const browser = { setTimeout: vi.fn() } as unknown as WebdriverIO.Browser
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })
+            await utils.setMobileA11yScriptTimeout(browser)
+            expect(browser.setTimeout).toHaveBeenCalledWith({ script: 30000 })
+            process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT = '45'
+            await utils.setMobileA11yScriptTimeout(browser)
+            expect(browser.setTimeout).toHaveBeenLastCalledWith({ script: 45000 })
+            delete process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT
+            vi.mocked(browser.setTimeout).mockClear()
+            validateCapsWithA11y(undefined, { browser_name: 'chrome' })
+            await utils.setMobileA11yScriptTimeout(browser)
+            expect(browser.setTimeout).not.toHaveBeenCalled()
+        })
+
+        it('clears the mobile script args for a desktop session', async () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            validateCapsWithA11y('Google Pixel 7', { browser_name: 'chrome', platform_name: 'android' })
+            expect(validateCapsWithA11y(undefined, { browser_name: 'chrome' })).toEqual(true)
+            expect(utils.getMobileA11yScriptArgs()).toEqual({})
+            expect(utils.getMobileResultsArg()).toBeUndefined()
+        })
     })
 
     it('returns false if browser is not chrome', async () => {

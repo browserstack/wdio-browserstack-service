@@ -51,7 +51,11 @@ vi.mock('../../../src/util.js', () => ({
     getAppA11yResultsSummary: vi.fn().mockResolvedValue({}),
     _getParamsForAppAccessibility: vi.fn().mockReturnValue('{}'),
     formatString: vi.fn().mockReturnValue('formatted-script'),
-    isBrowserstackSession: vi.fn().mockReturnValue(true)
+    isBrowserstackSession: vi.fn().mockReturnValue(true),
+    getMobileA11yScriptArgs: vi.fn().mockReturnValue({}),
+    getMobileResultsArg: vi.fn().mockReturnValue(undefined),
+    logRejectedMobileSave: vi.fn(),
+    setMobileA11yScriptTimeout: vi.fn()
 }))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({
