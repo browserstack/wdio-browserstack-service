@@ -67,6 +67,9 @@ import {
     validateCapsWithAppA11y,
     getAppA11yResults,
     executeAccessibilityScript,
+    getMobileA11yScriptArgs,
+    logRejectedMobileSave,
+    setMobileA11yScriptTimeout,
     isFalse,
     getHookType,
     frameworkSupportsHook
@@ -222,6 +225,7 @@ class _AccessibilityHandler {
                 const chromeOptions = this._getCapabilityValue(this._caps, 'goog:chromeOptions', '') as Capabilities.ChromeOptions
 
                 this._accessibility = validateCapsWithA11y(deviceName as string, this._platformA11yMeta as unknown as Record<string, string>, chromeOptions)
+                await setMobileA11yScriptTimeout(this._browser as WebdriverIO.Browser)
             }
             if (isAppAccessibilityAutomationSession(this._accessibility, this.isAppAutomate)) {
                 this._accessibility = validateCapsWithAppA11y(this._platformA11yMeta)
@@ -582,8 +586,9 @@ class _AccessibilityHandler {
 
         await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.SAVE_RESULTS, async () => {
             if (accessibilityScripts.saveTestResults) {
-                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults, dataForExtension)
+                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults, { ...dataForExtension, ...getMobileA11yScriptArgs() })
                 BStackLogger.debug(util.format(results as string))
+                logRejectedMobileSave(results)
             } else {
                 BStackLogger.error('saveTestResults script is null or undefined')
             }

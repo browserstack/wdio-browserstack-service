@@ -217,6 +217,15 @@ describe('onReload()', () => {
             printSpy.mockRestore()
         })
 
+        it('restores the mobile script timeout on the new session', async () => {
+            const timeoutSpy = vi.spyOn(utils, 'setMobileA11yScriptTimeout').mockResolvedValue(undefined)
+
+            await service.onReload('1', '2')
+
+            expect(timeoutSpy).toHaveBeenCalledWith(browser)
+            timeoutSpy.mockRestore()
+        })
+
         it('migrates the classic handler when the binary is not driving accessibility', async () => {
             await service.onReload('1', '2')
 
