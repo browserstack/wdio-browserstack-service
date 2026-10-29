@@ -11,7 +11,8 @@ import {
     isFalse,
     getUniqueIdentifier,
     getHookType,
-    isBrowserstackExecutorScript
+    isBrowserstackExecutorScript,
+    setMobileA11yScriptTimeout
 } from './util.js'
 import type { BrowserstackConfig, BrowserstackOptions, MultiRemoteAction } from './types.js'
 import type { Pickle, Feature, ITestCaseHookParameter, CucumberHook } from './cucumber-types.js'
@@ -1084,6 +1085,8 @@ export default class BrowserstackService implements Services.ServiceInstance {
         if (!this._isCliAccessibilityFlow()) {
             this._accessibilityHandler?.onSessionReload(oldSessionId, newSessionId)
         }
+        // The new session starts with the driver's default script timeout, too short for a mobile scan.
+        await setMobileA11yScriptTimeout(this._browser as WebdriverIO.Browser)
 
         const { setSessionName, setSessionStatus } = this._options
         const ignoreHooksStatus = this._options.testObservabilityOptions?.ignoreHooksStatus === true

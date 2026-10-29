@@ -1477,7 +1477,7 @@ describe('validateCapsWithA11y', () => {
         })
 
         it('sets the backend scanner timeout as the script timeout only for a mobile session', async () => {
-            const browser = { setTimeout: vi.fn() } as unknown as WebdriverIO.Browser
+            const browser = { setTimeout: vi.fn(), getTimeouts: vi.fn().mockResolvedValue({ script: 0 }) } as unknown as WebdriverIO.Browser
             process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
             validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })
             await utils.setMobileA11yScriptTimeout(browser)
@@ -1490,6 +1490,17 @@ describe('validateCapsWithA11y', () => {
             validateCapsWithA11y(undefined, { browser_name: 'chrome' })
             await utils.setMobileA11yScriptTimeout(browser)
             expect(browser.setTimeout).not.toHaveBeenCalled()
+        })
+
+        it('keeps a higher user script timeout and still sets one when it cannot be read', async () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })
+            const higher = { setTimeout: vi.fn(), getTimeouts: vi.fn().mockResolvedValue({ script: 120000 }) } as unknown as WebdriverIO.Browser
+            await utils.setMobileA11yScriptTimeout(higher)
+            expect(higher.setTimeout).not.toHaveBeenCalled()
+            const unreadable = { setTimeout: vi.fn(), getTimeouts: vi.fn().mockRejectedValue(new Error('unsupported')) } as unknown as WebdriverIO.Browser
+            await utils.setMobileA11yScriptTimeout(unreadable)
+            expect(unreadable.setTimeout).toHaveBeenCalledWith({ script: 30000 })
         })
 
         it('clears the mobile script args for a desktop session', async () => {
@@ -2088,6 +2099,37 @@ describe('processAccessibilityResponse', () => {
         optionsWithAccessibilityNull.accessibility = null
         processAccessibilityResponse(res, optionsWithAccessibilityNull)
         expect(handleErrorForAccessibilitySpy).toBeCalledTimes(0)
+    })
+    describe('mobile group entitlements', () => {
+        const ENV_KEYS = ['BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP', 'BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP', 'BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT']
+        const withCaps = (capabilities: Array<{ name: string, value: unknown }>) => ({
+            accessibility: { success: true, options: { capabilities, scripts: [], commandsToWrap: { commands: [] } } }
+        }) as unknown as LaunchResponse
+
+        beforeEach(() => ENV_KEYS.forEach((k) => delete process.env[k]))
+        afterEach(() => ENV_KEYS.forEach((k) => delete process.env[k]))
+
+        it('keeps the inherited mobile flag when the response omits it', () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            processAccessibilityResponse(withCaps([{ name: 'accessibilityToken', value: 'abc' }]), {} as any)
+            expect(process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP).toEqual('true')
+            expect(process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP).toBeUndefined()
+        })
+
+        it.each([[true, 'true'], ['true', 'true'], [false, 'false']])('maps mobile flag %s to %s', (value, expected) => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            processAccessibilityResponse(withCaps([{ name: 'isMobileScanningEnabledForGroup', value }]), {} as any)
+            expect(process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP).toEqual(expected)
+        })
+
+        it('sets the iOS flag and scanner timeout from the response', () => {
+            processAccessibilityResponse(withCaps([
+                { name: 'isIosSafariScanningEnabledForGroup', value: false },
+                { name: 'scannerProcessingTimeout', value: '45' }
+            ]), {} as any)
+            expect(process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP).toEqual('false')
+            expect(process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT).toEqual('45')
+        })
     })
     afterEach(() => {
         handleErrorForAccessibilitySpy?.mockClear()

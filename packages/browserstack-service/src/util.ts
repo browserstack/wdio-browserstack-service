@@ -361,7 +361,9 @@ export const processAccessibilityResponse = (response: LaunchResponse | StartBin
             process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT = scannerProcessingTimeout as string
         }
         // Group entitlements for mobile web a11y; set in the launcher, so workers inherit them.
-        process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isMobileScanningEnabledForGroup))
+        if (isMobileScanningEnabledForGroup !== undefined) {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isMobileScanningEnabledForGroup))
+        }
         if (isIosSafariScanningEnabledForGroup !== undefined) {
             process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isIosSafariScanningEnabledForGroup))
         }
@@ -532,8 +534,13 @@ export const setMobileA11yScriptTimeout = async (browser: WebdriverIO.Browser) =
     if (!mobileA11ySession) {
         return
     }
+    const timeout = getMobileA11yScriptTimeoutMs()
     try {
-        await browser.setTimeout({ script: getMobileA11yScriptTimeoutMs() })
+        const current = await browser.getTimeouts().then((t) => t.script, () => undefined)
+        if (typeof current === 'number' && current >= timeout) {
+            return
+        }
+        await browser.setTimeout({ script: timeout })
     } catch (error) {
         BStackLogger.debug(`Could not set the script timeout for the mobile accessibility session: ${error}`)
     }
