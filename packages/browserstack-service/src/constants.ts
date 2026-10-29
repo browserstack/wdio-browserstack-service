@@ -164,15 +164,6 @@ export const FUNNEL_INSTRUMENTATION_URL = 'https://api.browserstack.com/sdk/v1/e
 
 export const EDS_URL = 'https://eds.browserstack.com'
 
-export const SUPPORTED_BROWSERS_FOR_AI = ['chrome', 'microsoftedge', 'firefox']
-
-export const TCG_URL = 'https://tcg.browserstack.com'
-
-export const TCG_INFO = {
-    tcgRegion: 'use',
-    tcgUrl: TCG_URL,
-}
-
 // Smart Selection Mode Constants
 export const SMART_SELECTION_MODE_RELEVANT_FIRST = 'relevantFirst'
 export const SMART_SELECTION_MODE_RELEVANT_ONLY = 'relevantOnly'

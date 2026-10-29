@@ -152,14 +152,6 @@ export const CONFIG_EVENTS = {
 }
 
 /**
- * AI self-healing events
- */
-export const AI_EVENTS = {
-    SELF_HEAL_STEP: EVENTS.SDK_AI_SELF_HEAL_STEP,
-    SELF_HEAL_GET_RESULT: EVENTS.SDK_AI_SELF_HEAL_GET_RESULT
-}
-
-/**
  * Event dispatcher events for test framework and session tracking
  */
 export const DISPATCHER_EVENTS = {
