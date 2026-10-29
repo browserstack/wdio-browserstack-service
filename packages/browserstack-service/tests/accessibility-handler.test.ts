@@ -621,6 +621,25 @@ describe('beforeHook / afterHook (hook scans)', () => {
         expect(lastCall[6]).toBeNull()
     })
 
+    it('skips the scan before only the first url of a session, even when scanning was off for it', async () => {
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        const fireUrl = () => accessibilityHandler['commandWrapper']({ name: 'url', class: 'Browser' } as any, undefined as any, vi.fn().mockResolvedValue('ok'), 'https://example.com')
+        accessibilityHandler['_sessionId'] = 'session-first-nav'
+
+        AccessibilityHandler['_a11yScanSessionMap']['session-first-nav'] = false
+        await fireUrl()
+        AccessibilityHandler['_a11yScanSessionMap']['session-first-nav'] = true
+        await fireUrl()
+        expect(scanSpy).toHaveBeenCalledTimes(1)
+
+        accessibilityHandler['_sessionId'] = 'session-first-nav-2'
+        AccessibilityHandler['_a11yScanSessionMap']['session-first-nav-2'] = true
+        await fireUrl()
+        expect(scanSpy).toHaveBeenCalledTimes(1)
+        await fireUrl()
+        expect(scanSpy).toHaveBeenCalledTimes(2)
+    })
+
     it('_getParamsForAppAccessibility puts the hook uuid on the scan payload as thHookRunUuid', () => {
         expect(utils._getParamsForAppAccessibility('click', 'testName', 'hook-uuid-9').thHookRunUuid).toBe('hook-uuid-9')
         expect(utils._getParamsForAppAccessibility('click', 'testName').thHookRunUuid).toBeUndefined()

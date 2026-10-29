@@ -292,6 +292,8 @@ export default class AccessibilityModule extends BaseModule {
         try {
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
+            // Recorded before the gate check, so a first url issued while scanning is off still counts.
+            const firstNavigation = isFirstNavigation(sessionId as string | undefined, command.name)
             // Check if accessibility is still enabled for this session
             if (sessionId && this.accessibilityMap.get(sessionId)) {
                 const browser = AutomationFramework.getDriver(autoInstance) as WebdriverIO.Browser
@@ -309,7 +311,7 @@ export default class AccessibilityModule extends BaseModule {
                 if (
                     (!command.name.includes('execute') ||
                     !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)) &&
-                    !isFirstNavigation(browser.sessionId, command.name)
+                    !firstNavigation
                 ) {
                     try {
                         // Parentless only before the framework has started anything: no hook run

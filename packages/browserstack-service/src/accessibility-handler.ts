@@ -543,6 +543,8 @@ class _AccessibilityHandler {
 
     private async commandWrapper (command: CommandInfo, prevImpl: Function, origFunction: Function, ...args: unknown[]) {
         const skipScanForBidiWindowCommand = AccessibilityHandler.shouldSkipScanForBidiWindowCommand(this._browser, command)
+        // Recorded before the gate check, so a first url issued while scanning is off still counts.
+        const firstNavigation = isFirstNavigation(this._sessionId, command.name)
         if (
             this._sessionId && AccessibilityHandler._a11yScanSessionMap[this._sessionId] &&
                 !skipScanForBidiWindowCommand &&
@@ -550,7 +552,7 @@ class _AccessibilityHandler {
                     !command.name.includes('execute') ||
                     !AccessibilityHandler.shouldPatchExecuteScript(args.length ? args[0] as string : null)
                 ) &&
-                !isFirstNavigation(this._sessionId, command.name)
+                !firstNavigation
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
             // Parentless only before the framework has started anything: no hook run to own the

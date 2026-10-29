@@ -486,7 +486,7 @@ const EDGE_BROWSER_NAMES = ['edge', 'microsoftedge', 'msedge']
 const navigatedSessions = new Set<string>()
 
 /* Until a session's first url command the browser sits on its start page (data:, or Edge's https new tab, where the extension can't load), so there is nothing to scan. */
-export const isFirstNavigation = (sessionId: string | undefined, commandName: string) => {
+export const isFirstNavigation = (sessionId: string | null | undefined, commandName: string) => {
     if (commandName !== 'url' || !sessionId || navigatedSessions.has(sessionId)) {
         return false
     }
