@@ -244,6 +244,22 @@ describe('AccessibilityModule', () => {
             expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
         })
 
+        it('records the first url even while scanning is off, and scans a later url', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            const fireUrl = () => (accessibilityModule as any).commandWrapper({ name: 'url', class: 'Browser' }, vi.fn().mockResolvedValue('ok'), 'https://example.com')
+
+            accessibilityModule.accessibilityMap.set('session-w', false)
+            await fireUrl()
+            expect(isFirstNavigation).toHaveBeenCalledWith('session-w', 'url')
+            expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
+
+            accessibilityModule.accessibilityMap.set('session-w', true)
+            await fireUrl()
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('url', undefined, null, true)
+        })
+
         it('skips the scan once the session is gone, instead of logging a failure', async () => {
             withA11yCaps()
             await accessibilityModule.onBeforeExecute()
