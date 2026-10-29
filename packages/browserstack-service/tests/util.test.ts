@@ -1439,7 +1439,6 @@ describe('validateCapsWithA11y', () => {
     describe('mobile browsers', () => {
         afterEach(() => {
             delete process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP
-            delete process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP
             delete process.env.TEST_ANALYTICS_ID
             validateCapsWithA11y(undefined, { browser_name: 'chrome' })
         })
@@ -1466,12 +1465,9 @@ describe('validateCapsWithA11y', () => {
             expect(utils.getMobileResultsArg()).toEqual({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
         })
 
-        it('allows Safari on iPhone unless the group is opted out, and never on iPad', async () => {
+        it('allows Safari on iPhone, and never on iPad', async () => {
             process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
             expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })).toEqual(true)
-            process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = 'false'
-            expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari' })).toEqual(false)
-            process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = 'true'
             expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari' })).toEqual(true)
             expect(validateCapsWithA11y('iPad Pro 13 2024', { browser_name: 'safari', platform_name: 'ios' })).toEqual(false)
         })
@@ -2101,7 +2097,7 @@ describe('processAccessibilityResponse', () => {
         expect(handleErrorForAccessibilitySpy).toBeCalledTimes(0)
     })
     describe('mobile group entitlements', () => {
-        const ENV_KEYS = ['BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP', 'BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP', 'BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT']
+        const ENV_KEYS = ['BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP', 'BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT']
         const withCaps = (capabilities: Array<{ name: string, value: unknown }>) => ({
             accessibility: { success: true, options: { capabilities, scripts: [], commandsToWrap: { commands: [] } } }
         }) as unknown as LaunchResponse
@@ -2113,7 +2109,6 @@ describe('processAccessibilityResponse', () => {
             process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
             processAccessibilityResponse(withCaps([{ name: 'accessibilityToken', value: 'abc' }]), {} as any)
             expect(process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP).toEqual('true')
-            expect(process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP).toBeUndefined()
         })
 
         it.each([[true, 'true'], ['true', 'true'], [false, 'false']])('maps mobile flag %s to %s', (value, expected) => {
@@ -2122,12 +2117,8 @@ describe('processAccessibilityResponse', () => {
             expect(process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP).toEqual(expected)
         })
 
-        it('sets the iOS flag and scanner timeout from the response', () => {
-            processAccessibilityResponse(withCaps([
-                { name: 'isIosSafariScanningEnabledForGroup', value: false },
-                { name: 'scannerProcessingTimeout', value: '45' }
-            ]), {} as any)
-            expect(process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP).toEqual('false')
+        it('sets the scanner timeout from the response', () => {
+            processAccessibilityResponse(withCaps([{ name: 'scannerProcessingTimeout', value: '45' }]), {} as any)
             expect(process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT).toEqual('45')
         })
     })

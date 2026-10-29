@@ -339,7 +339,7 @@ export const processAccessibilityResponse = (response: LaunchResponse | StartBin
     }
 
     if (response.accessibility.options) {
-        const { accessibilityToken, pollingTimeout, scannerVersion, scannerProcessingTimeout, isMobileScanningEnabledForGroup, isIosSafariScanningEnabledForGroup } = jsonifyAccessibilityArray(response.accessibility.options.capabilities as Array<Record<string, unknown>>, 'name', 'value')
+        const { accessibilityToken, pollingTimeout, scannerVersion, scannerProcessingTimeout, isMobileScanningEnabledForGroup } = jsonifyAccessibilityArray(response.accessibility.options.capabilities as Array<Record<string, unknown>>, 'name', 'value')
         const result = jsonifyAccessibilityArray(response.accessibility.options.capabilities as Array<Record<string, unknown>>, 'name', 'value')
         const scriptsJson = {
             'scripts': jsonifyAccessibilityArray(response.accessibility.options.scripts as Array<Record<string, unknown>>, 'name', 'command'),
@@ -363,9 +363,6 @@ export const processAccessibilityResponse = (response: LaunchResponse | StartBin
         // Group entitlements for mobile web a11y; set in the launcher, so workers inherit them.
         if (isMobileScanningEnabledForGroup !== undefined) {
             process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isMobileScanningEnabledForGroup))
-        }
-        if (isIosSafariScanningEnabledForGroup !== undefined) {
-            process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isIosSafariScanningEnabledForGroup))
         }
         if (scriptsJson) {
             // @ts-expect-error fix type
@@ -495,17 +492,14 @@ export const MOBILE_SCANNING_DISABLED_WARNING = 'Mobile Accessibility Automation
 
 export const isMobileScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP === 'true'
 
-// On unless the backend opts the group out, so backends that don't send the flag still scan iOS.
-export const isIosSafariScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP !== 'false'
-
-/* Mobile browsers accessibility scans in-page: Chrome on Android, and Safari on iPhone (not iPad) unless the group is opted out. */
+/* Mobile browsers accessibility scans in-page: Chrome on Android, and Safari on iPhone (not iPad). */
 export const isMobileA11yPlatformPair = (platformName?: string, browserName?: string, deviceName?: string) => {
     const platform = String(platformName || '').toLowerCase()
     const browser = String(browserName || '').toLowerCase()
     if (platform === 'android') {
         return browser.includes('chrome')
     }
-    return platform === 'ios' && /safari|iphone|webkit/.test(browser) && !/ipad/i.test(String(deviceName || '')) && isIosSafariScanningEnabledForGroup()
+    return platform === 'ios' && /safari|iphone|webkit/.test(browser) && !/ipad/i.test(String(deviceName || ''))
 }
 
 // One driver session per worker process, so the worker's mobile state is module-level.
