@@ -77,7 +77,7 @@ export type {
 
 // gRPC Service Client and credentials
 export { SDKClient } from './generated/sdk.js'
-export { credentials as grpcCredentials, Channel as grpcChannel, type ChannelCredentials } from '@grpc/grpc-js'
+export { credentials as grpcCredentials, Channel as grpcChannel, InterceptingCall as GrpcInterceptingCall, type Interceptor as GrpcInterceptor, type ChannelCredentials } from '@grpc/grpc-js'
 
 // Export message constructors
 import type * as SdkMessages from './generated/sdk-messages.js'
