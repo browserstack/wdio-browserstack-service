@@ -68,6 +68,7 @@ import {
     getAppA11yResults,
     executeAccessibilityScript,
     isFalse,
+    isFirstNavigation,
     getHookType,
     frameworkSupportsHook
 } from './util.js'
@@ -548,7 +549,8 @@ class _AccessibilityHandler {
                 (
                     !command.name.includes('execute') ||
                     !AccessibilityHandler.shouldPatchExecuteScript(args.length ? args[0] as string : null)
-                )
+                ) &&
+                !isFirstNavigation(this._sessionId, command.name)
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
             // Parentless only before the framework has started anything: no hook run to own the

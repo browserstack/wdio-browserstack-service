@@ -37,7 +37,8 @@ vi.mock('../../../src/util.js', () => ({
     _getParamsForAppAccessibility: vi.fn().mockReturnValue('{}'),
     formatString: vi.fn().mockReturnValue('formatted-script'),
     o11yClassErrorHandler: vi.fn().mockImplementation((cls) => cls),
-    isBrowserstackSession: vi.fn().mockReturnValue(true)
+    isBrowserstackSession: vi.fn().mockReturnValue(true),
+    isFirstNavigation: vi.fn().mockReturnValue(false)
 }))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({

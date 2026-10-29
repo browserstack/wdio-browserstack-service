@@ -483,6 +483,17 @@ export const validateCapsWithAppA11y = (platformMeta?: { [key: string]: any; }) 
 
 const EDGE_BROWSER_NAMES = ['edge', 'microsoftedge', 'msedge']
 
+const navigatedSessions = new Set<string>()
+
+/* Until a session's first url command the browser sits on its start page (data:, or Edge's https new tab, where the extension can't load), so there is nothing to scan. */
+export const isFirstNavigation = (sessionId: string | undefined, commandName: string) => {
+    if (commandName !== 'url' || !sessionId || navigatedSessions.has(sessionId)) {
+        return false
+    }
+    navigatedSessions.add(sessionId)
+    return true
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const validateCapsWithA11y = (deviceName?: any, platformMeta?: { [key: string]: any; }, chromeOptions?: any) => {
     /* Check if the current driver platform is eligible for Accessibility scan */

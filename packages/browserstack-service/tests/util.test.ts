@@ -1430,6 +1430,16 @@ describe('validateCapsWithAppA11y', () => {
     })
 })
 
+describe('isFirstNavigation', () => {
+    it('is true only for the first url command of each session', () => {
+        expect(utils.isFirstNavigation('s1', 'click')).toEqual(false)
+        expect(utils.isFirstNavigation('s1', 'url')).toEqual(true)
+        expect(utils.isFirstNavigation('s1', 'url')).toEqual(false)
+        expect(utils.isFirstNavigation('s2', 'url')).toEqual(true)
+        expect(utils.isFirstNavigation(undefined, 'url')).toEqual(false)
+    })
+})
+
 describe('validateCapsWithA11y', () => {
     let logInfoMock: any
     beforeEach(() => {

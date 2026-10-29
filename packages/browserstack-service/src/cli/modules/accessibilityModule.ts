@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
+import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession, isFirstNavigation } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -307,8 +307,9 @@ export default class AccessibilityModule extends BaseModule {
 
                 // Perform accessibility scan before command if script is available
                 if (
-                    !command.name.includes('execute') ||
-                    !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
+                    (!command.name.includes('execute') ||
+                    !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)) &&
+                    !isFirstNavigation(browser.sessionId, command.name)
                 ) {
                     try {
                         // Parentless only before the framework has started anything: no hook run
