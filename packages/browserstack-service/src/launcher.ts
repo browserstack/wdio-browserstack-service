@@ -992,8 +992,8 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                     })
                     .forEach((capability: WebdriverIO.Capabilities) => {
                         if (
-                            validateCapsWithNonBstackA11y(capability.browserName, capability.browserVersion) &&
-                            capType === 'goog:chromeOptions' && value
+                            capType === 'goog:chromeOptions' && value &&
+                            validateCapsWithNonBstackA11y(capability.browserName, capability.browserVersion)
                         ) {
                             const chromeOptions =  capability['goog:chromeOptions'] as unknown as Capabilities.ChromeOptions
                             if (chromeOptions){
@@ -1039,11 +1039,11 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             } else if (typeof capabilities === 'object') {
                 Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
                     if (
+                        capType === 'goog:chromeOptions' && value &&
                         validateCapsWithNonBstackA11y(
                             (caps.capabilities as WebdriverIO.Capabilities).browserName,
                             (caps.capabilities as WebdriverIO.Capabilities).browserVersion
-                        ) &&
-                        capType === 'goog:chromeOptions' && value
+                        )
                     ) {
                         const chromeOptions = (caps.capabilities as WebdriverIO.Capabilities)['goog:chromeOptions'] as unknown as Capabilities.ChromeOptions
                         if (chromeOptions) {

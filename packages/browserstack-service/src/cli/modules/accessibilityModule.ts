@@ -197,7 +197,7 @@ export default class AccessibilityModule extends BaseModule {
                 this.accessibility = validateCapsWithAppA11y(platformA11yMeta)
             } else {
                 const device = this.getCapability(inputCaps, 'deviceName')
-                const chromeOptions = this.getCapability(inputCaps, 'goog:chromeOptions')
+                const chromeOptions = this.getCapability(inputCaps, 'goog:chromeOptions') || this.getCapability(inputCaps, 'ms:edgeOptions', 'ms:edgeOptions')
                 this.accessibility = validateCapsWithA11y(device, platformA11yMeta, chromeOptions)
             }
 

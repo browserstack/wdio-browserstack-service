@@ -219,7 +219,7 @@ class _AccessibilityHandler {
         } else {
             if (isAccessibilityAutomationSession(this._accessibility) && !this.isAppAutomate) {
                 const deviceName = this._getCapabilityValue(this._caps, 'deviceName', 'device')
-                const chromeOptions = this._getCapabilityValue(this._caps, 'goog:chromeOptions', '') as Capabilities.ChromeOptions
+                const chromeOptions = (this._getCapabilityValue(this._caps, 'goog:chromeOptions', '') || this._getCapabilityValue(this._caps, 'ms:edgeOptions', 'ms:edgeOptions')) as Capabilities.ChromeOptions
 
                 this._accessibility = validateCapsWithA11y(deviceName as string, this._platformA11yMeta as unknown as Record<string, string>, chromeOptions)
             }
