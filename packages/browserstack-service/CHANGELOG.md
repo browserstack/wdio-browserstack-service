@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.42.1
+
+### Patch Changes
+
+- 3ec281b: - Removed the deprecated client-side self-healing extension. Self-healing on BrowserStack continues to work unchanged via the `browserstack.selfHeal` capability.
+
 ## 9.42.0
 
 ### Minor Changes
