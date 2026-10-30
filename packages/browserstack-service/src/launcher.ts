@@ -422,7 +422,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.INIT)
 
         // The client-side healing extension this option drove off-infra has been removed; on BrowserStack, healing comes from the browserstack.selfHeal capability instead.
-        if (this._options.selfHeal === true && !shouldAddServiceVersion(this._config, this._options.testObservability, capabilities as Capabilities.BrowserStackCapabilities)) {
+        if (this._options.selfHeal === true && !isBrowserstackInfra(this._config as BrowserstackConfig & Options.Testrunner, capabilities as Capabilities.BrowserStackCapabilities)) {
             BStackLogger.warn('selfHeal has no effect for sessions not running on BrowserStack infrastructure. Self-healing on BrowserStack is driven by the browserstack.selfHeal capability.')
         }
 
