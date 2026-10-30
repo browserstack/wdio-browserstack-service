@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import type { Frameworks } from '@wdio/types'
@@ -8,6 +9,7 @@ import BrowserstackService from '../src/service.js'
 import * as utils from '../src/util.js'
 import InsightsHandler from '../src/insights-handler.js'
 import { BrowserstackCLI } from '../src/cli/index.js'
+import WdioMochaTestFramework from '../src/cli/frameworks/wdioMochaTestFramework.js'
 import AccessibilityModule from '../src/cli/modules/accessibilityModule.js'
 import * as bstackLogger from '../src/bstackLogger.js'
 import * as skipReporter from '../src/cli/skipReporter.js'
@@ -928,6 +930,43 @@ describe('beforeScenario', () => {
 })
 
 describe('beforeSuite', () => {
+    describe('suite file for the CLI mocha framework', () => {
+        const SPEC = path.resolve('/specs/root hooks.spec.ts')
+        let framework: WdioMochaTestFramework
+
+        beforeEach(() => {
+            framework = Object.create(WdioMochaTestFramework.prototype) as WdioMochaTestFramework
+            vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+                isRunning: () => true,
+                getTestFramework: () => framework,
+                getAutomationFramework: () => ({ trackEvent: vi.fn() }),
+            } as any)
+        })
+
+        afterEach(() => {
+            vi.mocked(BrowserstackCLI.getInstance).mockRestore()
+        })
+
+        it('hands the suite file to the CLI mocha framework, as the non-CLI flow does to its insights handler', async () => {
+            await service.beforeSuite({ title: 'foobar', file: '/specs/foobar.spec.ts' } as any)
+
+            expect(framework['_suiteFile']).toBe('/specs/foobar.spec.ts')
+        })
+
+        it('seeds it from the worker spec in before(), as a root-level `before` runs ahead of the first beforeSuite', async () => {
+            await service.before(service['_config'] as any, [pathToFileURL(SPEC).href], browser)
+
+            expect(framework['_suiteFile']).toBe(SPEC)
+        })
+
+        it('keeps the spec file when a suite comes without one', async () => {
+            await service.before(service['_config'] as any, [pathToFileURL(SPEC).href], browser)
+            await service.beforeSuite({ title: 'root-level tests' } as any)
+
+            expect(framework['_suiteFile']).toBe(SPEC)
+        })
+    })
+
     it('should send request to set the session name as suite name for Mocha tests', async () => {
         await service.before(service['_config'] as any, [], browser)
         expect(service['_suiteTitle']).toBeUndefined()
