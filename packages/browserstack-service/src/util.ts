@@ -1238,30 +1238,6 @@ export function isBrowserstackInfra(config: BrowserstackConfig & Options.Testrun
     return true
 }
 
-export function getBrowserStackUserAndKey(config: Options.Testrunner, options: Options.Testrunner) {
-
-    // Fallback 1: Env variables
-    // Fallback 2: Service variables in wdio.conf.js (that are received inside options object)
-    const envOrServiceVariables = {
-        user: getBrowserStackUser(options),
-        key: getBrowserStackKey(options)
-    }
-    if (isBStackSession(envOrServiceVariables as any)) {
-        return envOrServiceVariables
-    }
-
-    // Fallback 3: Service variables in testObservabilityOptions object
-    // Fallback 4: Service variables in the top level config object
-    const o11yVariables = {
-        user: getObservabilityUser(options, config),
-        key: getObservabilityKey(options, config)
-    }
-    if (isBStackSession(o11yVariables as any)) {
-        return o11yVariables
-    }
-
-}
-
 export function shouldAddServiceVersion(config: Options.Testrunner, testObservability?: boolean, caps?: Capabilities.BrowserStackCapabilities): boolean {
     if ((config.services && config.services.toString().includes('chromedriver') && testObservability !== false) || !isBrowserstackInfra(config, caps)) {
         return false
@@ -1728,23 +1704,6 @@ export function getObservabilityProduct(options: (BrowserstackConfig & Options.T
     return isAppAutomate
         ? 'app-automate'
         : (isTurboScale(options) ? 'turboscale' : 'automate')
-}
-
-export const hasBrowserName = (cap: Options.Testrunner): boolean => {
-    if (!cap || !cap.capabilities) {
-        return false
-    }
-    const browserStackCapabilities = cap.capabilities as Capabilities.BrowserStackCapabilities
-    return browserStackCapabilities.browserName !== undefined
-}
-
-export const isValidCapsForHealing = (caps: { [key: string]: Options.Testrunner }): boolean => {
-
-    // Get all capability values
-    const capValues = Object.values(caps)
-
-    // Check if there are any capabilities and if at least one has a browser name
-    return capValues.length > 0 && capValues.some(hasBrowserName)
 }
 
 type PollingResult = {
