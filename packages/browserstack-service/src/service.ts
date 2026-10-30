@@ -9,7 +9,6 @@ import {
     getParentSuiteName,
     isBrowserstackSession,
     patchConsoleLogs,
-    shouldAddServiceVersion,
     isTrue,
     normalizeTestReportingConfig,
     normalizeTestReportingEnvVariables,
