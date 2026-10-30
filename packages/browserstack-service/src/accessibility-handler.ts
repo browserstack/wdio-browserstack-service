@@ -68,6 +68,7 @@ import {
     getAppA11yResults,
     executeAccessibilityScript,
     isFalse,
+    isFirstNavigation,
     getHookType,
     frameworkSupportsHook
 } from './util.js'
@@ -219,7 +220,7 @@ class _AccessibilityHandler {
         } else {
             if (isAccessibilityAutomationSession(this._accessibility) && !this.isAppAutomate) {
                 const deviceName = this._getCapabilityValue(this._caps, 'deviceName', 'device')
-                const chromeOptions = this._getCapabilityValue(this._caps, 'goog:chromeOptions', '') as Capabilities.ChromeOptions
+                const chromeOptions = (this._getCapabilityValue(this._caps, 'goog:chromeOptions', '') || this._getCapabilityValue(this._caps, 'ms:edgeOptions', 'ms:edgeOptions')) as Capabilities.ChromeOptions
 
                 this._accessibility = validateCapsWithA11y(deviceName as string, this._platformA11yMeta as unknown as Record<string, string>, chromeOptions)
             }
@@ -542,13 +543,16 @@ class _AccessibilityHandler {
 
     private async commandWrapper (command: CommandInfo, prevImpl: Function, origFunction: Function, ...args: unknown[]) {
         const skipScanForBidiWindowCommand = AccessibilityHandler.shouldSkipScanForBidiWindowCommand(this._browser, command)
+        // Recorded before the gate check, so a first url issued while scanning is off still counts.
+        const firstNavigation = isFirstNavigation(this._sessionId, command.name)
         if (
             this._sessionId && AccessibilityHandler._a11yScanSessionMap[this._sessionId] &&
                 !skipScanForBidiWindowCommand &&
                 (
                     !command.name.includes('execute') ||
                     !AccessibilityHandler.shouldPatchExecuteScript(args.length ? args[0] as string : null)
-                )
+                ) &&
+                !firstNavigation
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
             // Parentless only before the framework has started anything: no hook run to own the

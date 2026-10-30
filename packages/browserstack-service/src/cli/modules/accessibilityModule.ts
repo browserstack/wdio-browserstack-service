@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
+import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession, isFirstNavigation } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -197,7 +197,7 @@ export default class AccessibilityModule extends BaseModule {
                 this.accessibility = validateCapsWithAppA11y(platformA11yMeta)
             } else {
                 const device = this.getCapability(inputCaps, 'deviceName')
-                const chromeOptions = this.getCapability(inputCaps, 'goog:chromeOptions')
+                const chromeOptions = this.getCapability(inputCaps, 'goog:chromeOptions') || this.getCapability(inputCaps, 'ms:edgeOptions', 'ms:edgeOptions')
                 this.accessibility = validateCapsWithA11y(device, platformA11yMeta, chromeOptions)
             }
 
@@ -292,6 +292,8 @@ export default class AccessibilityModule extends BaseModule {
         try {
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
+            // Recorded before the gate check, so a first url issued while scanning is off still counts.
+            const firstNavigation = isFirstNavigation(sessionId as string | undefined, command.name)
             // Check if accessibility is still enabled for this session
             if (sessionId && this.accessibilityMap.get(sessionId)) {
                 const browser = AutomationFramework.getDriver(autoInstance) as WebdriverIO.Browser
@@ -307,8 +309,9 @@ export default class AccessibilityModule extends BaseModule {
 
                 // Perform accessibility scan before command if script is available
                 if (
-                    !command.name.includes('execute') ||
-                    !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
+                    (!command.name.includes('execute') ||
+                    !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)) &&
+                    !firstNavigation
                 ) {
                     try {
                         // Parentless only before the framework has started anything: no hook run

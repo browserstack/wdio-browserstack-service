@@ -37,7 +37,8 @@ vi.mock('../../../src/util.js', () => ({
     _getParamsForAppAccessibility: vi.fn().mockReturnValue('{}'),
     formatString: vi.fn().mockReturnValue('formatted-script'),
     o11yClassErrorHandler: vi.fn().mockImplementation((cls) => cls),
-    isBrowserstackSession: vi.fn().mockReturnValue(true)
+    isBrowserstackSession: vi.fn().mockReturnValue(true),
+    isFirstNavigation: vi.fn().mockReturnValue(false)
 }))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({
@@ -52,7 +53,7 @@ vi.mock('../../../src/cli/grpcClient.js', () => ({
 }))
 
 import AccessibilityModule from '../../../src/cli/modules/accessibilityModule.js'
-import { validateCapsWithA11y, validateCapsWithAppA11y, _getParamsForAppAccessibility, shouldScanTestForAccessibility } from '../../../src/util.js'
+import { validateCapsWithA11y, validateCapsWithAppA11y, _getParamsForAppAccessibility, shouldScanTestForAccessibility, isFirstNavigation } from '../../../src/util.js'
 import accessibilityScripts from '../../../src/scripts/accessibility-scripts.js'
 import TestFramework from '../../../src/cli/frameworks/testFramework.js'
 import AutomationFramework from '../../../src/cli/frameworks/automationFramework.js'
@@ -227,6 +228,36 @@ describe('AccessibilityModule', () => {
             const call = vi.mocked(_getParamsForAppAccessibility).mock.calls.at(-1)
             expect(call?.[2]).toBe('hook-uuid-1')
             expect(call?.[3]).toBe(false)
+        })
+
+        it('skips the scan before the first url of a session', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            vi.mocked(isFirstNavigation).mockReturnValueOnce(true)
+            const orig = vi.fn().mockResolvedValue('ok')
+
+            await (accessibilityModule as any).commandWrapper({ name: 'url', class: 'Browser' }, orig, 'https://example.com')
+
+            expect(isFirstNavigation).toHaveBeenCalledWith('session-w', 'url')
+            expect(orig).toHaveBeenCalled()
+            expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
+        })
+
+        it('records the first url even while scanning is off, and scans a later url', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            const fireUrl = () => (accessibilityModule as any).commandWrapper({ name: 'url', class: 'Browser' }, vi.fn().mockResolvedValue('ok'), 'https://example.com')
+
+            accessibilityModule.accessibilityMap.set('session-w', false)
+            await fireUrl()
+            expect(isFirstNavigation).toHaveBeenCalledWith('session-w', 'url')
+            expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
+
+            accessibilityModule.accessibilityMap.set('session-w', true)
+            await fireUrl()
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('url', undefined, null, true)
         })
 
         it('skips the scan once the session is gone, instead of logging a failure', async () => {
