@@ -16,6 +16,7 @@ import { TEST_ANALYTICS_ID } from '../../constants.js'
 export default class WdioMochaTestFramework extends TestFramework {
     static KEY_HOOK_LAST_STARTED = 'test_hook_last_started'
     static KEY_HOOK_LAST_FINISHED = 'test_hook_last_finished'
+    private _suiteFile?: string
 
     /**
    * Constructor for the TestFramework
@@ -25,6 +26,10 @@ export default class WdioMochaTestFramework extends TestFramework {
   */
     constructor(testFrameworks: string[], testFrameworkVersions: Record<string, string>, binSessionId: string) {
         super(testFrameworks, testFrameworkVersions, binSessionId)
+    }
+
+    setSuiteFile(filename?: string) {
+        this._suiteFile = filename
     }
 
     /**
@@ -190,7 +195,7 @@ export default class WdioMochaTestFramework extends TestFramework {
         const framework = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME)
         const fullTitle = getUniqueIdentifier(test, framework)
         const gitConfig = await getGitMetaData()
-        const filename = test.file // || this._suiteFile
+        const filename = test.file || this._suiteFile
 
         const scopes = getMochaTestHierarchy(test)
 
@@ -388,7 +393,8 @@ export default class WdioMochaTestFramework extends TestFramework {
 
         if (hookState === HookState.PRE) {
             const gitConfig = await getGitMetaData()
-            const filename = test.file
+            // root-level hooks belong to mocha's root suite, which has no file
+            const filename = test.file || this._suiteFile
             const hook: Record<string, unknown> = {
                 key,
                 [TestFrameworkConstants.KEY_HOOK_ID]: TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOK_ID) || '',
