@@ -163,6 +163,60 @@ describe('WdioMochaTestFramework', () => {
         })
     })
 
+    describe('root-level mocha hooks fall back to the suite file, as on the non-CLI flow', () => {
+        const SPEC = '/proj/test/specs/home.spec.ts'
+        const ROOT_HOOK = { title: '"before each" hook: wrappedHook for "t1"' }
+
+        const startHook = async (test: Record<string, unknown>) => {
+            const data = new Map<string, unknown>([
+                ['test_hooks_started', new Map()],
+                ['test_hooks_finished', new Map()],
+                ['hook_id', 'hook-1'],
+            ])
+            const TestFramework = await import('../../../src/cli/frameworks/testFramework.js')
+            vi.mocked(TestFramework.default.getState).mockImplementation((_instance, key) => data.get(key))
+            const util = await import('../../../src/util.js')
+            vi.mocked(util.getGitMetaData).mockResolvedValue({ root: '/proj' } as any)
+            const instance = { updateMultipleEntries: vi.fn() }
+
+            await framework.trackHookEvents(instance as any, TestFrameworkState.BEFORE_EACH, HookState.PRE, { test })
+            return (data.get('test_hooks_started') as Map<string, Record<string, unknown>[]>).get('BEFORE_EACH')![0]
+        }
+
+        it('sends the current suite file for a hook mocha gives no file', async () => {
+            // a beforeEach/afterEach declared outside any describe hangs off mocha's root suite, which
+            // has no file; without a path the binary threw, dropped the hook events, and the test's
+            // reference to the never-sent hook timed the build out
+            framework.setSuiteFile(SPEC)
+
+            const hook = await startHook(ROOT_HOOK)
+
+            expect(hook.hook_id).toBe('hook-1')
+            expect(hook.test_file_path).toBe('test/specs/home.spec.ts')
+            expect(hook.test_location).toBeDefined()
+        })
+
+        it('keeps the file mocha gives a hook declared inside a describe', async () => {
+            framework.setSuiteFile('/proj/test/specs/other.spec.ts')
+
+            const hook = await startHook({ ...ROOT_HOOK, file: SPEC })
+
+            expect(hook.test_file_path).toBe('test/specs/home.spec.ts')
+        })
+
+        it('applies the same fallback to test data', async () => {
+            const TestFramework = await import('../../../src/cli/frameworks/testFramework.js')
+            vi.mocked(TestFramework.default.getState).mockReturnValue('mocha')
+            const util = await import('../../../src/util.js')
+            vi.mocked(util.getGitMetaData).mockResolvedValue({ root: '/proj' } as any)
+            framework.setSuiteFile(SPEC)
+
+            const result = await framework.getTestData({} as any, { title: 't1', body: '' } as any)
+
+            expect(result).toHaveProperty('test_file_path', 'test/specs/home.spec.ts')
+        })
+    })
+
     describe('loadTestResult', () => {
         it('should update instance with passed result', () => {
             const mockInstance = {
