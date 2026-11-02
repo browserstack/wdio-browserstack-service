@@ -488,16 +488,24 @@ export const validateCapsWithAppA11y = (platformMeta?: { [key: string]: any; }) 
     return true
 }
 
+export const MOBILE_PLATFORM_UNSUPPORTED_WARNING = 'Accessibility Automation will run only on Desktop browsers, Chrome on Android or Safari on iPhone with iOS 18 or later.'
+
 export const MOBILE_SCANNING_DISABLED_WARNING = 'Mobile Accessibility Automation is not enabled for your account. Accessibility scans will be skipped on mobile sessions. Contact BrowserStack to enable mobile accessibility scanning.'
 
 export const isMobileScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP === 'true'
 
-/* Mobile browsers accessibility scans in-page: Chrome on Android, and Safari on iPhone (not iPad). */
-export const isMobileA11yPlatformPair = (platformName?: string, browserName?: string, deviceName?: string) => {
+// The scanner fails inside Safari before iOS 18, so older iPhones are rejected when the version is known.
+export const MIN_IOS_MAJOR_VERSION = 18
+
+/* Mobile browsers accessibility scans in-page: Chrome on Android, and Safari on iPhone (not iPad), as in the Node SDK. */
+export const isMobileA11yPlatformPair = (platformName?: string, browserName?: string, deviceName?: string, osVersion?: string | number) => {
     const platform = String(platformName || '').toLowerCase()
     const browser = String(browserName || '').toLowerCase()
     if (platform === 'android') {
-        return browser.includes('chrome')
+        return browser.includes('chrom')
+    }
+    if (parseInt(String(osVersion || ''), 10) < MIN_IOS_MAJOR_VERSION) {
+        return false
     }
     return platform === 'ios' && /safari|iphone|webkit/.test(browser) && !/ipad/i.test(String(deviceName || ''))
 }
@@ -549,8 +557,10 @@ export const validateCapsWithA11y = (deviceName?: any, platformMeta?: { [key: st
             // Session caps can report the Appium host OS (e.g. LINUX) as platformName; the device name tells iOS apart.
             const reportedPlatform = String(platformMeta?.platform_name || '').toLowerCase()
             const platform = ['android', 'ios'].includes(reportedPlatform) ? reportedPlatform : (/iphone|ipad/i.test(String(deviceName)) ? 'ios' : 'android')
-            if (!isMobileA11yPlatformPair(platform, platformMeta?.browser_name, deviceName)) {
-                BStackLogger.warn('Accessibility Automation will run only on Desktop browsers, Chrome on Android or Safari on iPhone.')
+            // iOS session caps may not carry the OS version; os_version is the requested one.
+            const osVersion = platformMeta?.platform_version || platformMeta?.os_version
+            if (!isMobileA11yPlatformPair(platform, platformMeta?.browser_name, deviceName, osVersion)) {
+                BStackLogger.warn(MOBILE_PLATFORM_UNSUPPORTED_WARNING)
                 return false
             }
             if (!isMobileScanningEnabledForGroup()) {

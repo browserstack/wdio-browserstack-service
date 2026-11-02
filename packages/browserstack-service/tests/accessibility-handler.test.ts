@@ -6,6 +6,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import logger from '@wdio/logger'
 
 import AccessibilityHandler from '../src/accessibility-handler.js'
+import AccessibilityScripts from '../src/scripts/accessibility-scripts.js'
 import type { BrowserstackConfig, BrowserstackOptions } from '../src/types.js'
 import type { Options } from '@wdio/types'
 import * as utils from '../src/util.js'
@@ -171,6 +172,18 @@ describe('before', () => {
         await accessibilityHandler.before('session123')
         expect(_getCapabilityValueSpy).toBeCalledTimes(3)
         expect(validateCapsWithA11ySpy).toBeCalledTimes(1)
+    })
+
+    it('sets the mobile script timeout after validating caps', async () => {
+        vi.spyOn(accessibilityHandler, '_getCapabilityValue').mockReturnValue(true)
+        vi.spyOn(utils, 'validateCapsWithA11y').mockReturnValue(true)
+        const setMobileA11yScriptTimeoutSpy = vi.spyOn(utils, 'setMobileA11yScriptTimeout').mockResolvedValue()
+        shouldAddServiceVersionSpy.mockReturnValue(true)
+        isBrowserstackSessionSpy.mockReturnValue(true)
+        isAccessibilityAutomationSessionSpy.mockReturnValue(true)
+        await accessibilityHandler.before('session123')
+        expect(setMobileA11yScriptTimeoutSpy).toHaveBeenCalledWith(browser)
+        setMobileA11yScriptTimeoutSpy.mockRestore()
     })
 
     it('calls validateCapsWithNonBstackA11y', async () => {
@@ -778,6 +791,24 @@ describe('afterTest', () => {
         await accessibilityHandler.afterTest('suite title', { parent: 'parent', title: 'test' } as any)
 
         expect(executeAsyncSpy).toBeCalledTimes(0)
+    })
+
+    it('saves with the mobile args and checks the save result', async () => {
+        const mobileArgs = { is_mobile_session: true, thTestRunUuid: 'run-uuid' }
+        const getMobileA11yScriptArgsSpy = vi.spyOn(utils, 'getMobileA11yScriptArgs').mockReturnValue(mobileArgs)
+        const logRejectedMobileSaveSpy = vi.spyOn(utils, 'logRejectedMobileSave')
+        vi.spyOn(utils, 'isAppAccessibilityAutomationSession').mockReturnValue(false)
+        const saveResult = { success: false, msg: 'No intermediate results found for mobile session' }
+        const executeSpy = vi.spyOn((browser as WebdriverIO.Browser), 'execute').mockResolvedValueOnce(saveResult)
+        const saveScriptSpy = vi.spyOn(AccessibilityScripts, 'saveTestResults', 'get').mockReturnValue('saveScript')
+
+        await accessibilityHandler['sendTestStopEvent'](browser as WebdriverIO.Browser, { thTestRunUuid: 'run-uuid' } as any)
+
+        expect(String(executeSpy.mock.calls[0][0])).toContain('"is_mobile_session":true')
+        expect(logRejectedMobileSaveSpy).toHaveBeenCalledWith(saveResult)
+        getMobileA11yScriptArgsSpy.mockRestore()
+        logRejectedMobileSaveSpy.mockRestore()
+        saveScriptSpy.mockRestore()
     })
 
     it('should throw error in after test if exception occurs', async () => {

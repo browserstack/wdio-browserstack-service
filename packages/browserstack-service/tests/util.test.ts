@@ -1447,7 +1447,7 @@ describe('validateCapsWithA11y', () => {
             process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
             expect(validateCapsWithA11y('Samsung S22', { browser_name: 'samsung', platform_name: 'android' })).toEqual(false)
             expect(logInfoMock.mock.calls[0][0])
-                .toContain('Accessibility Automation will run only on Desktop browsers, Chrome on Android or Safari on iPhone.')
+                .toContain('Accessibility Automation will run only on Desktop browsers, Chrome on Android or Safari on iPhone with iOS 18 or later.')
         })
 
         it('returns false for Chrome on Android when the group has no mobile scanning', async () => {
@@ -1463,6 +1463,66 @@ describe('validateCapsWithA11y', () => {
             expect(validateCapsWithA11y('Google Pixel 7', { browser_name: 'chrome', platform_name: 'LINUX' })).toEqual(true)
             expect(utils.getMobileA11yScriptArgs()).toEqual({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
             expect(utils.getMobileResultsArg()).toEqual({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
+        })
+
+        it('rejects iPhones before iOS 18 from the session or the requested version', async () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            expect(validateCapsWithA11y('iPhone 15', { browser_name: 'safari', platform_name: 'ios', platform_version: '17.5' })).toEqual(false)
+            expect(logInfoMock.mock.calls[0][0]).toContain('Safari on iPhone with iOS 18 or later.')
+            expect(validateCapsWithA11y('iPhone 15', { browser_name: 'safari', platform_name: 'ios', os_version: '17' })).toEqual(false)
+            expect(validateCapsWithA11y('iPhone 16', { browser_name: 'safari', platform_name: 'ios', os_version: '18' })).toEqual(true)
+            expect(validateCapsWithA11y('Google Pixel 7', { browser_name: 'chrome', platform_name: 'android', platform_version: '13.0' })).toEqual(true)
+        })
+
+        it('matches the Node SDK platform pairs', async () => {
+            expect(utils.isMobileA11yPlatformPair('android', 'chromium')).toEqual(true)
+            expect(utils.isMobileA11yPlatformPair('ios', 'playwright-webkit', 'iPhone 17', '26')).toEqual(true)
+            expect(utils.isMobileA11yPlatformPair('ios', 'iphone', 'iPhone 17')).toEqual(true)
+            expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 14', '16')).toEqual(false)
+            expect(utils.isMobileA11yPlatformPair('ios', 'chrome', 'iPhone 17', '26')).toEqual(false)
+        })
+
+        it('passes the mobile args to the scan, results and summary scripts', async () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            process.env.TEST_ANALYTICS_ID = 'test-run-uuid'
+            process.env.BSTACK_A11Y_JWT = 'abc'
+            const spies = [
+                vi.spyOn(AccessibilityScripts, 'performScan', 'get').mockReturnValue('scanScript'),
+                vi.spyOn(AccessibilityScripts, 'getResults', 'get').mockReturnValue('resultsScript'),
+                vi.spyOn(AccessibilityScripts, 'getResultsSummary', 'get').mockReturnValue('summaryScript')
+            ]
+            try {
+                const browser = { execute: vi.fn().mockResolvedValue({}), executeAsync: vi.fn().mockResolvedValue({}) } as unknown as WebdriverIO.Browser
+                const mobileArgs = JSON.stringify({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
+                validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })
+
+                await utils.performA11yScan(false, browser, true, true, 'click')
+                await utils.getA11yResults(false, browser, true, true)
+                await utils.getA11yResultsSummary(false, browser, true, true)
+
+                const scripts = vi.mocked(browser.execute).mock.calls.map((call) => String(call[0]))
+                expect(scripts.find((s) => s.includes('scanScript'))).toContain(JSON.stringify({ method: 'click', is_mobile_session: true, thTestRunUuid: 'test-run-uuid' }))
+                expect(scripts.find((s) => s.includes('resultsScript'))).toContain(mobileArgs)
+                expect(scripts.find((s) => s.includes('summaryScript'))).toContain(mobileArgs)
+            } finally {
+                spies.forEach((spy) => spy.mockRestore())
+                delete process.env.BSTACK_A11Y_JWT
+            }
+        })
+
+        it('logs a rejected save only for a mobile session', async () => {
+            const errorSpy = vi.spyOn(log, 'error')
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })
+            utils.logRejectedMobileSave({ success: false, msg: 'No intermediate results' })
+            expect(errorSpy).toHaveBeenCalledTimes(1)
+            expect(errorSpy.mock.calls[0][0]).toContain('No intermediate results')
+            utils.logRejectedMobileSave({ success: true })
+            utils.logRejectedMobileSave(undefined)
+            validateCapsWithA11y(undefined, { browser_name: 'chrome' })
+            utils.logRejectedMobileSave({ success: false, msg: 'desktop' })
+            expect(errorSpy).toHaveBeenCalledTimes(1)
+            errorSpy.mockRestore()
         })
 
         it('allows Safari on iPhone, and never on iPad', async () => {

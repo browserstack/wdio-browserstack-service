@@ -183,6 +183,7 @@ export default class AccessibilityModule extends BaseModule {
                 browser_version: browserCaps?.browserVersion || 'latest',
                 platform_name: browserCaps?.platformName,
                 platform_version: this.getCapability(browserCaps, 'appium:platformVersion', 'platformVersion'),
+                os_version: this.getCapability(inputCaps, 'osVersion', 'os_version'),
             }
 
             // App Automate sessions must run the app-accessibility flow, not the
