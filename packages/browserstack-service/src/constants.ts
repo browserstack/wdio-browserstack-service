@@ -164,15 +164,6 @@ export const FUNNEL_INSTRUMENTATION_URL = 'https://api.browserstack.com/sdk/v1/e
 
 export const EDS_URL = 'https://eds.browserstack.com'
 
-export const SUPPORTED_BROWSERS_FOR_AI = ['chrome', 'microsoftedge', 'firefox']
-
-export const TCG_URL = 'https://tcg.browserstack.com'
-
-export const TCG_INFO = {
-    tcgRegion: 'use',
-    tcgUrl: TCG_URL,
-}
-
 // Smart Selection Mode Constants
 export const SMART_SELECTION_MODE_RELEVANT_FIRST = 'relevantFirst'
 export const SMART_SELECTION_MODE_RELEVANT_ONLY = 'relevantOnly'
@@ -181,9 +172,6 @@ export const SMART_SELECTION_MODE_RELEVANT_ONLY = 'relevantOnly'
 
 // To store the JWT token returned the session launch
 export const BROWSERSTACK_TESTHUB_JWT = 'BROWSERSTACK_TESTHUB_JWT'
-
-// To store tcg auth result for selfHealing feature:
-export const BSTACK_TCG_AUTH_RESULT = 'BSTACK_TCG_AUTH_RESULT'
 
 // To store the setting of whether to send screenshots or not
 export const TESTOPS_SCREENSHOT_ENV = 'BS_TESTOPS_ALLOW_SCREENSHOTS'

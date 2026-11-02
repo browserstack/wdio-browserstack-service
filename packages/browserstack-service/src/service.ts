@@ -30,7 +30,6 @@ import Listener from './testOps/listener.js'
 import { saveWorkerData } from './data-store.js'
 import UsageStats from './testOps/usageStats.js'
 import { shouldProcessEventForTesthub } from './testHub/utils.js'
-import AiHandler from './ai-handler.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import { EVENTS } from './instrumentation/performance/constants.js'
@@ -218,17 +217,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
         PerformanceTester.browser = this._browser
 
         UploadAttachmentModule.installNoopFallback(this._browser)
-
-        // Healing Support:
-        if (!isBrowserstackSession(this._browser)) {
-            try {
-                await AiHandler.selfHeal(this._options, caps, this._browser)
-            } catch (err) {
-                if (this._options.selfHeal === true) {
-                    BStackLogger.warn(`Error while setting up self-healing: ${err}. Disabling healing for this session.`)
-                }
-            }
-        }
 
         // Ensure capabilities are not null in case of multiremote
 
