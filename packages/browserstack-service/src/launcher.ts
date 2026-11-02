@@ -26,7 +26,8 @@ import {
     BROWSERSTACK_OBSERVABILITY,
     WDIO_NAMING_PREFIX,
     BROWSERSTACK_TEST_REPORTING,
-    TEST_REPORTING_PROJECT_NAME
+    TEST_REPORTING_PROJECT_NAME,
+    SERVER_SDK_CONFIG_KEY
 } from './constants.js'
 import {
     launchTestSession,
@@ -43,7 +44,6 @@ import {
     isBrowserstackInfra,
     uploadLogs,
     ObjectsAreEqual, getBasicAuthHeader,
-    isValidCapsForHealing,
     getBooleanValueFromString,
     validateCapsWithNonBstackA11y,
     mergeChromeOptions,
@@ -61,7 +61,6 @@ import type Percy from './Percy/Percy.js'
 import BrowserStackConfig from './config.js'
 import { setupExitHandlers } from './exitHandler.js'
 import { sendFinish, sendStart } from './instrumentation/funnelInstrumentation.js'
-import AiHandler from './ai-handler.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import UploadAttachmentModule from './cli/modules/uploadAttachmentModule.js'
@@ -411,6 +410,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 CLIUtils.setFrameworkDetail(WDIO_NAMING_PREFIX + config.framework, 'WebdriverIO')
                 const binconfig = CLIUtils.getBinConfig(config, capabilities as Capabilities.RequestedStandaloneCapabilities | Capabilities.RequestedStandaloneCapabilities[], this._options, this._buildTag)
                 await BrowserstackCLI.getInstance().bootstrap(this._options, config, binconfig)
+                this._applyServerConfigToRunner(config, capabilities as WebdriverIO.Capabilities[])
                 BStackLogger.debug(`Is CLI running ${BrowserstackCLI.getInstance().isRunning()}`)
                 PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.START)
             }
@@ -421,28 +421,9 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.INIT)
 
-        // Setting up healing for those sessions where we don't add the service version capability as it indicates that the session is not being run on BrowserStack
-        if (!shouldAddServiceVersion(this._config, this._options.testObservability, capabilities as Capabilities.BrowserStackCapabilities)) {
-            try {
-                if ((capabilities as Capabilities.BrowserStackCapabilities).browserName) {
-                    capabilities = await AiHandler.setup(this._config, this.browserStackConfig, this._options, capabilities as WebdriverIO.Capabilities, false)
-                } else if ( Array.isArray(capabilities)){
-
-                    for (let i = 0; i < capabilities.length; i++) {
-                        if ((capabilities[i] as Capabilities.BrowserStackCapabilities).browserName) {
-                            capabilities[i] = await AiHandler.setup(this._config, this.browserStackConfig, this._options, capabilities[i] as WebdriverIO.Capabilities, false)
-                        }
-                    }
-
-                } else if (isValidCapsForHealing(capabilities)) {
-                    // setting up healing in case capabilities.xyz.capabilities.browserName where xyz can be anything:
-                    capabilities = await AiHandler.setup(this._config, this.browserStackConfig, this._options, capabilities, true)
-                }
-            } catch (err) {
-                if (this._options.selfHeal === true) {
-                    BStackLogger.warn(`Error while setting up Browserstack healing Extension ${err}. Disabling healing for this session.`)
-                }
-            }
+        // The client-side healing extension this option drove off-infra has been removed; on BrowserStack, healing comes from the browserstack.selfHeal capability instead.
+        if (this._options.selfHeal === true && !shouldAddServiceVersion(this._config, this._options.testObservability, capabilities as Capabilities.BrowserStackCapabilities)) {
+            BStackLogger.warn('selfHeal has no effect for sessions not running on BrowserStack infrastructure. Self-healing on BrowserStack is driven by the browserstack.selfHeal capability.')
         }
 
         /**
@@ -1086,6 +1067,37 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }
         } catch (error) {
             BStackLogger.debug(`Exception while retrieving capability value. Error - ${error}`)
+        }
+    }
+
+    /**
+     * The runner schedules workers after onPrepare from each capability's wdio:maxInstances and
+     * config.maxInstances, so a server parallelsPerPlatform is mapped onto them here, and server
+     * platforms onto the capability at the same index. Platforms the server appends have no
+     * capability and stay inert.
+     */
+    _applyServerConfigToRunner(config: Options.Testrunner, capabilities: WebdriverIO.Capabilities[]) {
+        const cli = BrowserstackCLI.getInstance()
+        const keys = cli.serverConfigKeys
+        if (!keys.length || !Array.isArray(capabilities)) {
+            return
+        }
+        if (keys.includes('accessibility')) {
+            this._accessibilityAutomation = isTrue(this._options.accessibility)
+        }
+        if (keys.includes('platforms')) {
+            const platforms = (cli.getConfig()[SERVER_SDK_CONFIG_KEY] as Record<string, unknown> | undefined)?.platforms
+            if (Array.isArray(platforms)) {
+                capabilities.forEach((capability, index) => CLIUtils.applyServerPlatform(capability as Record<string, unknown>, platforms[index]))
+            }
+        }
+        const parallelsPerPlatform = Number((this._options as Record<string, unknown>).parallelsPerPlatform)
+        if (keys.includes('parallelsPerPlatform') && Number.isInteger(parallelsPerPlatform) && parallelsPerPlatform > 0) {
+            capabilities.forEach((capability) => {
+                capability['wdio:maxInstances'] = parallelsPerPlatform
+            })
+            config.maxInstances = Math.max(config.maxInstances || 0, capabilities.length * parallelsPerPlatform)
+            BStackLogger.info(`Server parallelsPerPlatform=${parallelsPerPlatform}: wdio:maxInstances=${parallelsPerPlatform} per capability, maxInstances=${config.maxInstances}`)
         }
     }
 
