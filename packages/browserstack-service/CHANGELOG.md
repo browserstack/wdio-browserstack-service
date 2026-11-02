@@ -1,5 +1,17 @@
 # @wdio/browserstack-service
 
+## 9.42.1
+
+### Patch Changes
+
+- 3ec281b: - Removed the deprecated client-side self-healing extension. Self-healing on BrowserStack continues to work unchanged via the `browserstack.selfHeal` capability.
+
+## 9.42.0
+
+### Minor Changes
+
+- 481e05c: - Server-side configuration overrides from BrowserStack now take effect for WebdriverIO builds, for example `parallelsPerPlatform` (parallel sessions per capability). Your wdio.conf remains the fallback.
+
 ## 9.41.0
 
 ### Minor Changes
