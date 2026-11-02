@@ -340,7 +340,7 @@ export const  processAccessibilityResponse = (response: LaunchResponse | StartBi
     }
 
     if (response.accessibility.options) {
-        const { accessibilityToken, pollingTimeout, scannerVersion, scannerProcessingTimeout, isMobileScanningEnabledForGroup, isIosSafariScanningEnabledForGroup } = jsonifyAccessibilityArray(response.accessibility.options.capabilities, 'name', 'value')
+        const { accessibilityToken, pollingTimeout, scannerVersion, scannerProcessingTimeout, isMobileScanningEnabledForGroup: mobileScanningFlag } = jsonifyAccessibilityArray(response.accessibility.options.capabilities, 'name', 'value')
         const result = jsonifyAccessibilityArray(response.accessibility.options.capabilities, 'name', 'value')
         const scriptsJson = {
             'scripts': jsonifyAccessibilityArray(response.accessibility.options.scripts, 'name', 'command'),
@@ -362,10 +362,7 @@ export const  processAccessibilityResponse = (response: LaunchResponse | StartBi
             process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT = scannerProcessingTimeout
         }
         // Group entitlements for mobile web a11y; set in the launcher, so workers inherit them.
-        process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isMobileScanningEnabledForGroup))
-        if (isIosSafariScanningEnabledForGroup !== undefined) {
-            process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isIosSafariScanningEnabledForGroup))
-        }
+        process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = String(isTrue(mobileScanningFlag))
         if (scriptsJson) {
             AccessibilityScripts.update(scriptsJson)
             AccessibilityScripts.store()
@@ -503,21 +500,26 @@ export const validateCapsWithAppA11y = (platformMeta?: { [key: string]: any; }) 
     return true
 }
 
+export const MOBILE_PLATFORM_UNSUPPORTED_WARNING = 'Accessibility Automation will run only on Desktop browsers, Chrome on Android or Safari on iPhone with iOS 18 or later.'
+
 export const MOBILE_SCANNING_DISABLED_WARNING = 'Mobile Accessibility Automation is not enabled for your account. Accessibility scans will be skipped on mobile sessions. Contact BrowserStack to enable mobile accessibility scanning.'
 
 export const isMobileScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP === 'true'
 
-// On unless the backend opts the group out, so backends that don't send the flag still scan iOS.
-export const isIosSafariScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_IOS_SAFARI_SCANNING_ENABLED_FOR_GROUP !== 'false'
+// The scanner fails inside Safari before iOS 18, so older iPhones are rejected when the version is known.
+export const MIN_IOS_MAJOR_VERSION = 18
 
-/* Mobile browsers accessibility scans in-page: Chrome on Android, and Safari on iPhone (not iPad) unless the group is opted out. */
-export const isMobileA11yPlatformPair = (platformName?: string, browserName?: string, deviceName?: string) => {
+/* Mobile browsers accessibility scans in-page: Chrome on Android, and Safari on iPhone (not iPad), as in the Node SDK. */
+export const isMobileA11yPlatformPair = (platformName?: string, browserName?: string, deviceName?: string, osVersion?: string | number) => {
     const platform = String(platformName || '').toLowerCase()
     const browser = String(browserName || '').toLowerCase()
     if (platform === 'android') {
-        return browser.includes('chrome')
+        return browser.includes('chrom')
     }
-    return platform === 'ios' && /safari|iphone|webkit/.test(browser) && !/ipad/i.test(String(deviceName || '')) && isIosSafariScanningEnabledForGroup()
+    if (parseInt(String(osVersion || ''), 10) < MIN_IOS_MAJOR_VERSION) {
+        return false
+    }
+    return platform === 'ios' && /safari|iphone|webkit/.test(browser) && !/ipad/i.test(String(deviceName || ''))
 }
 
 // One driver session per worker process, so the worker's mobile state is module-level.
@@ -536,7 +538,8 @@ export const logRejectedMobileSave = (results: unknown) => {
 }
 
 /* Desktop result scripts take no argument; mobile ones need the session flag and run uuid. */
-export const getMobileResultsArg = () => (mobileA11ySession ? getMobileA11yScriptArgs() : undefined)
+export const executeA11yResultsScript = <T>(browser: WebdriverIO.Browser, script: string): Promise<T> =>
+    (mobileA11ySession ? browser.executeAsync(script, getMobileA11yScriptArgs()) : browser.executeAsync(script)) as Promise<T>
 
 /* The backend's scannerProcessingTimeout (seconds) from build start; 30s when it isn't sent, as in the Node SDK. */
 export const getMobileA11yScriptTimeoutMs = () => (parseInt(process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT || '', 10) || 30) * 1000
@@ -561,8 +564,10 @@ export const validateCapsWithA11y = (deviceName?: any, platformMeta?: { [key: st
             // Session caps can report the Appium host OS (e.g. LINUX) as platformName; the device name tells iOS apart.
             const reportedPlatform = String(platformMeta?.platform_name || '').toLowerCase()
             const platform = ['android', 'ios'].includes(reportedPlatform) ? reportedPlatform : (/iphone|ipad/i.test(String(deviceName)) ? 'ios' : 'android')
-            if (!isMobileA11yPlatformPair(platform, platformMeta?.browser_name, deviceName)) {
-                BStackLogger.warn('Accessibility Automation will run only on Desktop browsers, Chrome on Android or Safari on iPhone.')
+            // iOS session caps may not carry the OS version; os_version is the requested one.
+            const osVersion = platformMeta?.platform_version || platformMeta?.os_version
+            if (!isMobileA11yPlatformPair(platform, platformMeta?.browser_name, deviceName, osVersion)) {
+                BStackLogger.warn(MOBILE_PLATFORM_UNSUPPORTED_WARNING)
                 return false
             }
             if (!isMobileScanningEnabledForGroup()) {
@@ -705,10 +710,7 @@ export const getA11yResults = PerformanceTester.measureWrapper(PERFORMANCE_SDK_E
     try {
         BStackLogger.debug('Performing scan before getting results')
         await performA11yScan(isAppAutomate, browser, isBrowserStackSession, isAccessibility)
-        const mobileArg = getMobileResultsArg()
-        const results: Array<{ [key: string]: any; }> = await (mobileArg
-            ? (browser as WebdriverIO.Browser).executeAsync(AccessibilityScripts.getResults as string, mobileArg)
-            : (browser as WebdriverIO.Browser).executeAsync(AccessibilityScripts.getResults as string))
+        const results = await executeA11yResultsScript<Array<{ [key: string]: any; }>>(browser, AccessibilityScripts.getResults as string)
         return results
     } catch (error: any) {
         BStackLogger.error('No accessibility results were found.')
@@ -782,10 +784,7 @@ export const getA11yResultsSummary = PerformanceTester.measureWrapper(PERFORMANC
     try {
         BStackLogger.debug('Performing scan before getting results summary')
         await performA11yScan(isAppAutomate, browser, isBrowserStackSession, isAccessibility)
-        const mobileArg = getMobileResultsArg()
-        const summaryResults: { [key: string]: any; } = await (mobileArg
-            ? (browser as WebdriverIO.Browser).executeAsync(AccessibilityScripts.getResultsSummary as string, mobileArg)
-            : (browser as WebdriverIO.Browser).executeAsync(AccessibilityScripts.getResultsSummary as string))
+        const summaryResults = await executeA11yResultsScript<{ [key: string]: any; }>(browser, AccessibilityScripts.getResultsSummary as string)
         return summaryResults
     } catch (error: any) {
         BStackLogger.error(`No accessibility summary was found. Error: ${error?.message ?? util.inspect(error, { depth: 2 })}`)
