@@ -104,6 +104,7 @@ export default class WdioMochaTestFramework extends TestFramework {
     private owedBailCascades: Array<{ attempt: TestAttempt, result: Frameworks.TestResult }> = []
     /** settleTestFinishes() has run its cascades; anything later cascades inline. */
     private settled = false
+    private _suiteFile?: string
 
     /** One attempt of a test: mocha retries a test as a new runnable with `_currentRetry` + 1. */
     static attemptKey(test: Frameworks.Test): string {
@@ -129,6 +130,10 @@ export default class WdioMochaTestFramework extends TestFramework {
   */
     constructor(testFrameworks: string[], testFrameworkVersions: Record<string, string>, binSessionId: string) {
         super(testFrameworks, testFrameworkVersions, binSessionId)
+    }
+
+    setSuiteFile(filename?: string) {
+        this._suiteFile = filename
     }
 
     /**
@@ -520,7 +525,7 @@ export default class WdioMochaTestFramework extends TestFramework {
     async getTestData(instance: TestFrameworkInstance, test: Frameworks.Test) {
         const framework = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME)
         const fullTitle = getUniqueIdentifier(test, framework)
-        const filename = test.file // || this._suiteFile
+        const filename = test.file || this._suiteFile
         const scopes = getMochaTestHierarchy(test)
 
         const testData: Record<string, unknown> = {
@@ -714,7 +719,8 @@ export default class WdioMochaTestFramework extends TestFramework {
         }
 
         if (hookState === HookState.PRE) {
-            const filename = test.file
+            // root-level hooks belong to mocha's root suite, which has no file
+            const filename = test.file || this._suiteFile
             const hook: Record<string, unknown> = {
                 key,
                 [TestFrameworkConstants.KEY_HOOK_ID]: TestFramework.getState(instance, TestFrameworkConstants.KEY_HOOK_ID) || '',
