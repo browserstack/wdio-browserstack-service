@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession, isFirstNavigation } from '../../util.js'
+import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, isBrowserstackSession, isFirstNavigation } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -195,6 +195,8 @@ export default class AccessibilityModule extends BaseModule {
 
             if (this.isAppAccessibility) {
                 this.accessibility = validateCapsWithAppA11y(platformA11yMeta)
+            } else if (this.isNonBstackA11y) {
+                this.accessibility = validateCapsWithNonBstackA11y(platformA11yMeta.browser_name, platformA11yMeta.browser_version)
             } else {
                 const device = this.getCapability(inputCaps, 'deviceName')
                 const chromeOptions = this.getCapability(inputCaps, 'goog:chromeOptions') || this.getCapability(inputCaps, 'ms:edgeOptions', 'ms:edgeOptions')

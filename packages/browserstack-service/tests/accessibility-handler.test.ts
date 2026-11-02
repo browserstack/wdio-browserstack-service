@@ -181,6 +181,17 @@ describe('before', () => {
         expect(validateCapsWithNonBstackA11ySpy).toBeCalledTimes(1)
     })
 
+    it('keeps accessibility off for Edge on non-BrowserStack infra', async () => {
+        const validateCapsWithA11ySpy = vi.spyOn(utils, 'validateCapsWithA11y')
+        validateCapsWithA11ySpy.mockClear()
+        shouldAddServiceVersionSpy.mockReturnValue(false)
+        isAccessibilityAutomationSessionSpy.mockReturnValue(true)
+        accessibilityHandler['_platformA11yMeta'] = { browser_name: 'MicrosoftEdge', browser_version: 'latest' }
+        await accessibilityHandler.before('session123')
+        expect(accessibilityHandler['_accessibility']).toBe(false)
+        expect(validateCapsWithA11ySpy).not.toHaveBeenCalled()
+    })
+
     it('calls getA11yResultsSummary', async () => {
         isBrowserstackSessionSpy.mockReturnValue(true)
         isAccessibilityAutomationSessionSpy.mockReturnValue(true)

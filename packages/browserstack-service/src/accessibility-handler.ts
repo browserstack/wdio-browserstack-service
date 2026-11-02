@@ -210,13 +210,12 @@ class _AccessibilityHandler {
             (
                 this._turboscale ||
                 !shouldAddServiceVersion(this._config, this._options.testObservability)
-            ) &&
-            validateCapsWithNonBstackA11y(
+            )
+        ){
+            this._accessibility = validateCapsWithNonBstackA11y(
                 this._platformA11yMeta.browser_name as string,
                 this._platformA11yMeta?.browser_version as string
             )
-        ){
-            this._accessibility = true
         } else {
             if (isAccessibilityAutomationSession(this._accessibility) && !this.isAppAutomate) {
                 const deviceName = this._getCapabilityValue(this._caps, 'deviceName', 'device')
