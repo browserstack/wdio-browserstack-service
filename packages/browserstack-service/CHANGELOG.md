@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.42.3
+
+### Patch Changes
+
+- c903651: - Fixed a warning that could incorrectly tell users their BrowserStack session was not running on BrowserStack infrastructure.
+
 ## 9.42.2
 
 ### Patch Changes
