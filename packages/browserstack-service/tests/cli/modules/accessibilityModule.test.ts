@@ -231,34 +231,33 @@ describe('AccessibilityModule', () => {
             expect(call?.[3]).toBe(false)
         })
 
-        it('skips the scan before the first url of a session', async () => {
+        it('scans before the first url of an app session', async () => {
             withA11yCaps()
             accessibilityModule.isAppAccessibility = true
             await accessibilityModule.onBeforeExecute()
             vi.mocked(isFirstNavigation).mockReturnValueOnce(true)
             const orig = vi.fn().mockResolvedValue('ok')
 
-            await (accessibilityModule as any).commandWrapper({ name: 'url', class: 'Browser' }, orig, 'https://example.com')
+            await (accessibilityModule as any).commandWrapper({ name: 'url', class: 'Browser' }, orig, 'myapp://home')
 
-            expect(isFirstNavigation).toHaveBeenCalledWith('session-w', 'url')
+            expect(isFirstNavigation).not.toHaveBeenCalled()
             expect(orig).toHaveBeenCalled()
-            expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
+            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('url', undefined, null, true)
         })
 
         it('records the first url even while scanning is off, and scans a later url', async () => {
             withA11yCaps()
-            accessibilityModule.isAppAccessibility = true
             await accessibilityModule.onBeforeExecute()
             const fireUrl = () => (accessibilityModule as any).commandWrapper({ name: 'url', class: 'Browser' }, vi.fn().mockResolvedValue('ok'), 'https://example.com')
 
             accessibilityModule.accessibilityMap.set('session-w', false)
             await fireUrl()
             expect(isFirstNavigation).toHaveBeenCalledWith('session-w', 'url')
-            expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
+            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
 
             accessibilityModule.accessibilityMap.set('session-w', true)
             await fireUrl()
-            expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('url', undefined, null, true)
+            expect(mockBrowser.executeAsync).toHaveBeenCalledWith(expect.anything(), { method: 'url' })
         })
 
         it('skips the first url and scans a later one on desktop web', async () => {

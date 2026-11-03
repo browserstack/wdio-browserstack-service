@@ -1300,6 +1300,16 @@ describe('_updateObjectTypeCaps', () => {
         expect(caps.chromeBrowser.capabilities).toEqual({ 'browserstack.wdioService': pkg.version, 'browserstack.accessibilityOptions': { includeIssueType: { bestPractice: true, needsReview: true } } })
     })
 
+    it('does not run the non-BrowserStack caps check when setting accessibilityOptions', () => {
+        const spy = vi.spyOn(utils, 'validateCapsWithNonBstackA11y')
+        spy.mockClear()
+        const caps: any = [{ browserName: 'MicrosoftEdge' }]
+        const service = new BrowserstackLauncher(options as any, caps, config)
+
+        service._updateObjectTypeCaps(caps, 'accessibilityOptions', {})
+        expect(spy).not.toHaveBeenCalled()
+    })
+
     it('should set chromeOptions if capType is goog:chromeOptions and no existing options are present', () => {
         const value = { args: ['--disable-gpu'] }
         vi.spyOn(utils, 'validateCapsWithNonBstackA11y').mockImplementation(() => true)

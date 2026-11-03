@@ -192,6 +192,31 @@ describe('before', () => {
         expect(validateCapsWithA11ySpy).not.toHaveBeenCalled()
     })
 
+    it('keeps App Accessibility on when the non-BrowserStack check would apply', async () => {
+        const validateCapsWithNonBstackA11ySpy = vi.spyOn(utils, 'validateCapsWithNonBstackA11y')
+        validateCapsWithNonBstackA11ySpy.mockClear()
+        const validateCapsWithAppA11ySpy = vi.spyOn(utils, 'validateCapsWithAppA11y').mockReturnValue(true)
+        const isAppA11ySessionSpy = vi.spyOn(utils, 'isAppAccessibilityAutomationSession').mockReturnValue(true)
+        shouldAddServiceVersionSpy.mockReturnValue(false)
+        isAccessibilityAutomationSessionSpy.mockReturnValue(true)
+        accessibilityHandler['isAppAutomate'] = true
+        await accessibilityHandler.before('session123')
+        expect(validateCapsWithNonBstackA11ySpy).not.toHaveBeenCalled()
+        expect(validateCapsWithAppA11ySpy).toHaveBeenCalledTimes(1)
+        expect(accessibilityHandler['_accessibility']).toBe(true)
+        validateCapsWithAppA11ySpy.mockRestore()
+        isAppA11ySessionSpy.mockRestore()
+    })
+
+    it('turns accessibility off for Edge in legacy headless mode', async () => {
+        isAccessibilityAutomationSessionSpy.mockReturnValue(true)
+        accessibilityHandler['_platformA11yMeta'] = { browser_name: 'MicrosoftEdge', browser_version: 'latest' }
+        accessibilityHandler['_caps'] = { browserName: 'MicrosoftEdge', 'ms:edgeOptions': { args: ['--headless'] } } as any
+        vi.spyOn(accessibilityHandler as any, '_getCapabilityValue').mockImplementation((caps: any, key: string) => key === 'accessibility' ? true : caps[key])
+        await accessibilityHandler.before('session123')
+        expect(accessibilityHandler['_accessibility']).toBe(false)
+    })
+
     it('calls getA11yResultsSummary', async () => {
         isBrowserstackSessionSpy.mockReturnValue(true)
         isAccessibilityAutomationSessionSpy.mockReturnValue(true)
@@ -649,6 +674,15 @@ describe('beforeHook / afterHook (hook scans)', () => {
         expect(scanSpy).toHaveBeenCalledTimes(1)
         await fireUrl()
         expect(scanSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('scans before the first url of an app session', async () => {
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        accessibilityHandler['isAppAutomate'] = true
+        accessibilityHandler['_sessionId'] = 'session-first-nav-app'
+        AccessibilityHandler['_a11yScanSessionMap']['session-first-nav-app'] = true
+        await accessibilityHandler['commandWrapper']({ name: 'url', class: 'Browser' } as any, undefined as any, vi.fn().mockResolvedValue('ok'), 'myapp://home')
+        expect(scanSpy).toHaveBeenCalledTimes(1)
     })
 
     it('_getParamsForAppAccessibility puts the hook uuid on the scan payload as thHookRunUuid', () => {

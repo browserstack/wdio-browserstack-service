@@ -206,7 +206,7 @@ class _AccessibilityHandler {
 
         //checks for running ALLY on non-bstack infra
         if (
-            isAccessibilityAutomationSession(this._accessibility) &&
+            isAccessibilityAutomationSession(this._accessibility) && !this.isAppAutomate &&
             (
                 this._turboscale ||
                 !shouldAddServiceVersion(this._config, this._options.testObservability)
@@ -543,7 +543,8 @@ class _AccessibilityHandler {
     private async commandWrapper (command: CommandInfo, prevImpl: Function, origFunction: Function, ...args: unknown[]) {
         const skipScanForBidiWindowCommand = AccessibilityHandler.shouldSkipScanForBidiWindowCommand(this._browser, command)
         // Recorded before the gate check, so a first url issued while scanning is off still counts.
-        const firstNavigation = isFirstNavigation(this._sessionId, command.name)
+        // App sessions start on the app's own screen, not a browser start page, so they keep that scan.
+        const firstNavigation = !this.isAppAutomate && isFirstNavigation(this._sessionId, command.name)
         if (
             this._sessionId && AccessibilityHandler._a11yScanSessionMap[this._sessionId] &&
                 !skipScanForBidiWindowCommand &&
