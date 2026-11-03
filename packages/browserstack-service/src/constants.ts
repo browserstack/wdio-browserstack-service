@@ -49,7 +49,6 @@ export const CLI_STOP_TIMEOUT = 3000
 export const SERVER_SDK_CONFIG_KEY = 'serverSdkConfig'
 export const SERVER_SDK_CONFIG_KEYS_KEY = 'serverSdkConfigKeys'
 export const CLI_AUTH_TOKEN_ENV = 'BROWSERSTACK_CLI_AUTH_TOKEN'
-export const CLI_AUTH_DISABLE_ENV = 'BROWSERSTACK_CLI_AUTH_DISABLE'
 export const CLI_AUTH_TOKEN_HEADER = 'x-browserstack-cli-token'
 
 export const NOT_ALLOWED_KEYS_IN_CAPS = ['includeTagsInTestingScope', 'excludeTagsInTestingScope', 'skipAppOverride', 'testManagementOptions', 'preferScenarioName', 'sessionNamePrependTopLevelSuiteTitle', 'sessionNameOmitTestTitle']
