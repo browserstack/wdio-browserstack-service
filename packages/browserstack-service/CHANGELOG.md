@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.42.2
+
+### Patch Changes
+
+- 319772c: - Fixed builds being reported as timed out on Test Reporting & Analytics when a Mocha `before` / `beforeEach` / `afterEach` hook is declared outside any `describe` block.
+
 ## 9.42.1
 
 ### Patch Changes
