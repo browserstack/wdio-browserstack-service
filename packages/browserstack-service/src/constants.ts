@@ -245,7 +245,6 @@ export const SERVER_SDK_CONFIG_KEY = 'serverSdkConfig'
 export const SERVER_SDK_CONFIG_KEYS_KEY = 'serverSdkConfigKeys'
 export const BINARY_BUSY_ERROR_CODES = ['ETXTBSY', 'EBUSY']
 export const CLI_AUTH_TOKEN_ENV = 'BROWSERSTACK_CLI_AUTH_TOKEN'
-export const CLI_AUTH_DISABLE_ENV = 'BROWSERSTACK_CLI_AUTH_DISABLE'
 export const CLI_AUTH_TOKEN_HEADER = 'x-browserstack-cli-token'
 export const MAX_SPAWN_RETRIES = 3
 export const SPAWN_RETRY_DELAY_MS = 1000
