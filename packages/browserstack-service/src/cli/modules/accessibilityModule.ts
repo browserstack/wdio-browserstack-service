@@ -571,7 +571,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     const results = await (browser as WebdriverIO.Browser).executeAsync(
                         this.scriptInstance.performScan as string,
-                        { 'method': commandName || '', ...getMobileA11yScriptArgs() }
+                        { 'method': commandName || '', ...getMobileA11yScriptArgs(isGlobalHook) }
                     )
                     return (results as Record<string, unknown> | undefined)
                 } catch (err: unknown) {

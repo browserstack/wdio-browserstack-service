@@ -504,7 +504,9 @@ export const isMobileA11yPlatformPair = (platformName?: string, browserName?: st
     if (platform === 'android') {
         return browser.includes('chrom')
     }
-    if (parseInt(String(osVersion || ''), 10) < MIN_IOS_MAJOR_VERSION) {
+    // Read the major from strings like "iOS 17" too; a version that isn't sent stays allowed, as in the Node SDK.
+    const iosMajor = parseInt((String(osVersion ?? '').match(/\d+/) || [''])[0], 10)
+    if (iosMajor < MIN_IOS_MAJOR_VERSION) {
         return false
     }
     return platform === 'ios' && /safari|iphone|webkit/.test(browser) && !/ipad/i.test(String(deviceName || ''))
@@ -525,9 +527,9 @@ export const isBeforeFirstMobileNavigation = (commandName?: string) => {
     return true
 }
 
-/* Mobile scans post results from the page, so the scan, results and save scripts need the session flag and run uuid. */
-export const getMobileA11yScriptArgs = (): Record<string, unknown> => (mobileA11ySession
-    ? { 'is_mobile_session': true, 'thTestRunUuid': process.env.TEST_ANALYTICS_ID }
+/* Mobile scans post results from the page, so the scan, results and save scripts need the session flag and run uuid. A global-hook scan belongs to no test, as in _getParamsForAppAccessibility. */
+export const getMobileA11yScriptArgs = (isGlobalHook?: boolean): Record<string, unknown> => (mobileA11ySession
+    ? { 'is_mobile_session': true, 'thTestRunUuid': isGlobalHook ? undefined : process.env.TEST_ANALYTICS_ID }
     : {})
 
 /* The mobile save reports failure in its result instead of throwing, so surface it. */
@@ -723,7 +725,7 @@ export const performA11yScan = async (isAppAutomate: boolean, browser: Webdriver
             return ( results as { [key: string]: any; } | undefined )
         }
         if (AccessibilityScripts.performScan) {
-            const results = await executeAccessibilityScript(browser, AccessibilityScripts.performScan, { method: commandName || '', ...getMobileA11yScriptArgs() })
+            const results = await executeAccessibilityScript(browser, AccessibilityScripts.performScan, { method: commandName || '', ...getMobileA11yScriptArgs(isGlobalHook) })
             return ( results as { [key: string]: unknown; } | undefined )
         }
         BStackLogger.error('AccessibilityScripts.performScan is null')

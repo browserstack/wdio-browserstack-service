@@ -220,6 +220,16 @@ describe('AccessibilityModule', () => {
             expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, null, true)
         })
 
+        it('marks a web scan with no hook run and no test as a global-hook scan', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = false
+            await accessibilityModule.onBeforeExecute()
+
+            await fireWrappedCommand()
+
+            expect(getMobileA11yScriptArgs).toHaveBeenCalledWith(true)
+        })
+
         it('keeps the test run uuid once a framework hook is running', async () => {
             withA11yCaps()
             accessibilityModule.isAppAccessibility = true

@@ -1494,6 +1494,25 @@ describe('validateCapsWithA11y', () => {
             expect(validateCapsWithA11y('Google Pixel 7', { browser_name: 'chrome', platform_name: 'android', platform_version: '13.0' })).toEqual(true)
         })
 
+        it('reads the iOS major from any version string and allows 18 and later', async () => {
+            expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 15', 'iOS 17')).toEqual(false)
+            expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 15', 17)).toEqual(false)
+            expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 16', '18.0')).toEqual(true)
+            expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 17', 'iOS 26.1')).toEqual(true)
+            expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 17', 26)).toEqual(true)
+            // not sent at all: allowed, as in the Node SDK
+            expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 17', '')).toEqual(true)
+            expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 17', 'latest')).toEqual(true)
+        })
+
+        it('leaves the test run uuid out of a global-hook scan', async () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            process.env.TEST_ANALYTICS_ID = 'test-run-uuid'
+            expect(validateCapsWithA11y('Google Pixel 7', { browser_name: 'chrome', platform_name: 'android' })).toEqual(true)
+            expect(utils.getMobileA11yScriptArgs(true)).toEqual({ is_mobile_session: true, thTestRunUuid: undefined })
+            expect(utils.getMobileA11yScriptArgs(false)).toEqual({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
+        })
+
         it('matches the Node SDK platform pairs', async () => {
             expect(utils.isMobileA11yPlatformPair('android', 'chromium')).toEqual(true)
             expect(utils.isMobileA11yPlatformPair('ios', 'playwright-webkit', 'iPhone 17', '26')).toEqual(true)
