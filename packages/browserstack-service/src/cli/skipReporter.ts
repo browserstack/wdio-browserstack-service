@@ -32,6 +32,23 @@ const reportedSkips = new Set<string>()
 // tracker's single mutable per-worker instance — serialize every report through one chain
 let reportChain: Promise<void> = Promise.resolve()
 
+/**
+ * Queue a report on the one chain every report wdio may not await goes through, so reports never
+ * interleave on the tracker's per-worker tracked-instance slot. Also used by the reporter's `fail`
+ * (SDK-7843).
+ */
+export function enqueueReport(work: () => Promise<void>, what: string): Promise<void> {
+    reportChain = reportChain.then(work).catch((err: unknown) => {
+        BStackLogger.debug(`Failed reporting ${what}: ${err}`)
+    })
+    return reportChain
+}
+
+/** Wait for every report queued so far; service.after() calls this before marking the session. */
+export function drainSkipReports(): Promise<void> {
+    return reportChain
+}
+
 export function markTestStarted(identifier: string) {
     startedTests.add(identifier)
 }
@@ -42,17 +59,14 @@ export function reportSkippedTest(framework: TestFramework, identifier: string, 
     }
     reportedSkips.add(identifier)
     const result = { passed: false, skipped: true } as unknown as Frameworks.TestResult
-    reportChain = reportChain.then(async () => {
+    return enqueueReport(async () => {
         // LOG_REPORT/POST is what loads the result into the instance (loadTestResult is
         // gated on it, not on TEST/POST) — same sequence afterTest uses
         await framework.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test })
         await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle })
         await framework.trackEvent(TestFrameworkState.LOG_REPORT, HookState.POST, { test, result })
         await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, { test, result, suiteTitle })
-    }).catch((err: unknown) => {
-        BStackLogger.debug(`Failed reporting skipped test '${identifier}': ${err}`)
-    })
-    return reportChain
+    }, `skipped test '${identifier}'`)
 }
 
 /**
