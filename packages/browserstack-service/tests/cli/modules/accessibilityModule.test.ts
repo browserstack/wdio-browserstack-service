@@ -41,7 +41,8 @@ vi.mock('../../../src/util.js', () => ({
     getMobileA11yScriptArgs: vi.fn().mockReturnValue({}),
     getMobileResultsArg: vi.fn().mockReturnValue(undefined),
     logRejectedMobileSave: vi.fn(),
-    setMobileA11yScriptTimeout: vi.fn()
+    setMobileA11yScriptTimeout: vi.fn(),
+    isBeforeFirstMobileNavigation: vi.fn().mockReturnValue(false)
 }))
 
 vi.mock('../../../src/cli/grpcClient.js', () => ({
@@ -56,7 +57,7 @@ vi.mock('../../../src/cli/grpcClient.js', () => ({
 }))
 
 import AccessibilityModule from '../../../src/cli/modules/accessibilityModule.js'
-import { validateCapsWithA11y, validateCapsWithAppA11y, _getParamsForAppAccessibility, shouldScanTestForAccessibility, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout } from '../../../src/util.js'
+import { validateCapsWithA11y, validateCapsWithAppA11y, _getParamsForAppAccessibility, shouldScanTestForAccessibility, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout, isBeforeFirstMobileNavigation } from '../../../src/util.js'
 import accessibilityScripts from '../../../src/scripts/accessibility-scripts.js'
 import TestFramework from '../../../src/cli/frameworks/testFramework.js'
 import AutomationFramework from '../../../src/cli/frameworks/automationFramework.js'
@@ -243,6 +244,20 @@ describe('AccessibilityModule', () => {
 
             // the command still runs; only the scan is skipped
             expect(orig).toHaveBeenCalled()
+            expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
+        })
+
+        it('skips the scan before a mobile session first navigates, but still runs the command', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            vi.mocked(isBeforeFirstMobileNavigation).mockReturnValue(true)
+            const orig = vi.fn().mockResolvedValue('ok')
+
+            await (accessibilityModule as any).commandWrapper({ name: 'url', class: 'Browser' }, orig, 'https://example.com')
+
+            expect(isBeforeFirstMobileNavigation).toHaveBeenCalledWith('url')
+            expect(orig).toHaveBeenCalledWith('https://example.com')
             expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
         })
 

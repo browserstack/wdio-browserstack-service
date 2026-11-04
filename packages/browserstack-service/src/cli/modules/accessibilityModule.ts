@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout } from '../../util.js'
+import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout, isBeforeFirstMobileNavigation } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -308,7 +308,9 @@ export default class AccessibilityModule extends BaseModule {
                 }
 
                 // Perform accessibility scan before command if script is available
-                if (
+                if (isBeforeFirstMobileNavigation(command.name)) {
+                    this.logger.debug(`Skipping accessibility scan before the test's first navigation (${command.name})`)
+                } else if (
                     !command.name.includes('execute') ||
                     !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
                 ) {
@@ -590,7 +592,7 @@ export default class AccessibilityModule extends BaseModule {
                 return
             }
 
-            if (this.accessibilityMap.get(sessionId)) {
+            if (this.accessibilityMap.get(sessionId) && !isBeforeFirstMobileNavigation()) {
                 this.logger.debug('Performing scan before saving results')
                 await this.performScanCli(browser)
             }

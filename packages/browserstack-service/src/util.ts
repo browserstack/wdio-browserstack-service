@@ -512,6 +512,18 @@ export const isMobileA11yPlatformPair = (platformName?: string, browserName?: st
 
 // One driver session per worker process, so the worker's mobile state is module-level.
 let mobileA11ySession = false
+let mobileA11yNavigated = false
+
+/* A mobile session opens on the device's own start page (Appium's docs on iPhone, a blank page on Android), so automatic scans wait for the test's first navigation, as in the Node SDK. */
+export const isBeforeFirstMobileNavigation = (commandName?: string) => {
+    if (!mobileA11ySession || mobileA11yNavigated) {
+        return false
+    }
+    if (commandName === 'url' || commandName === 'navigateTo') {
+        mobileA11yNavigated = true
+    }
+    return true
+}
 
 /* Mobile scans post results from the page, so the scan, results and save scripts need the session flag and run uuid. */
 export const getMobileA11yScriptArgs = (): Record<string, unknown> => (mobileA11ySession
@@ -552,6 +564,7 @@ export const setMobileA11yScriptTimeout = async (browser: WebdriverIO.Browser) =
 export const validateCapsWithA11y = (deviceName?: any, platformMeta?: { [key: string]: any; }, chromeOptions?: any) => {
     /* Check if the current driver platform is eligible for Accessibility scan */
     mobileA11ySession = false
+    mobileA11yNavigated = false
     try {
         if (deviceName) {
             // Session caps can report the Appium host OS (e.g. LINUX) as platformName; the device name tells iOS apart.

@@ -70,6 +70,7 @@ import {
     getMobileA11yScriptArgs,
     logRejectedMobileSave,
     setMobileA11yScriptTimeout,
+    isBeforeFirstMobileNavigation,
     isFalse,
     getHookType,
     frameworkSupportsHook
@@ -562,6 +563,8 @@ class _AccessibilityHandler {
             // the session is gone logs an error where main was silent.
             if (!(this._browser as WebdriverIO.Browser)?.sessionId) {
                 BStackLogger.debug('Skipping accessibility scan: the session has ended')
+            } else if (isBeforeFirstMobileNavigation(command.name)) {
+                BStackLogger.debug(`Skipping accessibility scan before the test's first navigation (${command.name})`)
             } else {
                 await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this.hasNoParent)
             }
@@ -574,7 +577,7 @@ class _AccessibilityHandler {
 
     private async sendTestStopEvent(browser: WebdriverIO.Browser, dataForExtension: TestExtensionData) {
         BStackLogger.debug('Performing scan before saving results')
-        if (AccessibilityHandler._a11yScanSessionMap[this._sessionId as string]) {
+        if (AccessibilityHandler._a11yScanSessionMap[this._sessionId as string] && !isBeforeFirstMobileNavigation()) {
             await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.PERFORM_SCAN, async () => {
                 await performA11yScan(this.isAppAutomate, browser, true, true)
             }, { command: 'afterTest' })()

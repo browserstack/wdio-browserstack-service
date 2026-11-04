@@ -1465,6 +1465,26 @@ describe('validateCapsWithA11y', () => {
             expect(utils.getMobileResultsArg()).toEqual({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
         })
 
+        it('skips automatic scans on a mobile session until its first navigation', async () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            expect(validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios', platform_version: '26' })).toEqual(true)
+            expect(utils.isBeforeFirstMobileNavigation()).toEqual(true)
+            expect(utils.isBeforeFirstMobileNavigation('findElement')).toEqual(true)
+            expect(utils.isBeforeFirstMobileNavigation('url')).toEqual(true)
+            expect(utils.isBeforeFirstMobileNavigation('click')).toEqual(false)
+            expect(utils.isBeforeFirstMobileNavigation()).toEqual(false)
+
+            expect(validateCapsWithA11y('Google Pixel 7', { browser_name: 'chrome', platform_name: 'android' })).toEqual(true)
+            expect(utils.isBeforeFirstMobileNavigation('navigateTo')).toEqual(true)
+            expect(utils.isBeforeFirstMobileNavigation('click')).toEqual(false)
+        })
+
+        it('never skips scans on a desktop session', async () => {
+            validateCapsWithA11y(undefined, { browser_name: 'chrome' })
+            expect(utils.isBeforeFirstMobileNavigation('url')).toEqual(false)
+            expect(utils.isBeforeFirstMobileNavigation()).toEqual(false)
+        })
+
         it('rejects iPhones before iOS 18 from the session or the requested version', async () => {
             process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
             expect(validateCapsWithA11y('iPhone 15', { browser_name: 'safari', platform_name: 'ios', platform_version: '17.5' })).toEqual(false)
