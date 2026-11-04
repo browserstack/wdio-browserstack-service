@@ -45,6 +45,7 @@ import {
     uploadLogs,
     ObjectsAreEqual, getBasicAuthHeader,
     getBooleanValueFromString,
+    validateCapsWithNonBstackA11y,
     mergeChromeOptions,
     isValidEnabledValue,
     isMultiRemoteCaps,
@@ -970,8 +971,8 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                     })
                     .forEach((capability: WebdriverIO.Capabilities) => {
                         if (
-                            capability.browserName?.toLowerCase() === 'chrome' &&
-                            capType === 'goog:chromeOptions' && value
+                            capType === 'goog:chromeOptions' && value &&
+                            validateCapsWithNonBstackA11y(capability.browserName, capability.browserVersion)
                         ) {
                             const chromeOptions =  capability['goog:chromeOptions'] as unknown as Capabilities.ChromeOptions
                             if (chromeOptions){
@@ -1017,8 +1018,11 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             } else if (typeof capabilities === 'object') {
                 Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
                     if (
-                        (caps.capabilities as WebdriverIO.Capabilities).browserName?.toLowerCase() === 'chrome' &&
-                        capType === 'goog:chromeOptions' && value
+                        capType === 'goog:chromeOptions' && value &&
+                        validateCapsWithNonBstackA11y(
+                            (caps.capabilities as WebdriverIO.Capabilities).browserName,
+                            (caps.capabilities as WebdriverIO.Capabilities).browserVersion
+                        )
                     ) {
                         const chromeOptions = (caps.capabilities as WebdriverIO.Capabilities)['goog:chromeOptions'] as unknown as Capabilities.ChromeOptions
                         if (chromeOptions) {
