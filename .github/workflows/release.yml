@@ -35,7 +35,7 @@ on:
         type: boolean
         default: false
       distTag:
-        description: 'Override the npm dist-tag for publish=true. Leave empty to use publishConfig.tag from package.json (`latest` when unset). Never `latest` from v8/v9.'
+        description: 'Optional: override the npm dist-tag for publish=true. Leave empty to use publishConfig.tag from package.json (`latest` when unset). Never `latest` from v8/v9.'
         type: string
         default: ''
 
