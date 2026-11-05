@@ -1430,6 +1430,16 @@ describe('validateCapsWithAppA11y', () => {
     })
 })
 
+describe('isFirstNavigation', () => {
+    it('is true only for the first url command of each session', () => {
+        expect(utils.isFirstNavigation('s1', 'click')).toEqual(false)
+        expect(utils.isFirstNavigation('s1', 'url')).toEqual(true)
+        expect(utils.isFirstNavigation('s1', 'url')).toEqual(false)
+        expect(utils.isFirstNavigation('s2', 'url')).toEqual(true)
+        expect(utils.isFirstNavigation(undefined, 'url')).toEqual(false)
+    })
+})
+
 describe('validateCapsWithA11y', () => {
     let logInfoMock: any
     beforeEach(() => {
@@ -1449,7 +1459,15 @@ describe('validateCapsWithA11y', () => {
 
         expect(validateCapsWithA11y(undefined, platformMeta)).toEqual(false)
         expect(logInfoMock.mock.calls[0][0])
-            .toContain('Accessibility Automation will run only on Chrome browsers.')
+            .toContain('Accessibility Automation will run only on Chrome and Edge browsers.')
+    })
+
+    it('returns true for Edge 100 or greater, and false below 100 or in legacy headless mode', async () => {
+        expect(validateCapsWithA11y(undefined, { browser_name: 'MicrosoftEdge', browser_version: '100' })).toEqual(true)
+        expect(validateCapsWithA11y(undefined, { browser_name: 'edge', browser_version: 'latest' })).toEqual(true)
+        expect(validateCapsWithA11y(undefined, { browser_name: 'msedge', browser_version: '99' })).toEqual(false)
+        expect(logInfoMock.mock.calls[0][0]).toContain('Edge browser version 100 or greater')
+        expect(validateCapsWithA11y(undefined, { browser_name: 'MicrosoftEdge' }, { args: ['--headless'] })).toEqual(false)
     })
 
     it('returns false if browser version is lesser than 94', async () => {

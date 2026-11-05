@@ -481,6 +481,19 @@ export const validateCapsWithAppA11y = (platformMeta?: { [key: string]: any; }) 
     return true
 }
 
+const EDGE_BROWSER_NAMES = ['edge', 'microsoftedge', 'msedge']
+
+const navigatedSessions = new Set<string>()
+
+/* Until a session's first url command the browser sits on its start page (data:, or Edge's https new tab, where the extension can't load), so there is nothing to scan. */
+export const isFirstNavigation = (sessionId: string | null | undefined, commandName: string) => {
+    if (commandName !== 'url' || !sessionId || navigatedSessions.has(sessionId)) {
+        return false
+    }
+    navigatedSessions.add(sessionId)
+    return true
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const validateCapsWithA11y = (deviceName?: any, platformMeta?: { [key: string]: any; }, chromeOptions?: any) => {
     /* Check if the current driver platform is eligible for Accessibility scan */
@@ -490,12 +503,19 @@ export const validateCapsWithA11y = (deviceName?: any, platformMeta?: { [key: st
             return false
         }
 
-        if (platformMeta?.browser_name?.toLowerCase() !== 'chrome') {
-            BStackLogger.warn('Accessibility Automation will run only on Chrome browsers.')
+        const browserName = platformMeta?.browser_name?.toLowerCase()
+        const isEdge = EDGE_BROWSER_NAMES.includes(browserName)
+        if (browserName !== 'chrome' && !isEdge) {
+            BStackLogger.warn('Accessibility Automation will run only on Chrome and Edge browsers.')
             return false
         }
         const browserVersion = platformMeta?.browser_version
-        if ( !isUndefined(browserVersion) && !(browserVersion === 'latest' || parseFloat(browserVersion + '') > 94)) {
+        if (isEdge) {
+            if (!isUndefined(browserVersion) && !(browserVersion === 'latest' || parseFloat(browserVersion + '') >= 100)) {
+                BStackLogger.warn('Accessibility Automation will run only on Edge browser version 100 or greater.')
+                return false
+            }
+        } else if ( !isUndefined(browserVersion) && !(browserVersion === 'latest' || parseFloat(browserVersion + '') > 94)) {
             BStackLogger.warn('Accessibility Automation will run only on Chrome browser version greater than 94.')
             return false
         }

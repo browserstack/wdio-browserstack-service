@@ -68,6 +68,7 @@ import {
     getAppA11yResults,
     executeAccessibilityScript,
     isFalse,
+    isFirstNavigation,
     getHookType,
     frameworkSupportsHook
 } from './util.js'
@@ -205,21 +206,20 @@ class _AccessibilityHandler {
 
         //checks for running ALLY on non-bstack infra
         if (
-            isAccessibilityAutomationSession(this._accessibility) &&
+            isAccessibilityAutomationSession(this._accessibility) && !this.isAppAutomate &&
             (
                 this._turboscale ||
                 !shouldAddServiceVersion(this._config, this._options.testObservability)
-            ) &&
-            validateCapsWithNonBstackA11y(
+            )
+        ){
+            this._accessibility = validateCapsWithNonBstackA11y(
                 this._platformA11yMeta.browser_name as string,
                 this._platformA11yMeta?.browser_version as string
             )
-        ){
-            this._accessibility = true
         } else {
             if (isAccessibilityAutomationSession(this._accessibility) && !this.isAppAutomate) {
                 const deviceName = this._getCapabilityValue(this._caps, 'deviceName', 'device')
-                const chromeOptions = this._getCapabilityValue(this._caps, 'goog:chromeOptions', '') as Capabilities.ChromeOptions
+                const chromeOptions = (this._getCapabilityValue(this._caps, 'goog:chromeOptions', '') || this._getCapabilityValue(this._caps, 'ms:edgeOptions', 'ms:edgeOptions')) as Capabilities.ChromeOptions
 
                 this._accessibility = validateCapsWithA11y(deviceName as string, this._platformA11yMeta as unknown as Record<string, string>, chromeOptions)
             }
@@ -542,13 +542,17 @@ class _AccessibilityHandler {
 
     private async commandWrapper (command: CommandInfo, prevImpl: Function, origFunction: Function, ...args: unknown[]) {
         const skipScanForBidiWindowCommand = AccessibilityHandler.shouldSkipScanForBidiWindowCommand(this._browser, command)
+        // Recorded before the gate check, so a first url issued while scanning is off still counts.
+        // App sessions start on the app's own screen, not a browser start page, so they keep that scan.
+        const firstNavigation = !this.isAppAutomate && isFirstNavigation(this._sessionId, command.name)
         if (
             this._sessionId && AccessibilityHandler._a11yScanSessionMap[this._sessionId] &&
                 !skipScanForBidiWindowCommand &&
                 (
                     !command.name.includes('execute') ||
                     !AccessibilityHandler.shouldPatchExecuteScript(args.length ? args[0] as string : null)
-                )
+                ) &&
+                !firstNavigation
         ) {
             BStackLogger.debug(`Performing scan for ${command.class} ${command.name}`)
             // Parentless only before the framework has started anything: no hook run to own the
