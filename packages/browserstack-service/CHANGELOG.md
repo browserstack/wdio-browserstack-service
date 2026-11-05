@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.43.0
+
+### Minor Changes
+
+- b69abc7: - Accessibility Automation now scans Microsoft Edge (version 100 or later) on desktop.
+
 ## 9.42.3
 
 ### Patch Changes
