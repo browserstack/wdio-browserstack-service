@@ -96,11 +96,18 @@ jobs:
       # GitHub release, and provenance, over the OIDC trusted publisher (no NPM_TOKEN).
       # Merge the "Version Packages" PR first: this publishes only when there are no pending
       # changesets. If any remain, the action safely opens/updates the Version PR instead.
+      # `changeset publish` always passes `--tag latest` unless given --tag, which overrides
+      # publishConfig.tag; read the branch's tag from package.json and pass it explicitly.
+      - name: Resolve npm dist-tag
+        id: disttag
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        run: echo "tag=$(node -p "require('./packages/browserstack-service/package.json').publishConfig?.tag || 'latest'")" >> "$GITHUB_OUTPUT"
+
       - name: Publish to npm
         if: github.event_name == 'workflow_dispatch' && inputs.publish
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
         with:
-          publish: npm run release     # changeset publish (honors publishConfig.tag per branch)
+          publish: npm run release -- --tag ${{ steps.disttag.outputs.tag }}
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
