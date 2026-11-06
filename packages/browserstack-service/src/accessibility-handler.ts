@@ -67,6 +67,9 @@ import {
     isTrue,
     validateCapsWithAppA11y,
     getAppA11yResults,
+    getMobileA11yScriptArgs,
+    logRejectedMobileSave,
+    setMobileA11yScriptTimeout,
     isFalse,
     setBrowserstackAnnotation
 } from './util.js'
@@ -173,6 +176,7 @@ class _AccessibilityHandler {
                 const chromeOptions = this._getCapabilityValue(this._caps, 'goog:chromeOptions', '')
 
                 this._accessibility = validateCapsWithA11y(deviceName, this._platformA11yMeta, chromeOptions)
+                await setMobileA11yScriptTimeout(this._browser as WebdriverIO.Browser)
             }
             if (isAppAccessibilityAutomationSession(this._accessibility, this.isAppAutomate)) {
                 this._accessibility = validateCapsWithAppA11y(this._platformA11yMeta)
@@ -430,8 +434,9 @@ class _AccessibilityHandler {
             return
         }
         await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.SAVE_RESULTS, async () => {
-            const results: unknown = await (browser as WebdriverIO.Browser).executeAsync(accessibilityScripts.saveTestResults as string, dataForExtension)
+            const results: unknown = await (browser as WebdriverIO.Browser).executeAsync(accessibilityScripts.saveTestResults as string, { ...dataForExtension, ...getMobileA11yScriptArgs() })
             BStackLogger.debug(util.format(results as string))
+            logRejectedMobileSave(results)
         })()
     }
 

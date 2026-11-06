@@ -140,6 +140,18 @@ describe('before', () => {
         expect(validateCapsWithA11ySpy).toBeCalledTimes(1)
     })
 
+    it('sets the mobile script timeout after validating caps', async () => {
+        vi.spyOn(accessibilityHandler, '_getCapabilityValue').mockReturnValue(true)
+        vi.spyOn(utils, 'validateCapsWithA11y').mockReturnValue(true)
+        const setMobileA11yScriptTimeoutSpy = vi.spyOn(utils, 'setMobileA11yScriptTimeout').mockResolvedValue()
+        isBrowserstackSessionSpy.mockReturnValue(true)
+        shouldAddServiceVersionSpy.mockReturnValue(true)
+        isAccessibilityAutomationSessionSpy.mockReturnValue(true)
+        await accessibilityHandler.before('session123')
+        expect(setMobileA11yScriptTimeoutSpy).toHaveBeenCalledWith(browser)
+        setMobileA11yScriptTimeoutSpy.mockRestore()
+    })
+
     it('calls getA11yResultsSummary', async () => {
         isBrowserstackSessionSpy.mockReturnValue(true)
         isAccessibilityAutomationSessionSpy.mockReturnValue(true)
@@ -543,6 +555,22 @@ describe('afterTest', () => {
         await accessibilityHandler.afterTest('suite title', { parent: 'parent', title: 'test' } as any)
 
         expect(executeAsyncSpy).toBeCalledTimes(0)
+    })
+
+    it('saves with the mobile args and checks the save result', async () => {
+        const mobileArgs = { is_mobile_session: true, thTestRunUuid: 'run-uuid' }
+        const getMobileA11yScriptArgsSpy = vi.spyOn(utils, 'getMobileA11yScriptArgs').mockReturnValue(mobileArgs)
+        const logRejectedMobileSaveSpy = vi.spyOn(utils, 'logRejectedMobileSave')
+        vi.spyOn(utils, 'isAppAccessibilityAutomationSession').mockReturnValue(false)
+        const saveResult = { success: false, msg: 'No intermediate results found for mobile session' }
+        executeAsyncSpy.mockResolvedValueOnce(saveResult)
+
+        await accessibilityHandler['sendTestStopEvent'](browser as WebdriverIO.Browser, { thTestRunUuid: 'run-uuid' } as any)
+
+        expect(executeAsyncSpy).toHaveBeenCalledWith(expect.any(String), expect.objectContaining(mobileArgs))
+        expect(logRejectedMobileSaveSpy).toHaveBeenCalledWith(saveResult)
+        getMobileA11yScriptArgsSpy.mockRestore()
+        logRejectedMobileSaveSpy.mockRestore()
     })
 
     it('should throw error in after test if exception occurs', async () => {
