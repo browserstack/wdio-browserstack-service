@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 8.56.0
+
+### Minor Changes
+
+- fa16b14: - Secured the local connection between the SDK and the BrowserStack CLI with a per-run token.
+
 ## 8.55.2
 
 ### Patch Changes
