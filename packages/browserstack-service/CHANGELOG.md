@@ -1,5 +1,12 @@
 # @wdio/browserstack-service
 
+## 9.44.0
+
+### Minor Changes
+
+- 2edd183: - Accessibility Automation now scans Chrome on Android and Safari on iPhone (iOS 18 or later) sessions, for accounts with mobile accessibility scanning enabled.
+- 85b79fa: - Secured the local connection between the SDK and the BrowserStack CLI with a per-run token.
+
 ## 9.43.0
 
 ### Minor Changes
