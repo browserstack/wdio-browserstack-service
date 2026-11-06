@@ -1336,6 +1336,15 @@ describe('_updateObjectTypeCaps', () => {
         expect(caps.chromeBrowser.capabilities['goog:chromeOptions']).toEqual({ args: ['--headless', '--disable-gpu'] })
     })
 
+    it('should not check or warn about Chrome when updating accessibilityOptions for Safari on iPhone', () => {
+        const caps: any = [{ browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 17', osVersion: '26' } }]
+        const validateSpy = vi.spyOn(utils, 'validateCapsWithNonBstackA11y')
+        const service = new BrowserstackLauncher(options as BrowserstackConfig & Options.Testrunner, caps, config)
+        service._updateObjectTypeCaps(caps, 'accessibilityOptions', { wcagVersion: 'wcag2a' })
+        expect(validateSpy).not.toHaveBeenCalled()
+        expect(caps[0]['bstack:options'].accessibilityOptions).toEqual({ wcagVersion: 'wcag2a' })
+    })
+
     it('should delete accessibilityOptions in caps array if value not passed in _updateObjectTypeCaps', () => {
         const caps = [{ 'bstack:options': { accessibilityOptions: { wcagVersion: 'wcag2a' } } }]
         const service = new BrowserstackLauncher(options as any, caps as any, config)

@@ -6,6 +6,7 @@ import {
     SDKClient,
     grpcCredentials,
     grpcChannel,
+    GrpcInterceptingCall,
     StartBinSessionRequestConstructor,
     StopBinSessionRequestConstructor,
     ConnectBinSessionRequestConstructor,
@@ -40,8 +41,10 @@ import type {
     TestOrchestrationRequest,
     TestOrchestrationResponse
 } from '../grpc/index.js'
+import type { GrpcInterceptor } from '../grpc/index.js'
 
 import PerformanceTester from '../instrumentation/performance/performance-tester.js'
+import { CLI_AUTH_TOKEN_ENV, CLI_AUTH_TOKEN_HEADER } from '../constants.js'
 import * as PERFORMANCE_SDK_EVENTS from '../instrumentation/performance/constants.js'
 import { BStackLogger } from './cliLogger.js'
 
@@ -146,10 +149,18 @@ export class GrpcClient {
         )
 
         // Create a client using the channel
+        const authToken = process.env[CLI_AUTH_TOKEN_ENV]
+        const interceptors: GrpcInterceptor[] = authToken ? [(options, nextCall) => new GrpcInterceptingCall(nextCall(options), {
+            start(metadata, listener, next) {
+                metadata.set(CLI_AUTH_TOKEN_HEADER, authToken)
+                next(metadata, listener)
+            }
+        })] : []
+
         this.client = new SDKClient(
             listenAddress,
             grpcCredentials.createInsecure(),
-            channelOptions
+            { ...channelOptions, interceptors }
         )
 
         this.logger.info(`Connected to gRPC server at ${listenAddress}`)

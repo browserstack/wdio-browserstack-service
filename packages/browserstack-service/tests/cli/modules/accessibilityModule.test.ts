@@ -39,6 +39,11 @@ vi.mock('../../../src/util.js', () => ({
     formatString: vi.fn().mockReturnValue('formatted-script'),
     o11yClassErrorHandler: vi.fn().mockImplementation((cls) => cls),
     isBrowserstackSession: vi.fn().mockReturnValue(true),
+    getMobileA11yScriptArgs: vi.fn().mockReturnValue({}),
+    getMobileResultsArg: vi.fn().mockReturnValue(undefined),
+    logRejectedMobileSave: vi.fn(),
+    setMobileA11yScriptTimeout: vi.fn(),
+    isBeforeFirstMobileNavigation: vi.fn().mockReturnValue(false),
     isFirstNavigation: vi.fn().mockReturnValue(false)
 }))
 
@@ -54,7 +59,7 @@ vi.mock('../../../src/cli/grpcClient.js', () => ({
 }))
 
 import AccessibilityModule from '../../../src/cli/modules/accessibilityModule.js'
-import { validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, _getParamsForAppAccessibility, shouldScanTestForAccessibility, isFirstNavigation } from '../../../src/util.js'
+import { validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, _getParamsForAppAccessibility, shouldScanTestForAccessibility, isFirstNavigation, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout, isBeforeFirstMobileNavigation } from '../../../src/util.js'
 import accessibilityScripts from '../../../src/scripts/accessibility-scripts.js'
 import TestFramework from '../../../src/cli/frameworks/testFramework.js'
 import AutomationFramework from '../../../src/cli/frameworks/automationFramework.js'
@@ -217,6 +222,16 @@ describe('AccessibilityModule', () => {
             expect(_getParamsForAppAccessibility).toHaveBeenCalledWith('click', undefined, null, true)
         })
 
+        it('marks a web scan with no hook run and no test as a global-hook scan', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = false
+            await accessibilityModule.onBeforeExecute()
+
+            await fireWrappedCommand()
+
+            expect(getMobileA11yScriptArgs).toHaveBeenCalledWith(true)
+        })
+
         it('keeps the test run uuid once a framework hook is running', async () => {
             withA11yCaps()
             accessibilityModule.isAppAccessibility = true
@@ -273,6 +288,17 @@ describe('AccessibilityModule', () => {
             expect(mockBrowser.executeAsync).toHaveBeenCalledWith(expect.anything(), { method: 'url' })
         })
 
+        it('records a mobile session\'s first url even when the first-navigation skip applies', async () => {
+            withA11yCaps()
+            await accessibilityModule.onBeforeExecute()
+            vi.mocked(isFirstNavigation).mockReturnValueOnce(true)
+
+            await (accessibilityModule as any).commandWrapper({ name: 'url', class: 'Browser' }, vi.fn().mockResolvedValue('ok'), 'https://example.com')
+
+            expect(isBeforeFirstMobileNavigation).toHaveBeenCalledWith('url')
+            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+        })
+
         it('passes ms:edgeOptions to the caps check when goog:chromeOptions is absent', async () => {
             const edgeOptions = { args: ['--headless=new'] }
             withA11yCaps().mockImplementation((instance, key) => {
@@ -312,6 +338,20 @@ describe('AccessibilityModule', () => {
 
             // the command still runs; only the scan is skipped
             expect(orig).toHaveBeenCalled()
+            expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
+        })
+
+        it('skips the scan before a mobile session first navigates, but still runs the command', async () => {
+            withA11yCaps()
+            accessibilityModule.isAppAccessibility = true
+            await accessibilityModule.onBeforeExecute()
+            vi.mocked(isBeforeFirstMobileNavigation).mockReturnValue(true)
+            const orig = vi.fn().mockResolvedValue('ok')
+
+            await (accessibilityModule as any).commandWrapper({ name: 'url', class: 'Browser' }, orig, 'https://example.com')
+
+            expect(isBeforeFirstMobileNavigation).toHaveBeenCalledWith('url')
+            expect(orig).toHaveBeenCalledWith('https://example.com')
             expect(_getParamsForAppAccessibility).not.toHaveBeenCalled()
         })
 
@@ -366,6 +406,13 @@ describe('AccessibilityModule', () => {
             // Verify that onBeforeExecute completes without error
             // The actual browser patching happens on the object returned by AutomationFramework.getDriver
             expect(vi.mocked(AutomationFramework.getDriver)).toHaveBeenCalled()
+        })
+
+        it('sets the mobile script timeout after validating caps', async () => {
+            await accessibilityModule.onBeforeExecute()
+
+            expect(validateCapsWithA11y).toHaveBeenCalled()
+            expect(setMobileA11yScriptTimeout).toHaveBeenCalledWith(mockBrowser)
         })
 
         it('should return early when no automation instance found', async () => {
@@ -570,6 +617,41 @@ describe('AccessibilityModule', () => {
                 'mock-perform-scan-script',
                 { method: commandName }
             )
+        })
+    })
+
+    describe('mobile sessions', () => {
+        const mobileArgs = { is_mobile_session: true, thTestRunUuid: 'run-uuid' }
+
+        beforeEach(() => {
+            accessibilityModule.accessibility = true
+            accessibilityModule.isAppAccessibility = false
+            vi.mocked(getMobileA11yScriptArgs).mockReturnValue(mobileArgs)
+            vi.mocked(getMobileResultsArg).mockReturnValue(mobileArgs)
+        })
+
+        it('passes the mobile args to the scan script', async () => {
+            await (accessibilityModule as any).performScanCli(mockBrowser, 'click')
+
+            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-perform-scan-script', { method: 'click', ...mobileArgs })
+        })
+
+        it('passes the mobile args to the results and summary scripts', async () => {
+            await accessibilityModule.getA11yResults(mockBrowser)
+            await accessibilityModule.getA11yResultsSummary(mockBrowser)
+
+            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-get-results-script', mobileArgs)
+            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-get-results-summary-script', mobileArgs)
+        })
+
+        it('saves with the mobile args and checks the save result', async () => {
+            const saveResult = { success: false, msg: 'No intermediate results found for mobile session' }
+            mockBrowser.executeAsync.mockResolvedValue(saveResult)
+
+            await (accessibilityModule as any).sendTestStopEvent(mockBrowser, { thTestRunUuid: 'run-uuid' })
+
+            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-save-test-results-script', expect.objectContaining(mobileArgs))
+            expect(logRejectedMobileSave).toHaveBeenCalledWith(saveResult)
         })
     })
 

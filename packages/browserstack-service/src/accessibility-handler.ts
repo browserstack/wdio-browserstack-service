@@ -67,6 +67,10 @@ import {
     validateCapsWithAppA11y,
     getAppA11yResults,
     executeAccessibilityScript,
+    getMobileA11yScriptArgs,
+    logRejectedMobileSave,
+    setMobileA11yScriptTimeout,
+    isBeforeFirstMobileNavigation,
     isFalse,
     isFirstNavigation,
     getHookType,
@@ -222,6 +226,7 @@ class _AccessibilityHandler {
                 const chromeOptions = (this._getCapabilityValue(this._caps, 'goog:chromeOptions', '') || this._getCapabilityValue(this._caps, 'ms:edgeOptions', 'ms:edgeOptions')) as Capabilities.ChromeOptions
 
                 this._accessibility = validateCapsWithA11y(deviceName as string, this._platformA11yMeta as unknown as Record<string, string>, chromeOptions)
+                await setMobileA11yScriptTimeout(this._browser as WebdriverIO.Browser)
             }
             if (isAppAccessibilityAutomationSession(this._accessibility, this.isAppAutomate)) {
                 this._accessibility = validateCapsWithAppA11y(this._platformA11yMeta)
@@ -545,6 +550,7 @@ class _AccessibilityHandler {
         // Recorded before the gate check, so a first url issued while scanning is off still counts.
         // App sessions start on the app's own screen, not a browser start page, so they keep that scan.
         const firstNavigation = !this.isAppAutomate && isFirstNavigation(this._sessionId, command.name)
+        const beforeFirstMobileNavigation = isBeforeFirstMobileNavigation(command.name)
         if (
             this._sessionId && AccessibilityHandler._a11yScanSessionMap[this._sessionId] &&
                 !skipScanForBidiWindowCommand &&
@@ -562,6 +568,8 @@ class _AccessibilityHandler {
             // the session is gone logs an error where main was silent.
             if (!(this._browser as WebdriverIO.Browser)?.sessionId) {
                 BStackLogger.debug('Skipping accessibility scan: the session has ended')
+            } else if (beforeFirstMobileNavigation) {
+                BStackLogger.debug(`Skipping accessibility scan before the test's first navigation (${command.name})`)
             } else {
                 await performA11yScan(this.isAppAutomate, this._browser, true, true, command.name, undefined, this._currentHookRunUuid, this.hasNoParent)
             }
@@ -574,7 +582,7 @@ class _AccessibilityHandler {
 
     private async sendTestStopEvent(browser: WebdriverIO.Browser, dataForExtension: TestExtensionData) {
         BStackLogger.debug('Performing scan before saving results')
-        if (AccessibilityHandler._a11yScanSessionMap[this._sessionId as string]) {
+        if (AccessibilityHandler._a11yScanSessionMap[this._sessionId as string] && !isBeforeFirstMobileNavigation()) {
             await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.PERFORM_SCAN, async () => {
                 await performA11yScan(this.isAppAutomate, browser, true, true)
             }, { command: 'afterTest' })()
@@ -586,8 +594,9 @@ class _AccessibilityHandler {
 
         await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.SAVE_RESULTS, async () => {
             if (accessibilityScripts.saveTestResults) {
-                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults, dataForExtension)
+                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults, { ...dataForExtension, ...getMobileA11yScriptArgs() })
                 BStackLogger.debug(util.format(results as string))
+                logRejectedMobileSave(results)
             } else {
                 BStackLogger.error('saveTestResults script is null or undefined')
             }
