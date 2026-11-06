@@ -1,5 +1,6 @@
 import util from 'node:util'
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 
 import { CLIUtils } from './cliUtils.js'
 import PerformanceTester from '../instrumentation/performance/performance-tester.js'
@@ -12,7 +13,7 @@ import TestHubModule from './modules/testHubModule.js'
 import type { ChildProcess } from 'node:child_process'
 import type { StartBinSessionResponse } from '../grpc/index.js'
 import type BaseModule from './modules/baseModule.js'
-import { BROWSERSTACK_ACCESSIBILITY, BROWSERSTACK_OBSERVABILITY, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_TESTHUB_UUID, CLI_STOP_TIMEOUT, TESTOPS_BUILD_COMPLETED_ENV, TESTOPS_SCREENSHOT_ENV, SERVER_SDK_CONFIG_KEY, SERVER_SDK_CONFIG_KEYS_KEY } from '../constants.js'
+import { BROWSERSTACK_ACCESSIBILITY, BROWSERSTACK_OBSERVABILITY, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_TESTHUB_UUID, CLI_STOP_TIMEOUT, TESTOPS_BUILD_COMPLETED_ENV, TESTOPS_SCREENSHOT_ENV, CLI_AUTH_TOKEN_ENV, SERVER_SDK_CONFIG_KEY, SERVER_SDK_CONFIG_KEYS_KEY } from '../constants.js'
 import type { Options } from '@wdio/types'
 import TestOpsConfig from '../testOps/testOpsConfig.js'
 import WdioMochaTestFramework from './frameworks/wdioMochaTestFramework.js'
@@ -288,6 +289,9 @@ export class BrowserstackCLI {
         }
 
         const SDK_CLI_BIN_PATH = await this.getCliBinPath()
+
+        process.env[CLI_AUTH_TOKEN_ENV] = randomBytes(32).toString('hex')
+
         const cmd:Array<string> = [SDK_CLI_BIN_PATH, 'sdk']
         this.logger.debug(`spawning command='${cmd}'`)
         // Create a child process
