@@ -50,7 +50,10 @@ import {
     isValidEnabledValue,
     isMultiRemoteCaps,
     coerceStringBooleans,
-    validateSkipAppOverride
+    validateSkipAppOverride,
+    getRequestedMobileA11yPlatform,
+    MOBILE_PLATFORM_UNSUPPORTED_WARNING,
+    MOBILE_ADVANCED_RULES_WARNING
 } from './util.js'
 import CrashReporter from './crash-reporter.js'
 import { initWdioConfigPath, isAutoCaptureLogsDisabled, publishAutoCaptureDisabled } from './configCapture.js'
@@ -235,6 +238,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             this._accessibilityAutomation ||= isTrue(this._options.accessibility)
         }
         this._options.accessibility = this._accessibilityAutomation
+        this._checkMobileA11yCapabilities(capabilities)
 
         // Default is true unless explicitly set to false
         this._options.testObservability = this._options.testObservability !== false
@@ -1067,6 +1071,32 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }
         } catch (error) {
             BStackLogger.debug(`Exception while retrieving capability value. Error - ${error}`)
+        }
+    }
+
+    /* Sessions turn accessibility off on unsupported mobile platforms; when every capability is one, the build doesn't start it either, so no empty report is created. */
+    _checkMobileA11yCapabilities(capabilities: Capabilities.TestrunnerCapabilities | WebdriverIO.Capabilities) {
+        if (!this._accessibilityAutomation || !Array.isArray(capabilities) || !capabilities.length) {
+            return
+        }
+        const caps = capabilities.map((c) => ('alwaysMatch' in c ? c.alwaysMatch : c) as Record<string, any>)
+        const platforms = caps.map(getRequestedMobileA11yPlatform)
+        if (platforms.every((platform) => platform && !platform.supported)) {
+            BStackLogger.warn(MOBILE_PLATFORM_UNSUPPORTED_WARNING)
+            this._accessibilityAutomation = false
+            this._options.accessibility = false
+            caps.forEach((cap) => {
+                if (cap['bstack:options']) {
+                    cap['bstack:options'].accessibility = false
+                }
+                if (!isUndefined(cap['browserstack.accessibility'])) {
+                    cap['browserstack.accessibility'] = false
+                }
+            })
+            return
+        }
+        if (isTrue((this._options.accessibilityOptions?.includeIssueType as Record<string, unknown> | undefined)?.advanced) && platforms.some((platform) => platform?.supported)) {
+            BStackLogger.warn(MOBILE_ADVANCED_RULES_WARNING)
         }
     }
 
