@@ -16,10 +16,11 @@
     "test": "npm run test -w @wdio/browserstack-service",
     "changeset": "changeset",
     "version": "changeset version",
-    "release": "changeset publish"
+    "release": "lerna publish from-package --yes --dist-tag ${DIST_TAG:-latest} && changeset tag"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.27.9"
+    "@changesets/cli": "^2.27.9",
+    "lerna": "10.1.1"
   },
   "overrides": {
     "@types/node": "^22.2.0"
