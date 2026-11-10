@@ -23,6 +23,7 @@ on:
   push:
     branches:
       - main   # v9 line -> opens Version PR (publish target: dist-tag "latest")
+      - v9     # v9 line -> opens Version PR (publish target: dist-tag "v9" via publishConfig.tag)
       - v8     # v8 line -> opens Version PR (publish target: dist-tag "v8" via publishConfig.tag)
   workflow_dispatch:
     inputs:
