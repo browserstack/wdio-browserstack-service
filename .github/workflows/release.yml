@@ -13,21 +13,22 @@ name: Release
 # separate core package for this workflow to version or publish.
 #
 # Release model (publishing is MANUAL):
-#   * push to main / v8       -> opens/updates the "Version Packages" PR only. NEVER publishes;
+#   * push to main / v9 / v8  -> opens/updates the "Version Packages" PR only. NEVER publishes;
 #                                merging that PR does NOT publish either.
 #   * Run workflow (publish)  -> publishes the merged version to npm (main -> `latest`,
-#                                v8 -> `v8`) with git tag + GitHub release + provenance.
+#                                v9 -> `v9`, v8 -> `v8`) with git tag + GitHub release + provenance.
 #   * Run workflow (canary)   -> snapshot prerelease to the npm `canary` dist-tag.
 
 on:
   push:
     branches:
-      - main   # v9 line -> opens Version PR (publish target: dist-tag "latest")
+      - main   # 10.x line -> opens Version PR (publish target: dist-tag "latest")
+      - v9     # v9 line -> opens Version PR (publish target: dist-tag "v9" via publishConfig.tag)
       - v8     # v8 line -> opens Version PR (publish target: dist-tag "v8" via publishConfig.tag)
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Publish the merged version to npm (main -> `latest`, v8 -> `v8`). Merge the "Version Packages" PR first so there are no pending changesets.'
+        description: 'Publish the merged version to npm (main -> `latest`, v9 -> `v9`, v8 -> `v8`). Merge the "Version Packages" PR first so there are no pending changesets.'
         type: boolean
         default: false
       canary:
@@ -39,7 +40,7 @@ on:
         type: string
         default: ''
 
-# Never run main and v8 releases on top of each other.
+# Never run two releases of the same branch on top of each other.
 concurrency: release-${{ github.ref }}
 
 permissions:
@@ -88,7 +89,7 @@ jobs:
       - name: Test
         run: npm test
 
-      # Version PR (push to main / v8): run changesets in VERSION-ONLY mode — open or update the
+      # Version PR (push to main / v9 / v8): run changesets in VERSION-ONLY mode — open or update the
       # "Version Packages" PR (version bump + CHANGELOG). This step NEVER publishes: with no
       # `publish:` input, once the Version PR is merged (a push with no pending changesets) the
       # action simply no-ops. Publishing is the separate, manual step below.
@@ -102,7 +103,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Publish (manual, workflow_dispatch with publish=true): publish the already-versioned
-      # package to npm — main -> `latest`, v8 -> `v8` (via publishConfig.tag) — with git tag,
+      # package to npm — main -> `latest`, v9 -> `v9`, v8 -> `v8` (via publishConfig.tag) — with git tag,
       # GitHub release, and provenance, over the OIDC trusted publisher (no NPM_TOKEN).
       # Merge the "Version Packages" PR first: this publishes only when there are no pending
       # changesets. If any remain, the action safely opens/updates the Version PR instead.
