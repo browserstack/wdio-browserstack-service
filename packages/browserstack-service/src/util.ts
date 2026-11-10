@@ -48,7 +48,8 @@ import {
     STOP_BUILD_MAX_ATTEMPTS,
     STOP_BUILD_ATTEMPT_TIMEOUT_MS,
     STOP_BUILD_TOTAL_BUDGET_MS,
-    STOP_BUILD_BACKOFF_BASE_MS
+    STOP_BUILD_BACKOFF_BASE_MS,
+    REMOVED_ELEMENT_COMMANDS
 } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import { BStackLogger } from './bstackLogger.js'
@@ -2196,10 +2197,6 @@ async function makeGetRequest(url: string, params: Record<string, any>, headers:
 
     return response
 }
-
-// Element commands webdriverio 10 removed. An element override for a missing command is only
-// validated when the first element is created, which would throw inside the user's test.
-const REMOVED_ELEMENT_COMMANDS = new Set(['touchAction'])
 
 export function overwriteScanCommand(
     browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser,
