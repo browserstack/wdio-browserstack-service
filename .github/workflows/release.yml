@@ -7,7 +7,7 @@ name: Release
 #     Repository:        wdio-browserstack-service
 #     Workflow filename: release.yml
 #     Environment:       (leave empty)
-# Requires: PUBLIC repo (for provenance), npm >= 11.5.1, Node >= 22.14.0.
+# Requires: PUBLIC repo (for provenance), npm >= 11.5.1, Node >= 22.22.2 (lerna 10).
 #
 # The gRPC/protobuf client is generated inline at build time (buf generate); there is no
 # separate core package for this workflow to version or publish.
@@ -65,7 +65,9 @@ jobs:
         # publishConfig.access=public handles the scoped publish, so the line isn't needed.
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22            # resolves to >= 22.14 on the runner (OIDC floor)
+          node-version: 22
+          # the runner cache can hold a 22.x below lerna's ^22.22.2 floor
+          check-latest: true
           cache: 'npm'
 
       # Trusted Publishing needs npm >= 11.5.1. Pin to the 11.x line so a future
@@ -73,8 +75,12 @@ jobs:
       - name: Upgrade npm to an OIDC-capable version
         run: npm install -g npm@11
 
+      # Install scripts run with access to the npm OIDC token, so only the packages the
+      # build and tests need get theirs (not nx, pulled in by lerna).
       - name: Install
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild @bufbuild/buf esbuild edgedriver geckodriver protobufjs
 
       - name: Build
         run: npm run build
