@@ -510,7 +510,7 @@ export const getRequestedMobileA11yPlatform = (capability: Record<string, any>) 
     return { platform, browserName, deviceName, osVersion, supported: isMobileA11yPlatformPair(platform, browserName, deviceName, osVersion) }
 }
 
-/* The CLI flow adds the accessibility commands only when the build started accessibility; without them, a test calling one would throw. */
+/* The CLI flow adds the accessibility commands only when the build started accessibility; without them, a test calling one would throw. The classic flow always adds them. */
 export const addNoopAccessibilityCommands = (browser: WebdriverIO.Browser) => {
     const noops: Record<string, () => Promise<unknown>> = {
         getAccessibilityResultsSummary: async () => ({}),

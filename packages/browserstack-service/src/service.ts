@@ -280,7 +280,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     } else {
                         await this._accessibilityHandler.before(sessionId)
                     }
-                    if (this._isCliAccessibilityFlow() && isTrue(this._options.accessibility)) {
+                    if (this._isCliAccessibilityFlow()) {
                         addNoopAccessibilityCommands(this._browser as WebdriverIO.Browser)
                     }
 

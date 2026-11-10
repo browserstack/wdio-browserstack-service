@@ -1076,10 +1076,22 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
     /* Sessions turn accessibility off on unsupported mobile platforms; when every capability is one, the build doesn't start it either, so no empty report is created. */
     _checkMobileA11yCapabilities(capabilities: Capabilities.TestrunnerCapabilities | WebdriverIO.Capabilities) {
-        if (!this._accessibilityAutomation || !Array.isArray(capabilities) || !capabilities.length) {
+        if (!this._accessibilityAutomation || !capabilities) {
             return
         }
-        const caps = capabilities.map((c) => ('alwaysMatch' in c ? c.alwaysMatch : c) as Record<string, any>)
+        // Same shapes as the constructor: plain or alwaysMatch caps, parallel multiremote entries, or a multiremote object.
+        const toCaps = (c: any): Record<string, any>[] => {
+            if ('alwaysMatch' in c) {
+                return [c.alwaysMatch]
+            }
+            const values = Object.values(c)
+            return values.length && values.every((v: any) => typeof v === 'object' && v?.capabilities) ? values.map((v: any) => v.capabilities) : [c]
+        }
+        const caps = Array.isArray(capabilities) ? capabilities.flatMap(toCaps) : toCaps(capabilities)
+        // App Accessibility has its own platform rules.
+        if (!caps.length || this._options.app || caps.some((cap) => cap['appium:app'] || cap.app || cap['bstack:options']?.app)) {
+            return
+        }
         const platforms = caps.map(getRequestedMobileA11yPlatform)
         if (platforms.every((platform) => platform && !platform.supported)) {
             BStackLogger.warn(MOBILE_PLATFORM_UNSUPPORTED_WARNING)
