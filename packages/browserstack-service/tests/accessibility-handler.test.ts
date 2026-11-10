@@ -6,6 +6,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import logger from '@wdio/logger'
 
 import AccessibilityHandler from '../src/accessibility-handler.js'
+import AccessibilityScripts from '../src/scripts/accessibility-scripts.js'
 import type { BrowserstackConfig, BrowserstackOptions } from '../src/types.js'
 import type { Options } from '@wdio/types'
 import * as utils from '../src/util.js'
@@ -82,7 +83,7 @@ beforeEach(() => {
             browserName: 'chrome'
         },
         instances: ['browserA', 'browserB'],
-        isMultiremote: false,
+        isMultiRemote: false,
         browserA: {
             sessionId: 'session456',
             capabilities: { 'bstack:options': {
@@ -173,12 +174,60 @@ describe('before', () => {
         expect(validateCapsWithA11ySpy).toBeCalledTimes(1)
     })
 
+    it('sets the mobile script timeout after validating caps', async () => {
+        vi.spyOn(accessibilityHandler, '_getCapabilityValue').mockReturnValue(true)
+        vi.spyOn(utils, 'validateCapsWithA11y').mockReturnValue(true)
+        const setMobileA11yScriptTimeoutSpy = vi.spyOn(utils, 'setMobileA11yScriptTimeout').mockResolvedValue()
+        shouldAddServiceVersionSpy.mockReturnValue(true)
+        isBrowserstackSessionSpy.mockReturnValue(true)
+        isAccessibilityAutomationSessionSpy.mockReturnValue(true)
+        await accessibilityHandler.before('session123')
+        expect(setMobileA11yScriptTimeoutSpy).toHaveBeenCalledWith(browser)
+        setMobileA11yScriptTimeoutSpy.mockRestore()
+    })
+
     it('calls validateCapsWithNonBstackA11y', async () => {
         const validateCapsWithNonBstackA11ySpy = vi.spyOn(utils, 'validateCapsWithNonBstackA11y')
         shouldAddServiceVersionSpy.mockReturnValue(false)
         isAccessibilityAutomationSessionSpy.mockReturnValue(true)
         await accessibilityHandler.before('session123')
         expect(validateCapsWithNonBstackA11ySpy).toBeCalledTimes(1)
+    })
+
+    it('keeps accessibility off for Edge on non-BrowserStack infra', async () => {
+        const validateCapsWithA11ySpy = vi.spyOn(utils, 'validateCapsWithA11y')
+        validateCapsWithA11ySpy.mockClear()
+        shouldAddServiceVersionSpy.mockReturnValue(false)
+        isAccessibilityAutomationSessionSpy.mockReturnValue(true)
+        accessibilityHandler['_platformA11yMeta'] = { browser_name: 'MicrosoftEdge', browser_version: 'latest' }
+        await accessibilityHandler.before('session123')
+        expect(accessibilityHandler['_accessibility']).toBe(false)
+        expect(validateCapsWithA11ySpy).not.toHaveBeenCalled()
+    })
+
+    it('keeps App Accessibility on when the non-BrowserStack check would apply', async () => {
+        const validateCapsWithNonBstackA11ySpy = vi.spyOn(utils, 'validateCapsWithNonBstackA11y')
+        validateCapsWithNonBstackA11ySpy.mockClear()
+        const validateCapsWithAppA11ySpy = vi.spyOn(utils, 'validateCapsWithAppA11y').mockReturnValue(true)
+        const isAppA11ySessionSpy = vi.spyOn(utils, 'isAppAccessibilityAutomationSession').mockReturnValue(true)
+        shouldAddServiceVersionSpy.mockReturnValue(false)
+        isAccessibilityAutomationSessionSpy.mockReturnValue(true)
+        accessibilityHandler['isAppAutomate'] = true
+        await accessibilityHandler.before('session123')
+        expect(validateCapsWithNonBstackA11ySpy).not.toHaveBeenCalled()
+        expect(validateCapsWithAppA11ySpy).toHaveBeenCalledTimes(1)
+        expect(accessibilityHandler['_accessibility']).toBe(true)
+        validateCapsWithAppA11ySpy.mockRestore()
+        isAppA11ySessionSpy.mockRestore()
+    })
+
+    it('turns accessibility off for Edge in legacy headless mode', async () => {
+        isAccessibilityAutomationSessionSpy.mockReturnValue(true)
+        accessibilityHandler['_platformA11yMeta'] = { browser_name: 'MicrosoftEdge', browser_version: 'latest' }
+        accessibilityHandler['_caps'] = { browserName: 'MicrosoftEdge', 'ms:edgeOptions': { args: ['--headless'] } } as any
+        vi.spyOn(accessibilityHandler as any, '_getCapabilityValue').mockImplementation((caps: any, key: string) => key === 'accessibility' ? true : caps[key])
+        await accessibilityHandler.before('session123')
+        expect(accessibilityHandler['_accessibility']).toBe(false)
     })
 
     it('calls getA11yResultsSummary', async () => {
@@ -476,7 +525,7 @@ describe('scans ahead of the first test (config-level hooks)', () => {
 
     it('skips multiremote, which has no session id to gate on', async () => {
         const handler = handlerFor('mocha')
-        handler['_browser'] = { ...browser, isMultiremote: true } as any
+        handler['_browser'] = { ...browser, isMultiRemote: true } as any
 
         await handler.before('session-multi')
 
@@ -619,6 +668,50 @@ describe('beforeHook / afterHook (hook scans)', () => {
         expect(scanSpy).toHaveBeenCalled()
         const lastCall = scanSpy.mock.calls[scanSpy.mock.calls.length - 1]
         expect(lastCall[6]).toBeNull()
+    })
+
+    it('skips the scan before only the first url of a session, even when scanning was off for it', async () => {
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        const fireUrl = () => accessibilityHandler['commandWrapper']({ name: 'url', class: 'Browser' } as any, undefined as any, vi.fn().mockResolvedValue('ok'), 'https://example.com')
+        accessibilityHandler['_sessionId'] = 'session-first-nav'
+
+        AccessibilityHandler['_a11yScanSessionMap']['session-first-nav'] = false
+        await fireUrl()
+        AccessibilityHandler['_a11yScanSessionMap']['session-first-nav'] = true
+        await fireUrl()
+        expect(scanSpy).toHaveBeenCalledTimes(1)
+
+        accessibilityHandler['_sessionId'] = 'session-first-nav-2'
+        AccessibilityHandler['_a11yScanSessionMap']['session-first-nav-2'] = true
+        await fireUrl()
+        expect(scanSpy).toHaveBeenCalledTimes(1)
+        await fireUrl()
+        expect(scanSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('scans a mobile web session after its first url, though that url is the skipped first navigation', async () => {
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+        expect(utils.validateCapsWithA11y('iPhone 17', { platform_name: 'ios', browser_name: 'safari', os_version: '26' })).toBe(true)
+        accessibilityHandler['_sessionId'] = 'session-first-nav-mobile'
+        AccessibilityHandler['_a11yScanSessionMap']['session-first-nav-mobile'] = true
+
+        await accessibilityHandler['commandWrapper']({ name: 'url', class: 'Browser' } as any, undefined as any, vi.fn().mockResolvedValue('ok'), 'https://example.com')
+        expect(scanSpy).not.toHaveBeenCalled()
+        await accessibilityHandler['commandWrapper']({ name: 'click', class: 'Element' } as any, undefined as any, vi.fn().mockResolvedValue('ok'), 'arg')
+        expect(scanSpy).toHaveBeenCalledTimes(1)
+
+        delete process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP
+        utils.validateCapsWithA11y(undefined, { browser_name: 'chrome', browser_version: 'latest' })
+    })
+
+    it('scans before the first url of an app session', async () => {
+        const scanSpy = vi.spyOn(utils, 'performA11yScan').mockResolvedValue(undefined)
+        accessibilityHandler['isAppAutomate'] = true
+        accessibilityHandler['_sessionId'] = 'session-first-nav-app'
+        AccessibilityHandler['_a11yScanSessionMap']['session-first-nav-app'] = true
+        await accessibilityHandler['commandWrapper']({ name: 'url', class: 'Browser' } as any, undefined as any, vi.fn().mockResolvedValue('ok'), 'myapp://home')
+        expect(scanSpy).toHaveBeenCalledTimes(1)
     })
 
     it('_getParamsForAppAccessibility puts the hook uuid on the scan payload as thHookRunUuid', () => {
@@ -778,6 +871,24 @@ describe('afterTest', () => {
         await accessibilityHandler.afterTest('suite title', { parent: 'parent', title: 'test' } as any)
 
         expect(executeAsyncSpy).toBeCalledTimes(0)
+    })
+
+    it('saves with the mobile args and checks the save result', async () => {
+        const mobileArgs = { is_mobile_session: true, thTestRunUuid: 'run-uuid' }
+        const getMobileA11yScriptArgsSpy = vi.spyOn(utils, 'getMobileA11yScriptArgs').mockReturnValue(mobileArgs)
+        const logRejectedMobileSaveSpy = vi.spyOn(utils, 'logRejectedMobileSave')
+        vi.spyOn(utils, 'isAppAccessibilityAutomationSession').mockReturnValue(false)
+        const saveResult = { success: false, msg: 'No intermediate results found for mobile session' }
+        const executeSpy = vi.spyOn((browser as WebdriverIO.Browser), 'execute').mockResolvedValueOnce(saveResult)
+        const saveScriptSpy = vi.spyOn(AccessibilityScripts, 'saveTestResults', 'get').mockReturnValue('saveScript')
+
+        await accessibilityHandler['sendTestStopEvent'](browser as WebdriverIO.Browser, { thTestRunUuid: 'run-uuid' } as any)
+
+        expect(String(executeSpy.mock.calls[0][0])).toContain('"is_mobile_session":true')
+        expect(logRejectedMobileSaveSpy).toHaveBeenCalledWith(saveResult)
+        getMobileA11yScriptArgsSpy.mockRestore()
+        logRejectedMobileSaveSpy.mockRestore()
+        saveScriptSpy.mockRestore()
     })
 
     it('should throw error in after test if exception occurs', async () => {

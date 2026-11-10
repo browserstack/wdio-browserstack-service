@@ -26,7 +26,8 @@ import {
     BROWSERSTACK_OBSERVABILITY,
     WDIO_NAMING_PREFIX,
     BROWSERSTACK_TEST_REPORTING,
-    TEST_REPORTING_PROJECT_NAME
+    TEST_REPORTING_PROJECT_NAME,
+    SERVER_SDK_CONFIG_KEY
 } from './constants.js'
 import {
     launchTestSession,
@@ -43,7 +44,6 @@ import {
     isBrowserstackInfra,
     uploadLogs,
     ObjectsAreEqual, getBasicAuthHeader,
-    isValidCapsForHealing,
     getBooleanValueFromString,
     validateCapsWithNonBstackA11y,
     mergeChromeOptions,
@@ -61,7 +61,6 @@ import type Percy from './Percy/Percy.js'
 import BrowserStackConfig from './config.js'
 import { setupExitHandlers } from './exitHandler.js'
 import { sendFinish, sendStart } from './instrumentation/funnelInstrumentation.js'
-import AiHandler from './ai-handler.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
 import * as PERFORMANCE_SDK_EVENTS from './instrumentation/performance/constants.js'
 import UploadAttachmentModule from './cli/modules/uploadAttachmentModule.js'
@@ -162,13 +161,18 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                                 capability['browserstack.wdioService'] = BSTACK_SERVICE_VERSION
                             }
                         }
+                        const envNames = this._applyEnvBuildNames(capability)
 
                         // Need this details for sending data to Test Reporting and Analytics
                         this._buildIdentifier = capability['browserstack.buildIdentifier']?.toString()
                         // @ts-expect-error ToDo: fix invalid cap
-                        this._buildName = capability.build?.toString()
+                        this._buildName = envNames.buildName ?? capability.build?.toString()
+                        if (envNames.projectName) {
+                            this._projectName = envNames.projectName
+                        }
                     } else {
                         capability['bstack:options'].wdioService = BSTACK_SERVICE_VERSION
+                        this._applyEnvBuildNames(capability)
                         this._buildName = capability['bstack:options'].buildName
                         this._projectName = capability['bstack:options'].projectName
                         this._buildTag = capability['bstack:options'].buildTag
@@ -182,7 +186,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                     }
                 })
         } else if (typeof capabilities === 'object') {
-            Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+            Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                 if (!(caps.capabilities as WebdriverIO.Capabilities)['bstack:options']) {
                     if (isBStackSession(this._config)) {
                         const extensionCaps = Object.keys(caps.capabilities).filter((cap) => cap.includes(':'))
@@ -197,10 +201,18 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                             (caps.capabilities as WebdriverIO.Capabilities)['browserstack.wdioService'] = BSTACK_SERVICE_VERSION
                         }
                     }
+                    const envNames = this._applyEnvBuildNames(caps.capabilities as WebdriverIO.Capabilities)
+                    if (envNames.buildName) {
+                        this._buildName = envNames.buildName
+                    }
+                    if (envNames.projectName) {
+                        this._projectName = envNames.projectName
+                    }
                     this._buildIdentifier = (caps.capabilities as WebdriverIO.Capabilities)['browserstack.buildIdentifier']
                 } else {
                     const bstackOptions = (caps.capabilities as WebdriverIO.Capabilities)['bstack:options']
                     bstackOptions!.wdioService = BSTACK_SERVICE_VERSION
+                    this._applyEnvBuildNames(caps.capabilities as WebdriverIO.Capabilities)
                     this._buildName = bstackOptions!.buildName
                     this._projectName = bstackOptions!.projectName
                     this._buildTag = bstackOptions!.buildTag
@@ -239,6 +251,45 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         } catch (error: unknown) {
             BStackLogger.error(`[Crash_Report_Upload] Config processing failed due to ${error}`)
         }
+    }
+
+    /**
+     * SDK-7075: BROWSERSTACK_PROJECT_NAME / BROWSERSTACK_BUILD_NAME take precedence over the
+     * config file, as every other SDK and the binary's own env->config map already do. They are
+     * written back into the caps so the session itself carries them: into bstack:options for W3C
+     * caps (including one this constructor just created), and into the top-level project/build
+     * keys that legacy caps name a build with - added on a BrowserStack session that has no
+     * bstack:options, otherwise only overwritten where already present. Blank values are ignored.
+     * Returns the values applied, for the Test Reporting fields - none for the caps of a
+     * non-BrowserStack session, which are left untouched so the reported names match the session.
+     */
+    private _applyEnvBuildNames (capability: WebdriverIO.Capabilities): { projectName?: string, buildName?: string } {
+        const bstackOptions = capability['bstack:options']
+        if (!bstackOptions && !isBStackSession(this._config)) {
+            return {}
+        }
+        const projectName = process.env.BROWSERSTACK_PROJECT_NAME?.trim() || undefined
+        const buildName = process.env.BROWSERSTACK_BUILD_NAME?.trim() || undefined
+        if (bstackOptions) {
+            if (projectName) {
+                bstackOptions.projectName = projectName
+            }
+            if (buildName) {
+                bstackOptions.buildName = buildName
+            }
+        }
+        // Legacy caps name a build with top-level keys. Without bstack:options they are the only
+        // place the name can go; next to bstack:options, any the caps already carry are aligned
+        // too, so the session never sends two different names.
+        const legacyCaps = capability as Record<string, unknown>
+        const writeLegacy = (key: string) => !bstackOptions || key in legacyCaps
+        if (projectName && writeLegacy('project')) {
+            legacyCaps.project = projectName
+        }
+        if (buildName && writeLegacy('build')) {
+            legacyCaps.build = buildName
+        }
+        return { projectName, buildName }
     }
 
     @PerformanceTester.Measure(PERFORMANCE_SDK_EVENTS.EVENTS.SDK_SETUP)
@@ -359,6 +410,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 CLIUtils.setFrameworkDetail(WDIO_NAMING_PREFIX + config.framework, 'WebdriverIO')
                 const binconfig = CLIUtils.getBinConfig(config, capabilities as Capabilities.RequestedStandaloneCapabilities | Capabilities.RequestedStandaloneCapabilities[], this._options, this._buildTag)
                 await BrowserstackCLI.getInstance().bootstrap(this._options, config, binconfig)
+                this._applyServerConfigToRunner(config, capabilities as WebdriverIO.Capabilities[])
                 BStackLogger.debug(`Is CLI running ${BrowserstackCLI.getInstance().isRunning()}`)
                 PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.START)
             }
@@ -369,28 +421,9 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
 
         PerformanceTester.end(PERFORMANCE_SDK_EVENTS.FRAMEWORK_EVENTS.INIT)
 
-        // Setting up healing for those sessions where we don't add the service version capability as it indicates that the session is not being run on BrowserStack
-        if (!shouldAddServiceVersion(this._config, this._options.testObservability, capabilities as Capabilities.BrowserStackCapabilities)) {
-            try {
-                if ((capabilities as Capabilities.BrowserStackCapabilities).browserName) {
-                    capabilities = await AiHandler.setup(this._config, this.browserStackConfig, this._options, capabilities as WebdriverIO.Capabilities, false)
-                } else if ( Array.isArray(capabilities)){
-
-                    for (let i = 0; i < capabilities.length; i++) {
-                        if ((capabilities[i] as Capabilities.BrowserStackCapabilities).browserName) {
-                            capabilities[i] = await AiHandler.setup(this._config, this.browserStackConfig, this._options, capabilities[i] as WebdriverIO.Capabilities, false)
-                        }
-                    }
-
-                } else if (isValidCapsForHealing(capabilities)) {
-                    // setting up healing in case capabilities.xyz.capabilities.browserName where xyz can be anything:
-                    capabilities = await AiHandler.setup(this._config, this.browserStackConfig, this._options, capabilities, true)
-                }
-            } catch (err) {
-                if (this._options.selfHeal === true) {
-                    BStackLogger.warn(`Error while setting up Browserstack healing Extension ${err}. Disabling healing for this session.`)
-                }
-            }
+        // The client-side healing extension this option drove off-infra has been removed; on BrowserStack, healing comes from the browserstack.selfHeal capability instead.
+        if (this._options.selfHeal === true && !isBrowserstackInfra(this._config as BrowserstackConfig & Options.Testrunner, capabilities as Capabilities.BrowserStackCapabilities)) {
+            BStackLogger.warn('selfHeal has no effect for sessions not running on BrowserStack infrastructure. Self-healing on BrowserStack is driven by the browserstack.selfHeal capability.')
         }
 
         /**
@@ -916,7 +949,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 })
                 .forEach(strip)
         } else {
-            Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+            Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                 strip(caps.capabilities as WebdriverIO.Capabilities)
             })
         }
@@ -938,8 +971,8 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                     })
                     .forEach((capability: WebdriverIO.Capabilities) => {
                         if (
-                            validateCapsWithNonBstackA11y(capability.browserName, capability.browserVersion) &&
-                            capType === 'goog:chromeOptions' && value
+                            capType === 'goog:chromeOptions' && value &&
+                            validateCapsWithNonBstackA11y(capability.browserName, capability.browserVersion)
                         ) {
                             const chromeOptions =  capability['goog:chromeOptions'] as unknown as Capabilities.ChromeOptions
                             if (chromeOptions){
@@ -983,13 +1016,13 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                         }
                     })
             } else if (typeof capabilities === 'object') {
-                Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+                Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                     if (
+                        capType === 'goog:chromeOptions' && value &&
                         validateCapsWithNonBstackA11y(
                             (caps.capabilities as WebdriverIO.Capabilities).browserName,
                             (caps.capabilities as WebdriverIO.Capabilities).browserVersion
-                        ) &&
-                        capType === 'goog:chromeOptions' && value
+                        )
                     ) {
                         const chromeOptions = (caps.capabilities as WebdriverIO.Capabilities)['goog:chromeOptions'] as unknown as Capabilities.ChromeOptions
                         if (chromeOptions) {
@@ -1034,6 +1067,37 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }
         } catch (error) {
             BStackLogger.debug(`Exception while retrieving capability value. Error - ${error}`)
+        }
+    }
+
+    /**
+     * The runner schedules workers after onPrepare from each capability's wdio:maxInstances and
+     * config.maxInstances, so a server parallelsPerPlatform is mapped onto them here, and server
+     * platforms onto the capability at the same index. Platforms the server appends have no
+     * capability and stay inert.
+     */
+    _applyServerConfigToRunner(config: Options.Testrunner, capabilities: WebdriverIO.Capabilities[]) {
+        const cli = BrowserstackCLI.getInstance()
+        const keys = cli.serverConfigKeys
+        if (!keys.length || !Array.isArray(capabilities)) {
+            return
+        }
+        if (keys.includes('accessibility')) {
+            this._accessibilityAutomation = isTrue(this._options.accessibility)
+        }
+        if (keys.includes('platforms')) {
+            const platforms = (cli.getConfig()[SERVER_SDK_CONFIG_KEY] as Record<string, unknown> | undefined)?.platforms
+            if (Array.isArray(platforms)) {
+                capabilities.forEach((capability, index) => CLIUtils.applyServerPlatform(capability as Record<string, unknown>, platforms[index]))
+            }
+        }
+        const parallelsPerPlatform = Number((this._options as Record<string, unknown>).parallelsPerPlatform)
+        if (keys.includes('parallelsPerPlatform') && Number.isInteger(parallelsPerPlatform) && parallelsPerPlatform > 0) {
+            capabilities.forEach((capability) => {
+                capability['wdio:maxInstances'] = parallelsPerPlatform
+            })
+            config.maxInstances = Math.max(config.maxInstances || 0, capabilities.length * parallelsPerPlatform)
+            BStackLogger.info(`Server parallelsPerPlatform=${parallelsPerPlatform}: wdio:maxInstances=${parallelsPerPlatform} per capability, maxInstances=${config.maxInstances}`)
         }
     }
 
@@ -1108,7 +1172,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                     }
                 })
         } else if (typeof capabilities === 'object') {
-            Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+            Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                 if (!(caps.capabilities as WebdriverIO.Capabilities)['bstack:options']) {
                     const extensionCaps = Object.keys(caps.capabilities).filter((cap) => cap.includes(':'))
                     if (extensionCaps.length) {
@@ -1197,9 +1261,11 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
          * A buildIdentifier is only meaningful next to a buildName - the dashboard appends it
          * to that name. BROWSERSTACK_BUILD_NAME used to force this branch as well, which
          * silently discarded every explicitly configured buildIdentifier whenever that env var
-         * happened to be exported (SDK-4748). This service never reads BROWSERSTACK_BUILD_NAME
-         * as a buildName source, and unlike the yml-driven SDKs it has no default identifier to
-         * suppress, so the env var no longer takes part in this decision.
+         * happened to be exported (SDK-4748). SDK-7075 then made BROWSERSTACK_BUILD_NAME a
+         * buildName source - the constructor folds it into the caps of a BrowserStack session, or
+         * of any caps carrying bstack:options - so the env var no longer suppresses the identifier;
+         * it supplies the very name the identifier is appended to. This branch therefore fires
+         * only when neither the caps nor (for those caps) the environment name a build.
          */
         if (!this._buildName) {
             this._updateCaps(capabilities, 'buildIdentifier')

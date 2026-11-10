@@ -126,11 +126,11 @@ export function getBrowserDescription(cap: WebdriverIO.Capabilities) {
  * @param browserName browser name in case of multiremote
  */
 export function getBrowserCapabilities(browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, caps?: Capabilities.ResolvedTestrunnerCapabilities, browserName?: string) {
-    if (!browser.isMultiremote) {
+    if (!browser.isMultiRemote) {
         return { ...browser.capabilities, ...caps } as WebdriverIO.Capabilities
     }
 
-    const multiCaps = caps as Capabilities.RequestedMultiremoteCapabilities
+    const multiCaps = caps as Capabilities.RequestedMultiRemoteCapabilities
     const globalCap = browserName && browser.getInstance(browserName) ? browser.getInstance(browserName).capabilities : {}
     const cap = browserName && multiCaps[browserName] ? multiCaps[browserName].capabilities : {}
     return { ...globalCap, ...cap } as WebdriverIO.Capabilities
@@ -339,7 +339,7 @@ export const processAccessibilityResponse = (response: LaunchResponse | StartBin
     }
 
     if (response.accessibility.options) {
-        const { accessibilityToken, pollingTimeout, scannerVersion } = jsonifyAccessibilityArray(response.accessibility.options.capabilities as Array<Record<string, unknown>>, 'name', 'value')
+        const { accessibilityToken, pollingTimeout, scannerVersion, scannerProcessingTimeout, isMobileScanningEnabledForGroup } = jsonifyAccessibilityArray(response.accessibility.options.capabilities as Array<Record<string, unknown>>, 'name', 'value')
         const result = jsonifyAccessibilityArray(response.accessibility.options.capabilities as Array<Record<string, unknown>>, 'name', 'value')
         const scriptsJson = {
             'scripts': jsonifyAccessibilityArray(response.accessibility.options.scripts as Array<Record<string, unknown>>, 'name', 'command'),
@@ -356,6 +356,13 @@ export const processAccessibilityResponse = (response: LaunchResponse | StartBin
         }
         if (pollingTimeout) {
             process.env.BSTACK_A11Y_POLLING_TIMEOUT = pollingTimeout as string
+        }
+        if (scannerProcessingTimeout) {
+            process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT = scannerProcessingTimeout as string
+        }
+        // Group entitlements for mobile web a11y; set in the launcher, so workers inherit them.
+        if (isMobileScanningEnabledForGroup !== undefined) {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = String(isTrue(isMobileScanningEnabledForGroup))
         }
         if (scriptsJson) {
             // @ts-expect-error fix type
@@ -481,21 +488,131 @@ export const validateCapsWithAppA11y = (platformMeta?: { [key: string]: any; }) 
     return true
 }
 
+export const MOBILE_PLATFORM_UNSUPPORTED_WARNING = 'Accessibility Automation will run only on Desktop browsers, Chrome on Android or Safari on iPhone with iOS 18 or later.'
+
+export const MOBILE_SCANNING_DISABLED_WARNING = 'Mobile Accessibility Automation is not enabled for your account. Accessibility scans will be skipped on mobile sessions. Contact BrowserStack to enable mobile accessibility scanning.'
+
+export const isMobileScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP === 'true'
+
+// The scanner fails inside Safari before iOS 18, so older iPhones are rejected when the version is known.
+export const MIN_IOS_MAJOR_VERSION = 18
+
+/* Mobile browsers accessibility scans in-page: Chrome on Android, and Safari on iPhone (not iPad), as in the Node SDK. */
+export const isMobileA11yPlatformPair = (platformName?: string, browserName?: string, deviceName?: string, osVersion?: string | number) => {
+    const platform = String(platformName || '').toLowerCase()
+    const browser = String(browserName || '').toLowerCase()
+    if (platform === 'android') {
+        return browser.includes('chrom')
+    }
+    // Read the major from strings like "iOS 17" too; a version that isn't sent stays allowed, as in the Node SDK.
+    const iosMajor = parseInt((String(osVersion ?? '').match(/\d+/) || [''])[0], 10)
+    if (iosMajor < MIN_IOS_MAJOR_VERSION) {
+        return false
+    }
+    return platform === 'ios' && /safari|iphone|webkit/.test(browser) && !/ipad/i.test(String(deviceName || ''))
+}
+
+// One driver session per worker process, so the worker's mobile state is module-level.
+let mobileA11ySession = false
+let mobileA11yNavigated = false
+
+/* A mobile session opens on the device's own start page (Appium's docs on iPhone, a blank page on Android), so automatic scans wait for the test's first navigation, as in the Node SDK. */
+export const isBeforeFirstMobileNavigation = (commandName?: string) => {
+    if (!mobileA11ySession || mobileA11yNavigated) {
+        return false
+    }
+    if (commandName === 'url' || commandName === 'navigateTo') {
+        mobileA11yNavigated = true
+    }
+    return true
+}
+
+/* Mobile scans post results from the page, so the scan, results and save scripts need the session flag and run uuid. A global-hook scan belongs to no test, as in _getParamsForAppAccessibility. */
+export const getMobileA11yScriptArgs = (isGlobalHook?: boolean): Record<string, unknown> => (mobileA11ySession
+    ? { 'is_mobile_session': true, 'thTestRunUuid': isGlobalHook ? undefined : process.env.TEST_ANALYTICS_ID }
+    : {})
+
+/* The mobile save reports failure in its result instead of throwing, so surface it. */
+export const logRejectedMobileSave = (results: unknown) => {
+    if (mobileA11ySession && (results as { success?: unknown } | undefined)?.success === false) {
+        BStackLogger.error(`Accessibility results could not be saved for this mobile session: ${(results as { msg?: string }).msg}`)
+    }
+}
+
+/* Desktop result scripts take no argument; mobile ones need the session flag and run uuid. */
+export const getMobileResultsArg = () => (mobileA11ySession ? getMobileA11yScriptArgs() : undefined)
+
+/* The backend's scannerProcessingTimeout (seconds) from build start; 30s when it isn't sent, as in the Node SDK. */
+export const getMobileA11yScriptTimeoutMs = () => (parseInt(process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT || '', 10) || 30) * 1000
+
+/* Appium XCUITest starts iOS sessions with a ~0 ms async script timeout, so every scan script times out until one is set. */
+export const setMobileA11yScriptTimeout = async (browser: WebdriverIO.Browser) => {
+    if (!mobileA11ySession) {
+        return
+    }
+    const timeout = getMobileA11yScriptTimeoutMs()
+    try {
+        const current = await browser.getTimeouts().then((t) => t.script, () => undefined)
+        if (typeof current === 'number' && current >= timeout) {
+            return
+        }
+        await browser.setTimeout({ script: timeout })
+    } catch (error) {
+        BStackLogger.debug(`Could not set the script timeout for the mobile accessibility session: ${error}`)
+    }
+}
+
+const EDGE_BROWSER_NAMES = ['edge', 'microsoftedge', 'msedge']
+
+const navigatedSessions = new Set<string>()
+
+/* Until a session's first url command the browser sits on its start page (data:, or Edge's https new tab, where the extension can't load), so there is nothing to scan. */
+export const isFirstNavigation = (sessionId: string | null | undefined, commandName: string) => {
+    if (commandName !== 'url' || !sessionId || navigatedSessions.has(sessionId)) {
+        return false
+    }
+    navigatedSessions.add(sessionId)
+    return true
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const validateCapsWithA11y = (deviceName?: any, platformMeta?: { [key: string]: any; }, chromeOptions?: any) => {
     /* Check if the current driver platform is eligible for Accessibility scan */
+    mobileA11ySession = false
+    mobileA11yNavigated = false
     try {
         if (deviceName) {
-            BStackLogger.warn('Accessibility Automation will run only on Desktop browsers.')
-            return false
+            // Session caps can report the Appium host OS (e.g. LINUX) as platformName; the device name tells iOS apart.
+            const reportedPlatform = String(platformMeta?.platform_name || '').toLowerCase()
+            const platform = ['android', 'ios'].includes(reportedPlatform) ? reportedPlatform : (/iphone|ipad/i.test(String(deviceName)) ? 'ios' : 'android')
+            // iOS session caps may not carry the OS version; os_version is the requested one.
+            const osVersion = platformMeta?.platform_version || platformMeta?.os_version
+            if (!isMobileA11yPlatformPair(platform, platformMeta?.browser_name, deviceName, osVersion)) {
+                BStackLogger.warn(MOBILE_PLATFORM_UNSUPPORTED_WARNING)
+                return false
+            }
+            if (!isMobileScanningEnabledForGroup()) {
+                BStackLogger.warn(MOBILE_SCANNING_DISABLED_WARNING)
+                return false
+            }
+            BStackLogger.info(`Accessibility Automation is enabled for mobile browser (${platform}, ${platformMeta?.browser_name}).`)
+            mobileA11ySession = true
+            return true
         }
 
-        if (platformMeta?.browser_name?.toLowerCase() !== 'chrome') {
-            BStackLogger.warn('Accessibility Automation will run only on Chrome browsers.')
+        const browserName = platformMeta?.browser_name?.toLowerCase()
+        const isEdge = EDGE_BROWSER_NAMES.includes(browserName)
+        if (browserName !== 'chrome' && !isEdge) {
+            BStackLogger.warn('Accessibility Automation will run only on Chrome and Edge browsers.')
             return false
         }
         const browserVersion = platformMeta?.browser_version
-        if ( !isUndefined(browserVersion) && !(browserVersion === 'latest' || parseFloat(browserVersion + '') > 94)) {
+        if (isEdge) {
+            if (!isUndefined(browserVersion) && !(browserVersion === 'latest' || parseFloat(browserVersion + '') >= 100)) {
+                BStackLogger.warn('Accessibility Automation will run only on Edge browser version 100 or greater.')
+                return false
+            }
+        } else if ( !isUndefined(browserVersion) && !(browserVersion === 'latest' || parseFloat(browserVersion + '') > 94)) {
             BStackLogger.warn('Accessibility Automation will run only on Chrome browser version greater than 94.')
             return false
         }
@@ -628,7 +745,7 @@ export const performA11yScan = async (isAppAutomate: boolean, browser: Webdriver
             return ( results as { [key: string]: any; } | undefined )
         }
         if (AccessibilityScripts.performScan) {
-            const results = await executeAccessibilityScript(browser, AccessibilityScripts.performScan, { method: commandName || '' })
+            const results = await executeAccessibilityScript(browser, AccessibilityScripts.performScan, { method: commandName || '', ...getMobileA11yScriptArgs(isGlobalHook) })
             return ( results as { [key: string]: unknown; } | undefined )
         }
         BStackLogger.error('AccessibilityScripts.performScan is null')
@@ -650,7 +767,7 @@ export const getA11yResults = PerformanceTester.measureWrapper(PERFORMANCE_SDK_E
         BStackLogger.debug('Performing scan before getting results')
         await performA11yScan(isAppAutomate, browser, isBrowserStackSession, isAccessibility)
         if (AccessibilityScripts.getResults) {
-            const results: Array<{ [key: string]: unknown }> = await executeAccessibilityScript(browser, AccessibilityScripts.getResults)
+            const results: Array<{ [key: string]: unknown }> = await executeAccessibilityScript(browser, AccessibilityScripts.getResults, getMobileResultsArg())
             return results
         }
         BStackLogger.error('AccessibilityScripts.getResults is null')
@@ -729,7 +846,7 @@ export const getA11yResultsSummary = PerformanceTester.measureWrapper(PERFORMANC
         BStackLogger.debug('Performing scan before getting results summary')
         await performA11yScan(isAppAutomate, browser, isBrowserStackSession, isAccessibility)
         if (AccessibilityScripts.getResultsSummary) {
-            const summaryResults: { [key: string]: unknown; } = await executeAccessibilityScript(browser, AccessibilityScripts.getResultsSummary)
+            const summaryResults: { [key: string]: unknown; } = await executeAccessibilityScript(browser, AccessibilityScripts.getResultsSummary, getMobileResultsArg())
             return summaryResults
         }
         BStackLogger.error('AccessibilityScripts.getResultsSummary is null')
@@ -1299,28 +1416,6 @@ export function isBrowserstackInfra(config: BrowserstackConfig & Options.Testrun
     }
 
     return true
-}
-
-export function getBrowserStackUserAndKey(config: Options.Testrunner, options: Options.Testrunner) {
-
-    // Fallback 1: Env variables
-    // Fallback 2: Service variables in wdio.conf.js (that are received inside options object)
-    const envOrServiceVariables = {
-        user: getBrowserStackUser(options),
-        key: getBrowserStackKey(options)
-    }
-    if (envOrServiceVariables.user && envOrServiceVariables.key) {
-        return envOrServiceVariables
-    }
-
-    // Fallback 3: Service variables in testObservabilityOptions object
-    // Fallback 4: Service variables in the top level config object
-    const o11yVariables = {
-        user: getObservabilityUser(options, config),
-        key: getObservabilityKey(options, config)
-    }
-    return o11yVariables
-
 }
 
 export function shouldAddServiceVersion(config: Options.Testrunner, testObservability?: boolean, caps?: Capabilities.BrowserStackCapabilities): boolean {
@@ -1999,23 +2094,6 @@ export function checkAndTruncateVCSInfo(gitMetaData: GitMetaData): GitMetaData {
     return gitMetaData
 }
 
-export const hasBrowserName = (cap: Capabilities.WebdriverIOConfig): boolean => {
-    if (!cap || !cap.capabilities) {
-        return false
-    }
-    const browserStackCapabilities = cap.capabilities as Capabilities.BrowserStackCapabilities
-    return browserStackCapabilities.browserName !== undefined
-}
-
-export const isValidCapsForHealing = (caps: WebdriverIO.Capabilities): boolean => {
-
-    // Get all capability values
-    const capValues = Object.values(caps)
-
-    // Check if there are any capabilities and if at least one has a browser name
-    return capValues.length > 0 && capValues.some(hasBrowserName)
-}
-
 export function isTurboScale(options: (BrowserstackConfig & BrowserstackOptions) | undefined): boolean {
     return Boolean(options?.turboScale)
 }
@@ -2119,35 +2197,20 @@ async function makeGetRequest(url: string, params: Record<string, any>, headers:
     return response
 }
 
-// Element commands webdriverio 10 dropped. An element override for a missing command is only
-// validated when the first element is created, which throws inside the user's test.
-const WDIO_V10_REMOVED_ELEMENT_COMMANDS = new Set(['touchAction'])
+// Element commands webdriverio 10 removed. An element override for a missing command is only
+// validated when the first element is created, which would throw inside the user's test.
+const REMOVED_ELEMENT_COMMANDS = new Set(['touchAction'])
 
-/**
- * `overwriteCommand(name, fn, attachToElement)` took a boolean up to webdriverio 9 and an
- * options object from 10 on; the boolean form throws there, so retry with the object.
- * v10 is recognised by its error text or, should that change, by the missing `executeAsync`.
- */
-export function overwriteCommandCompat(
+export function overwriteScanCommand(
     browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser,
     name: string,
     fn: (...args: any[]) => unknown,
     attachToElement: boolean
 ) {
-    const overwrite = (browser as any).overwriteCommand.bind(browser) as (...args: unknown[]) => unknown
-    try {
-        return overwrite(name, fn, attachToElement)
-    } catch (err) {
-        const isV10 = String(err).includes('removed in WebdriverIO v10') ||
-            typeof (browser as unknown as { executeAsync?: unknown }).executeAsync !== 'function'
-        if (!isV10) {
-            throw err
-        }
-        if (attachToElement && WDIO_V10_REMOVED_ELEMENT_COMMANDS.has(name)) {
-            throw new Error(`overwriteCommand: no command to be overwritten: ${name}`)
-        }
-        return overwrite(name, fn, { attachToElement })
+    if (attachToElement && REMOVED_ELEMENT_COMMANDS.has(name)) {
+        throw new Error(`overwriteCommand: no command to be overwritten: ${name}`)
     }
+    return (browser as any).overwriteCommand(name, fn, { attachToElement })
 }
 
 export async function executeAccessibilityScript<ReturnType>(
@@ -2214,7 +2277,7 @@ export function coerceStringBooleans<T extends Record<string, unknown>>(obj: T):
  * @param key - The key to check
  * @returns true if the key is safe, false otherwise
  */
-function isSafeKey(key: string): boolean {
+export function isSafeKey(key: string): boolean {
     const dangerousKeys = ['__proto__', 'constructor', 'prototype']
     return !dangerousKeys.includes(key)
 }

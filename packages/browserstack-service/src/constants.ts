@@ -164,15 +164,6 @@ export const FUNNEL_INSTRUMENTATION_URL = 'https://api.browserstack.com/sdk/v1/e
 
 export const EDS_URL = 'https://eds.browserstack.com'
 
-export const SUPPORTED_BROWSERS_FOR_AI = ['chrome', 'microsoftedge', 'firefox']
-
-export const TCG_URL = 'https://tcg.browserstack.com'
-
-export const TCG_INFO = {
-    tcgRegion: 'use',
-    tcgUrl: TCG_URL,
-}
-
 // Smart Selection Mode Constants
 export const SMART_SELECTION_MODE_RELEVANT_FIRST = 'relevantFirst'
 export const SMART_SELECTION_MODE_RELEVANT_ONLY = 'relevantOnly'
@@ -181,9 +172,6 @@ export const SMART_SELECTION_MODE_RELEVANT_ONLY = 'relevantOnly'
 
 // To store the JWT token returned the session launch
 export const BROWSERSTACK_TESTHUB_JWT = 'BROWSERSTACK_TESTHUB_JWT'
-
-// To store tcg auth result for selfHealing feature:
-export const BSTACK_TCG_AUTH_RESULT = 'BSTACK_TCG_AUTH_RESULT'
 
 // To store the setting of whether to send screenshots or not
 export const TESTOPS_SCREENSHOT_ENV = 'BS_TESTOPS_ALLOW_SCREENSHOTS'
@@ -241,7 +229,11 @@ export const GIT_META_DATA_TRUNCATED = '...[TRUNCATED]'
 
 // CLI related constants
 export const CLI_STOP_TIMEOUT = 5000 // 5 seconds
+export const SERVER_SDK_CONFIG_KEY = 'serverSdkConfig'
+export const SERVER_SDK_CONFIG_KEYS_KEY = 'serverSdkConfigKeys'
 export const BINARY_BUSY_ERROR_CODES = ['ETXTBSY', 'EBUSY']
+export const CLI_AUTH_TOKEN_ENV = 'BROWSERSTACK_CLI_AUTH_TOKEN'
+export const CLI_AUTH_TOKEN_HEADER = 'x-browserstack-cli-token'
 export const MAX_SPAWN_RETRIES = 3
 export const SPAWN_RETRY_DELAY_MS = 1000
 export const WDIO_NAMING_PREFIX = 'WebdriverIO-'

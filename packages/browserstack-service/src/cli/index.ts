@@ -1,5 +1,6 @@
 import util from 'node:util'
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 
 import { CLIUtils } from './cliUtils.js'
 import PerformanceTester from '../instrumentation/performance/performance-tester.js'
@@ -12,7 +13,7 @@ import TestHubModule from './modules/testHubModule.js'
 import type { ChildProcess } from 'node:child_process'
 import type { StartBinSessionResponse } from '../grpc/index.js'
 import type BaseModule from './modules/baseModule.js'
-import { BROWSERSTACK_ACCESSIBILITY, BROWSERSTACK_OBSERVABILITY, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_TESTHUB_UUID, CLI_STOP_TIMEOUT, TESTOPS_BUILD_COMPLETED_ENV, TESTOPS_SCREENSHOT_ENV, BINARY_BUSY_ERROR_CODES, MAX_SPAWN_RETRIES, SPAWN_RETRY_DELAY_MS } from '../constants.js'
+import { BROWSERSTACK_ACCESSIBILITY, BROWSERSTACK_OBSERVABILITY, BROWSERSTACK_TESTHUB_JWT, BROWSERSTACK_TESTHUB_UUID, CLI_STOP_TIMEOUT, TESTOPS_BUILD_COMPLETED_ENV, TESTOPS_SCREENSHOT_ENV, BINARY_BUSY_ERROR_CODES, CLI_AUTH_TOKEN_ENV, MAX_SPAWN_RETRIES, SPAWN_RETRY_DELAY_MS, SERVER_SDK_CONFIG_KEY, SERVER_SDK_CONFIG_KEYS_KEY } from '../constants.js'
 import type { Options } from '@wdio/types'
 import TestOpsConfig from '../testOps/testOpsConfig.js'
 import WdioMochaTestFramework from './frameworks/wdioMochaTestFramework.js'
@@ -22,7 +23,7 @@ import WebdriverIOModule from './modules/webdriverIOModule.js'
 import AccessibilityModule from './modules/accessibilityModule.js'
 import CustomTagsModule from './modules/customTagsModule.js'
 import UploadAttachmentModule from './modules/uploadAttachmentModule.js'
-import { isTurboScale, processAccessibilityResponse, shouldAddServiceVersion } from '../util.js'
+import { isObject, isTurboScale, processAccessibilityResponse, shouldAddServiceVersion } from '../util.js'
 import ObservabilityModule from './modules/observabilityModule.js'
 import type { BrowserstackConfig, BrowserstackOptions, LaunchResponse } from '../types.js'
 import CrashReporter from '../crash-reporter.js'
@@ -55,6 +56,7 @@ export class BrowserstackCLI {
     SDK_CLI_BIN_PATH: string | null = null
     logger = BStackLogger
     options: BrowserstackConfig & BrowserstackOptions | {}
+    serverConfigKeys: string[] = []
 
     constructor() {
         this.initialized = false
@@ -140,11 +142,13 @@ export class BrowserstackCLI {
         // observer, so each test/hook event is dispatched (and uploaded) twice. Load once.
         if (this.modulesLoaded) {
             this.logger.info('loadModules: modules already loaded in this process; skipping to avoid duplicate observer registration')
+            this.applyServerConfig()
             return
         }
         this.modulesLoaded = true
 
         this.setConfig(startBinResponse)
+        this.applyServerConfig()
 
         // Surface any build errors the binary populated on testhub.errors
         // BEFORE the config.apis dereference below. On auth failure the
@@ -201,6 +205,33 @@ export class BrowserstackCLI {
             this.modules[PercyModule.MODULE_NAME] = new PercyModule(startBinResponse.percy)
         }
         this.configureModules()
+    }
+
+    /**
+     * Deep-merges the server config the binary forwards into this process's service options,
+     * applying exactly the keys the binary lists as overridden. Runs before any reader of the
+     * options; without both fields (older binaries, no override) nothing changes. Any failure
+     * keeps the local options.
+     */
+    applyServerConfig() {
+        try {
+            const serverConfig = this.config[SERVER_SDK_CONFIG_KEY]
+            const keys = this.config[SERVER_SDK_CONFIG_KEYS_KEY]
+            if (!isObject(serverConfig) || !Array.isArray(keys)) {
+                return
+            }
+            this.serverConfigKeys = CLIUtils.applyServerSdkConfig(this.options as Record<string, unknown>, serverConfig as Record<string, unknown>, keys)
+            // The modules call testContextOptions.sessionNameFormat; the merged JSON can only hold a string there.
+            const contextOptions = this.config.testContextOptions
+            if (isObject(contextOptions) && typeof (contextOptions as Record<string, unknown>).sessionNameFormat !== 'function') {
+                delete (contextOptions as Record<string, unknown>).sessionNameFormat
+            }
+            if (this.serverConfigKeys.length) {
+                this.logger.info(`applyServerConfig: server config applied keys=${this.serverConfigKeys.join(',')}`)
+            }
+        } catch (error) {
+            this.logger.error(`applyServerConfig: keeping the local config, error=${util.format(error)}`)
+        }
     }
 
     /**
@@ -264,6 +295,8 @@ export class BrowserstackCLI {
         if (!SDK_CLI_BIN_PATH) {
             throw new Error('Failed to get CLI binary path. CLI setup failed.')
         }
+
+        process.env[CLI_AUTH_TOKEN_ENV] = randomBytes(32).toString('hex')
 
         const cmd: Array<string> = [SDK_CLI_BIN_PATH, 'sdk']
         this.logger.debug(`spawning command='${cmd}'`)

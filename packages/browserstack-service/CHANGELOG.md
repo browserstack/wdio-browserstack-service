@@ -1,5 +1,67 @@
 # @wdio/browserstack-service
 
+## 9.44.0
+
+### Minor Changes
+
+- 2edd183: - Accessibility Automation now scans Chrome on Android and Safari on iPhone (iOS 18 or later) sessions, for accounts with mobile accessibility scanning enabled.
+- 85b79fa: - Secured the local connection between the SDK and the BrowserStack CLI with a per-run token.
+
+## 9.43.0
+
+### Minor Changes
+
+- b69abc7: - Accessibility Automation now scans Microsoft Edge (version 100 or later) on desktop.
+
+## 9.42.3
+
+### Patch Changes
+
+- c903651: - Fixed a warning that could incorrectly tell users their BrowserStack session was not running on BrowserStack infrastructure.
+
+## 9.42.2
+
+### Patch Changes
+
+- 319772c: - Fixed builds being reported as timed out on Test Reporting & Analytics when a Mocha `before` / `beforeEach` / `afterEach` hook is declared outside any `describe` block.
+
+## 9.42.1
+
+### Patch Changes
+
+- 3ec281b: - Removed the deprecated client-side self-healing extension. Self-healing on BrowserStack continues to work unchanged via the `browserstack.selfHeal` capability.
+
+## 9.42.0
+
+### Minor Changes
+
+- 481e05c: - Server-side configuration overrides from BrowserStack now take effect for WebdriverIO builds, for example `parallelsPerPlatform` (parallel sessions per capability). Your wdio.conf remains the fallback.
+
+## 9.41.0
+
+### Minor Changes
+
+- e0009ae: - `testManagementOptions` set in the BrowserStack service options is now forwarded in full, so `issues` and `issueTracker` can link Jira issues to the build. The same JSON can be passed with the `BROWSERSTACK_TEST_MANAGEMENT_OPTIONS` environment variable or the `--browserstack.testManagementOptions` CLI argument (Mocha and Cucumber).
+
+## 9.40.1
+
+### Patch Changes
+
+- 493a99f: - Fixed `BROWSERSTACK_PROJECT_NAME` and `BROWSERSTACK_BUILD_NAME` being ignored — the environment now takes precedence over the project and build names in your config file, matching the other BrowserStack SDKs.
+
+## 9.40.0
+
+### Minor Changes
+
+- 366330e: - `browser.setCustomTags()` now works with WebdriverIO + CucumberJS: custom metadata set in steps or Cucumber `Before`/`After` hooks is reported on the scenario in Test Reporting & Analytics.
+
+## 9.39.6
+
+### Patch Changes
+
+- 937350b: - Fixed mocha tests that fail by exceeding their timeout being marked "passed" on the Automate / App Automate dashboard, and their builds ending as "timeout" in Test Reporting about an hour after the run. Such tests are now reported as failed, with the timeout error as the reason.
+  - Removed the `resolveInstance: unable to resolve/create instance ... LOG POST` error printed when a wdio `before` hook writes to the console.
+
 ## 9.39.5
 
 ### Patch Changes

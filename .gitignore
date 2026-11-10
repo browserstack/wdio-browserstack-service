@@ -22,3 +22,6 @@ logs
 .DS_Store
 .env
 .env.*
+
+# lerna / nx cache
+.nx

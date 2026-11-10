@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, executeAccessibilityScript, formatString, overwriteCommandCompat, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, isBrowserstackSession } from '../../util.js'
+import { _getParamsForAppAccessibility, executeAccessibilityScript, formatString, getAppA11yResults, getAppA11yResultsSummary, overwriteScanCommand, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, isBrowserstackSession, isFirstNavigation, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout, isBeforeFirstMobileNavigation } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -183,6 +183,7 @@ export default class AccessibilityModule extends BaseModule {
                 browser_version: browserCaps?.browserVersion || 'latest',
                 platform_name: browserCaps?.platformName,
                 platform_version: this.getCapability(browserCaps, 'appium:platformVersion', 'platformVersion'),
+                os_version: this.getCapability(inputCaps, 'osVersion', 'os_version'),
             }
 
             // App Automate sessions must run the app-accessibility flow, not the
@@ -195,10 +196,13 @@ export default class AccessibilityModule extends BaseModule {
 
             if (this.isAppAccessibility) {
                 this.accessibility = validateCapsWithAppA11y(platformA11yMeta)
+            } else if (this.isNonBstackA11y) {
+                this.accessibility = validateCapsWithNonBstackA11y(platformA11yMeta.browser_name, platformA11yMeta.browser_version)
             } else {
                 const device = this.getCapability(inputCaps, 'deviceName')
-                const chromeOptions = this.getCapability(inputCaps, 'goog:chromeOptions')
+                const chromeOptions = this.getCapability(inputCaps, 'goog:chromeOptions') || this.getCapability(inputCaps, 'ms:edgeOptions', 'ms:edgeOptions')
                 this.accessibility = validateCapsWithA11y(device, platformA11yMeta, chromeOptions)
+                await setMobileA11yScriptTimeout(browser)
             }
 
             //patching getA11yResultsSummary
@@ -258,7 +262,7 @@ export default class AccessibilityModule extends BaseModule {
                     .filter((command) => command.name && command.class)
                     .forEach((command) => {
                         try {
-                            overwriteCommandCompat(
+                            overwriteScanCommand(
                                 browser,
                                 command.name,
                                 this.commandWrapper.bind(this, command),
@@ -292,6 +296,10 @@ export default class AccessibilityModule extends BaseModule {
         try {
             const autoInstance: AutomationFrameworkInstance = AutomationFramework.getTrackedInstance()
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
+            // Recorded before the gate check, so a first url issued while scanning is off still counts.
+            // App sessions start on the app's own screen, not a browser start page, so they keep that scan.
+            const firstNavigation = !this.isAppAccessibility && isFirstNavigation(sessionId as string | undefined, command.name)
+            const beforeFirstMobileNavigation = isBeforeFirstMobileNavigation(command.name)
             // Check if accessibility is still enabled for this session
             if (sessionId && this.accessibilityMap.get(sessionId)) {
                 const browser = AutomationFramework.getDriver(autoInstance) as WebdriverIO.Browser
@@ -306,9 +314,12 @@ export default class AccessibilityModule extends BaseModule {
                 }
 
                 // Perform accessibility scan before command if script is available
-                if (
-                    !command.name.includes('execute') ||
-                    !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)
+                if (beforeFirstMobileNavigation) {
+                    this.logger.debug(`Skipping accessibility scan before the test's first navigation (${command.name})`)
+                } else if (
+                    (!command.name.includes('execute') ||
+                    !this.shouldPatchExecuteScript(args.length ? args[0] as string : null)) &&
+                    !firstNavigation
                 ) {
                     try {
                         // Parentless only before the framework has started anything: no hook run
@@ -565,12 +576,10 @@ export default class AccessibilityModule extends BaseModule {
                         BStackLogger.debug(util.format(results as string))
                         return (results as Record<string, unknown> | undefined)
                     }
-                    // webdriverio 10 removed executeAsync; the helper runs the callback-style
-                    // script through execute on every supported major.
                     const results = await executeAccessibilityScript<Record<string, unknown> | undefined>(
                         browser,
                         this.scriptInstance.performScan as string,
-                        { 'method': commandName || '' }
+                        { 'method': commandName || '', ...getMobileA11yScriptArgs(isGlobalHook) }
                     )
                     return results
                 } catch (err: unknown) {
@@ -591,7 +600,7 @@ export default class AccessibilityModule extends BaseModule {
                 return
             }
 
-            if (this.accessibilityMap.get(sessionId)) {
+            if (this.accessibilityMap.get(sessionId) && !isBeforeFirstMobileNavigation()) {
                 this.logger.debug('Performing scan before saving results')
                 await this.performScanCli(browser)
             }
@@ -601,8 +610,9 @@ export default class AccessibilityModule extends BaseModule {
             }
 
             await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.SAVE_RESULTS, async () => {
-                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults as string, dataForExtension)
+                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults as string, { ...dataForExtension, ...getMobileA11yScriptArgs() })
                 this.logger.debug(`save results : ${util.format(results as string)}`)
+                logRejectedMobileSave(results)
             })()
         } catch (error) {
             this.logger.error(`Error while sending test stop event: ${error}`)
@@ -620,7 +630,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results')
                     await this.performScanCli(browser)
-                    const results = await executeAccessibilityScript<Array<Record<string, unknown>>>(browser, this.scriptInstance.getResults as string)
+                    const results: Array<Record<string, unknown>> = await this.executeResultsScript(browser, this.scriptInstance.getResults as string)
                     return results
                 } catch (error: unknown) {
                     this.logger.error('No accessibility results were found.')
@@ -642,7 +652,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results summary')
                     await this.performScanCli(browser)
-                    const summaryResults = await executeAccessibilityScript<Record<string, unknown>>(browser, this.scriptInstance.getResultsSummary as string)
+                    const summaryResults: Record<string, unknown> = await this.executeResultsScript(browser, this.scriptInstance.getResultsSummary as string)
                     return summaryResults
                 } catch {
                     this.logger.error('No accessibility summary was found.')
@@ -650,6 +660,12 @@ export default class AccessibilityModule extends BaseModule {
                 }
             }
         )()
+    }
+
+    // Desktop result scripts take no argument; mobile ones need the session flag and run uuid.
+    private async executeResultsScript<T>(browser: WebdriverIO.Browser, script: string): Promise<T> {
+        const mobileArg = getMobileResultsArg()
+        return executeAccessibilityScript<T>(browser, script, mobileArg)
     }
 
     async getDriverExecuteParams(): Promise<Record<string, unknown>> {
