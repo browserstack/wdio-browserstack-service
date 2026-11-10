@@ -23,8 +23,8 @@ on:
   push:
     branches:
       - main   # publish target: dist-tag "latest"
-      - v9     # publish target: dist-tag "v9"
-      - v8     # publish target: dist-tag "v8"
+      - v9     # publish target: dist-tag "v9" via publishConfig.tag
+      - v8     # publish target: dist-tag "v8" via publishConfig.tag
   workflow_dispatch:
     inputs:
       publish:
@@ -36,9 +36,9 @@ on:
         type: boolean
         default: false
       distTag:
-        description: 'NPM tag: "v8" for v8 releases, never "latest" (that is the newest major).'
-        required: true
-        default: 'v8'
+        description: 'Optional: override the npm dist-tag for publish=true. Leave empty to use publishConfig.tag from package.json (`latest` when unset). `latest` is refused outside main.'
+        type: string
+        default: ''
 
 # Never run two releases of the same branch on top of each other.
 concurrency: release-${{ github.ref }}
@@ -97,7 +97,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Publish (manual, workflow_dispatch with publish=true): publish the already-versioned
-      # package to npm — main -> `latest`, v9 -> `v9`, v8 -> `v8` (distTag input) — with
+      # package to npm — main -> `latest`, v9 -> `v9`, v8 -> `v8` (via publishConfig.tag) — with
       # git tag, GitHub release, and provenance, over the OIDC trusted publisher (no NPM_TOKEN).
       # Merge the "Version Packages" PR first: this publishes only when there are no pending
       # changesets. If any remain, the action safely opens/updates the Version PR instead.
@@ -111,13 +111,13 @@ jobs:
           DIST_TAG_INPUT: ${{ inputs.distTag }}
           BRANCH: ${{ github.ref_name }}
         run: |
-          tag="$DIST_TAG_INPUT"
+          tag="${DIST_TAG_INPUT:-$(node -p "require('./packages/browserstack-service/package.json').publishConfig?.tag || 'latest'")}"
           if ! [[ "$tag" =~ ^[a-z][a-z0-9.-]*$ ]]; then
             echo "::error::Invalid npm dist-tag: $tag"
             exit 1
           fi
           if [[ "$tag" == "latest" && "$BRANCH" != "main" ]]; then
-            echo "::error::Refusing to publish $BRANCH to \`latest\`."
+            echo "::error::Refusing to publish $BRANCH to \`latest\`; set publishConfig.tag on this branch."
             exit 1
           fi
           echo "Publishing with dist-tag: $tag"
