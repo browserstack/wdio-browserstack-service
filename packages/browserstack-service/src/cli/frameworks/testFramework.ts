@@ -112,6 +112,11 @@ export default class TestFramework {
         logger.info(`runHooks: instance=${instance} automationFrameworkState=${testFrameworkState} hookState=${hookState}`)
 
         const hookRegistryKey = CLIUtils.getHookRegistryKey(testFrameworkState, hookState)
+        // Observers run one after another and may await I/O, during which a concurrent trackEvent can
+        // move the shared instance's current state on. Carry the dispatched state so they act on it.
+        if (args && typeof args === 'object') {
+            Object.assign(args, { testFrameworkState, hookState })
+        }
         await eventDispatcher.notifyObserver(hookRegistryKey, args)
     }
 
