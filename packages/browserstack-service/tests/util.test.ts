@@ -1504,6 +1504,41 @@ describe('validateCapsWithA11y', () => {
             expect(validateCapsWithA11y('Google Pixel 7', { browser_name: 'chrome', platform_name: 'android', platform_version: '13.0' })).toEqual(true)
         })
 
+        it('runs a11y scripts with executeAsync on mobile and execute on desktop', async () => {
+            process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP = 'true'
+            const browser = { execute: vi.fn().mockResolvedValue('sync'), executeAsync: vi.fn().mockResolvedValue('async') }
+            validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios', platform_version: '26' })
+            expect(await utils.executeAccessibilityScript(browser, 'scan()', { method: 'url' })).toEqual('async')
+            expect(browser.executeAsync).toHaveBeenCalledWith('scan()', { method: 'url' })
+            await utils.executeAccessibilityScript(browser, 'summary()')
+            expect(browser.executeAsync).toHaveBeenLastCalledWith('summary()')
+
+            validateCapsWithA11y(undefined, { browser_name: 'chrome' })
+            expect(await utils.executeAccessibilityScript(browser, 'scan()', { method: 'url' })).toEqual('sync')
+            expect(browser.executeAsync).toHaveBeenCalledTimes(2)
+        })
+
+        it('adds no-op accessibility commands without replacing existing ones', async () => {
+            const summary = vi.fn()
+            const browser: any = { getAccessibilityResultsSummary: summary }
+            utils.addNoopAccessibilityCommands(browser)
+            expect(browser.getAccessibilityResultsSummary).toBe(summary)
+            expect(await browser.getAccessibilityResults()).toEqual([])
+            expect(await browser.performScan()).toBeUndefined()
+            await browser.startA11yScanning()
+            await browser.stopA11yScanning()
+        })
+
+        it('reads the requested mobile platform from a capability', async () => {
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'chrome', 'bstack:options': { os: 'Windows' } })).toBeUndefined()
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } })?.supported).toEqual(false)
+            expect(utils.getRequestedMobileA11yPlatform({ 'bstack:options': { deviceName: 'iPhone 17', osVersion: '26' } })?.supported).toEqual(true)
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'safari', 'bstack:options': { deviceName: 'iPad Pro 13 2024' } })?.supported).toEqual(false)
+            expect(utils.getRequestedMobileA11yPlatform({ platformName: 'android', 'appium:deviceName': 'Google Pixel 8', 'appium:platformVersion': '14.0' })?.supported).toEqual(true)
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'samsung', 'bstack:options': { deviceName: 'Samsung Galaxy S23' } })?.supported).toEqual(false)
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'safari', 'bstack:options': { device: 'iPhone 15', osVersion: '17' } })?.supported).toEqual(false)
+        })
+
         it('reads the iOS major from any version string and allows 18 and later', async () => {
             expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 15', 'iOS 17')).toEqual(false)
             expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 15', 17)).toEqual(false)
@@ -1542,17 +1577,17 @@ describe('validateCapsWithA11y', () => {
             ]
             try {
                 const browser = { execute: vi.fn().mockResolvedValue({}), executeAsync: vi.fn().mockResolvedValue({}) } as unknown as WebdriverIO.Browser
-                const mobileArgs = JSON.stringify({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
+                const mobileArgs = { is_mobile_session: true, thTestRunUuid: 'test-run-uuid' }
                 validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })
 
                 await utils.performA11yScan(false, browser, true, true, 'click')
                 await utils.getA11yResults(false, browser, true, true)
                 await utils.getA11yResultsSummary(false, browser, true, true)
 
-                const scripts = vi.mocked(browser.execute).mock.calls.map((call) => String(call[0]))
-                expect(scripts.find((s) => s.includes('scanScript'))).toContain(JSON.stringify({ method: 'click', is_mobile_session: true, thTestRunUuid: 'test-run-uuid' }))
-                expect(scripts.find((s) => s.includes('resultsScript'))).toContain(mobileArgs)
-                expect(scripts.find((s) => s.includes('summaryScript'))).toContain(mobileArgs)
+                expect(browser.execute).not.toHaveBeenCalled()
+                expect(browser.executeAsync).toHaveBeenCalledWith('scanScript', { method: 'click', ...mobileArgs })
+                expect(browser.executeAsync).toHaveBeenCalledWith('resultsScript', mobileArgs)
+                expect(browser.executeAsync).toHaveBeenCalledWith('summaryScript', mobileArgs)
             } finally {
                 spies.forEach((spy) => spy.mockRestore())
                 delete process.env.BSTACK_A11Y_JWT
