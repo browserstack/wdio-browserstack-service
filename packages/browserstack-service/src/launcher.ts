@@ -1089,7 +1089,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
         }
         const caps = Array.isArray(capabilities) ? capabilities.flatMap(toCaps) : toCaps(capabilities)
         // App Accessibility has its own platform rules.
-        if (!caps.length || this._options.app || caps.some((cap) => cap['appium:app'] || cap.app || cap['bstack:options']?.app)) {
+        if (!caps.length || this._options.app || isTrue(this._options.skipAppOverride) || caps.some((cap) => cap['appium:app'] || cap['appium:options']?.app || cap.app || cap['bstack:options']?.app)) {
             return
         }
         const platforms = caps.map(getRequestedMobileA11yPlatform)

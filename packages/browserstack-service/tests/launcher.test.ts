@@ -1006,6 +1006,14 @@ describe('constructor', () => {
         const fromOptions: any = { accessibility: true, app: 'bs://app' }
         new BrowserstackLauncher(fromOptions, [{ 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '17' } }] as any, config)
         expect(fromOptions.accessibility).toEqual(true)
+
+        const fromAppiumOptions: any = { accessibility: true }
+        new BrowserstackLauncher(fromAppiumOptions, [{ 'appium:options': { app: 'bs://app' }, 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '17' } }] as any, config)
+        expect(fromAppiumOptions.accessibility).toEqual(true)
+
+        const skipAppOverride: any = { accessibility: true, skipAppOverride: true }
+        new BrowserstackLauncher(skipAppOverride, [{ 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '17' } }] as any, config)
+        expect(skipAppOverride.accessibility).toEqual(true)
     })
 
     it('does not warn about advanced rules for desktop-only runs', async () => {

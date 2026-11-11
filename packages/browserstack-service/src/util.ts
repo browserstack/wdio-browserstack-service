@@ -499,7 +499,7 @@ export const ACCESSIBILITY_BUILD_START_FAILED_WARNING = 'Accessibility Automatio
 /* Platform requested in a capability, or undefined for a desktop one. A browser that isn't named defaults to the device's own. */
 export const getRequestedMobileA11yPlatform = (capability: Record<string, any>) => {
     const bstackOptions = capability?.['bstack:options'] || {}
-    const deviceName = bstackOptions.deviceName ?? capability?.['appium:deviceName'] ?? capability?.deviceName ?? capability?.device
+    const deviceName = bstackOptions.deviceName ?? bstackOptions.device ?? capability?.['appium:deviceName'] ?? capability?.deviceName ?? capability?.device
     if (!deviceName) {
         return undefined
     }
