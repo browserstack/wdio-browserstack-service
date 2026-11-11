@@ -97,6 +97,6 @@
   },
   "publishConfig": {
     "access": "public",
-    "tag": "v9"
+    "tag": "latest"
   }
 }
