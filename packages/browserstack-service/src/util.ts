@@ -1274,7 +1274,7 @@ export function getCloudProvider(browser: WebdriverIO.Browser | WebdriverIO.Mult
     if (browser && 'instances' in browser) {
         // Loop through all instances
         for (const instanceName of browser.instances) {
-            const instance = (browser as any)[instanceName] as WebdriverIO.Browser
+            const instance = (browser as WebdriverIO.MultiRemoteBrowser).getInstance(instanceName)
             if (instance.options && instance.options.hostname && instance.options.hostname.includes('browserstack')) {
                 return 'browserstack'
             }

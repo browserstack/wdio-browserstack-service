@@ -558,9 +558,7 @@ describe('getCloudProvider', () => {
         const browser = {
             isMultiRemote: true,
             instances: ['browserA'],
-            browserA: {
-                options: { hostname: 'hub.browserstack.com' }
-            }
+            getInstance: (name: string) => ({ browserA: { options: { hostname: 'hub.browserstack.com' } } } as any)[name]
         } as unknown as WebdriverIO.MultiRemoteBrowser
         expect(getCloudProvider(browser)).toEqual('browserstack')
     })

@@ -55,13 +55,15 @@ describe('shouldSkipScanForBidiWindowCommand (SDK-5047)', () => {
     })
 
     it('skips for window commands when any multiremote child instance is BiDi', () => {
-        const multi = { instances: ['chromeA', 'chromeB'], chromeA: { isBidi: false }, chromeB: { isBidi: true } }
+        const children: Record<string, { isBidi?: boolean }> = { chromeA: { isBidi: false }, chromeB: { isBidi: true } }
+        const multi = { instances: ['chromeA', 'chromeB'], getInstance: (name: string) => children[name] }
         expect(skip(multi, { name: 'getWindowHandle', class: 'Browser' })).toBe(true)
         expect(skip(multi, { name: 'switchToWindow', class: 'Browser' })).toBe(true)
     })
 
     it('does not skip on multiremote when no child instance is BiDi', () => {
-        const multi = { instances: ['chromeA', 'chromeB'], chromeA: { isBidi: false }, chromeB: {} }
+        const children: Record<string, { isBidi?: boolean }> = { chromeA: { isBidi: false }, chromeB: {} }
+        const multi = { instances: ['chromeA', 'chromeB'], getInstance: (name: string) => children[name] }
         expect(skip(multi, { name: 'getWindowHandle', class: 'Browser' })).toBe(false)
     })
 })

@@ -672,8 +672,8 @@ class _AccessibilityHandler {
             return true
         }
         if (Array.isArray(b?.instances)) {
-            const children = b as unknown as Record<string, { isBidi?: boolean } | undefined>
-            return b.instances.some((name) => children[name]?.isBidi === true)
+            const multi = browser as WebdriverIO.MultiRemoteBrowser
+            return b.instances.some((name) => multi.getInstance(name)?.isBidi === true)
         }
         return false
     }
