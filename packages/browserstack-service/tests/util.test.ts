@@ -1536,6 +1536,7 @@ describe('validateCapsWithA11y', () => {
             expect(utils.getRequestedMobileA11yPlatform({ browserName: 'safari', 'bstack:options': { deviceName: 'iPad Pro 13 2024' } })?.supported).toEqual(false)
             expect(utils.getRequestedMobileA11yPlatform({ platformName: 'android', 'appium:deviceName': 'Google Pixel 8', 'appium:platformVersion': '14.0' })?.supported).toEqual(true)
             expect(utils.getRequestedMobileA11yPlatform({ browserName: 'samsung', 'bstack:options': { deviceName: 'Samsung Galaxy S23' } })?.supported).toEqual(false)
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'safari', 'bstack:options': { device: 'iPhone 15', osVersion: '17' } })?.supported).toEqual(false)
         })
 
         it('reads the iOS major from any version string and allows 18 and later', async () => {
