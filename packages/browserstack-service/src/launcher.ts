@@ -38,6 +38,7 @@ import {
     isUndefined,
     isAccessibilityAutomationSession,
     isTrue,
+    hasAppCap,
     getBrowserStackUser,
     getBrowserStackKey,
     getCredentialMismatchWarning,
@@ -50,7 +51,10 @@ import {
     isValidEnabledValue,
     isMultiRemoteCaps,
     coerceStringBooleans,
-    validateSkipAppOverride
+    validateSkipAppOverride,
+    getRequestedMobileA11yPlatform,
+    MOBILE_PLATFORM_UNSUPPORTED_WARNING,
+    MOBILE_ADVANCED_RULES_WARNING
 } from './util.js'
 import CrashReporter from './crash-reporter.js'
 import { initWdioConfigPath, isAutoCaptureLogsDisabled, publishAutoCaptureDisabled } from './configCapture.js'
@@ -235,6 +239,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             this._accessibilityAutomation ||= isTrue(this._options.accessibility)
         }
         this._options.accessibility = this._accessibilityAutomation
+        this._checkMobileA11yCapabilities(capabilities)
 
         // Default is true unless explicitly set to false
         this._options.testObservability = this._options.testObservability !== false
@@ -1067,6 +1072,44 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
             }
         } catch (error) {
             BStackLogger.debug(`Exception while retrieving capability value. Error - ${error}`)
+        }
+    }
+
+    /* Sessions turn accessibility off on unsupported mobile platforms; when every capability is one, the build doesn't start it either, so no empty report is created. */
+    _checkMobileA11yCapabilities(capabilities: Capabilities.TestrunnerCapabilities | WebdriverIO.Capabilities) {
+        if (!this._accessibilityAutomation || !capabilities) {
+            return
+        }
+        // Same shapes as the constructor: plain or alwaysMatch caps, parallel multiremote entries, or a multiremote object.
+        const toCaps = (c: any): Record<string, any>[] => {
+            if ('alwaysMatch' in c) {
+                return [c.alwaysMatch]
+            }
+            const values = Object.values(c)
+            return values.length && values.every((v: any) => typeof v === 'object' && v?.capabilities) ? values.map((v: any) => v.capabilities) : [c]
+        }
+        const caps = Array.isArray(capabilities) ? capabilities.flatMap(toCaps) : toCaps(capabilities)
+        // App Accessibility has its own platform rules.
+        if (!caps.length || this._options.app || isTrue(this._options.skipAppOverride) || caps.some((cap) => hasAppCap(cap) || cap.app || cap['bstack:options']?.app)) {
+            return
+        }
+        const platforms = caps.map(getRequestedMobileA11yPlatform)
+        if (platforms.every((platform) => platform && !platform.supported)) {
+            BStackLogger.warn(MOBILE_PLATFORM_UNSUPPORTED_WARNING)
+            this._accessibilityAutomation = false
+            this._options.accessibility = false
+            caps.forEach((cap) => {
+                if (cap['bstack:options']) {
+                    cap['bstack:options'].accessibility = false
+                }
+                if (!isUndefined(cap['browserstack.accessibility'])) {
+                    cap['browserstack.accessibility'] = false
+                }
+            })
+            return
+        }
+        if (isTrue((this._options.accessibilityOptions?.includeIssueType as Record<string, unknown> | undefined)?.advanced) && platforms.some((platform) => platform?.supported)) {
+            BStackLogger.warn(MOBILE_ADVANCED_RULES_WARNING)
         }
     }
 
