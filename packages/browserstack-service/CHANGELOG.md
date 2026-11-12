@@ -1,5 +1,13 @@
 # @wdio/browserstack-service
 
+## 9.44.1
+
+### Patch Changes
+
+- 2d9a423: - Fixed accessibility scans returning no results on Safari on iPhone with Jasmine or multiremote.
+  - Accessibility is no longer started for a build where every platform is unsupported, so no empty report is created; a warning explains why.
+  - Added warnings when advanced rules are requested on mobile browsers and when accessibility could not be started for a build.
+
 ## 9.44.0
 
 ### Minor Changes
