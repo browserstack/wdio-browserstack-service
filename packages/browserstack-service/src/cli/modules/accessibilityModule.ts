@@ -47,6 +47,8 @@ export default class AccessibilityModule extends BaseModule {
         this.name = 'AccessibilityModule'
         this.accessibilityConfig = accessibilityConfig
         AutomationFramework.registerObserver(AutomationFrameworkState.CREATE, HookState.POST, this.onBeforeExecute.bind(this))
+        // Prepended so the verdict is on the instance before TestHubModule serializes TestRunStarted.
+        TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.setTestAccessibility.bind(this), true)
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.POST, this.onAfterTest.bind(this))
         // Track the hook window for every hook state the framework supports. PRE captures the
@@ -342,6 +344,28 @@ export default class AccessibilityModule extends BaseModule {
             this.logger.error(`Error in commandWrapper for ${command.name}: ${error}`)
             // Still execute the original command even if accessibility scan fails
             return await originFunction(...args)
+        }
+    }
+
+    /**
+     * Per-test product_map.accessibility, as the classic handler's setTestRunAccessibilityVar:
+     * only tests in the include/exclude tag scope are accessibility tests. The binary falls back
+     * to its platform check when this is absent, which marks every test in the build.
+     */
+    setTestAccessibility(args: Record<string, unknown>) {
+        try {
+            const testInstance = (args.instance as TestFrameworkInstance) || TestFramework.getTrackedInstance()
+            if (!testInstance) {
+                return
+            }
+            const suiteTitle = (typeof args.suiteTitle === 'string' ? args.suiteTitle : '') || ''
+            const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string } : {}) || {}
+            const world = args.world as { [key: string]: unknown } | undefined
+            const inScope = Boolean(this.accessibility && this.autoScanning &&
+                shouldScanTestForAccessibility(suiteTitle, test.title || '', this.config.accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)))
+            TestFramework.setState(testInstance, TestFrameworkConstants.KEY_TEST_ACCESSIBILITY, inScope)
+        } catch (error) {
+            this.logger.debug(`setTestAccessibility: ${error}`)
         }
     }
 
