@@ -501,6 +501,62 @@ describe('AccessibilityModule', () => {
         })
     })
 
+    describe('setTestAccessibility', () => {
+        const world = { pickle: { tags: [{ name: '@accessibility' }] } }
+
+        beforeEach(() => {
+            accessibilityModule.accessibility = true
+            accessibilityModule.autoScanning = true
+        })
+
+        it('should be prepended to TEST/PRE so TestRunStarted carries the verdict', () => {
+            expect(TestFramework.registerObserver).toHaveBeenCalledWith(
+                TestFrameworkState.TEST,
+                HookState.PRE,
+                expect.any(Function),
+                true
+            )
+        })
+
+        it('should mark an in-scope test as an accessibility test', () => {
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            accessibilityModule.setTestAccessibility({ instance: mockTestInstance, test: { title: 'Homepage' }, suiteTitle: 'Feature', world })
+
+            expect(shouldScanTestForAccessibility).toHaveBeenCalledWith('Feature', 'Homepage', {}, world, true)
+            expect(TestFramework.setState).toHaveBeenCalledWith(mockTestInstance, 'test_accessibility', true)
+        })
+
+        it('should mark an out-of-scope test as not an accessibility test', () => {
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(false)
+            accessibilityModule.setTestAccessibility({ instance: mockTestInstance, test: { title: 'Basket' }, suiteTitle: 'Feature', world })
+
+            expect(TestFramework.setState).toHaveBeenCalledWith(mockTestInstance, 'test_accessibility', false)
+        })
+
+        it('should mark no test when auto-scanning is off', () => {
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            accessibilityModule.autoScanning = false
+            accessibilityModule.setTestAccessibility({ instance: mockTestInstance, test: { title: 'Homepage' } })
+
+            expect(TestFramework.setState).toHaveBeenCalledWith(mockTestInstance, 'test_accessibility', false)
+        })
+
+        it('should mark no test when the platform does not support accessibility', () => {
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            accessibilityModule.accessibility = false
+            accessibilityModule.setTestAccessibility({ instance: mockTestInstance, test: { title: 'Homepage' } })
+
+            expect(TestFramework.setState).toHaveBeenCalledWith(mockTestInstance, 'test_accessibility', false)
+        })
+
+        it('should use the 3-arg title match for mocha', () => {
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            accessibilityModule.setTestAccessibility({ instance: mockTestInstance, test: { title: 'logs in' }, suiteTitle: 'Login' })
+
+            expect(shouldScanTestForAccessibility).toHaveBeenCalledWith('Login', 'logs in', {}, undefined, false)
+        })
+    })
+
     describe('onBeforeTest', () => {
         it('should set up accessibility metadata for test', async () => {
             const mockArgs = {

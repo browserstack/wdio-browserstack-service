@@ -25,13 +25,18 @@ class EventDispatcher {
    * Add event observer
    * @param {string} event - Event name
    * @param {Function} callback - Callback function
+   * @param {boolean} prepend - Run before observers already registered for this event
    */
-    registerObserver(hookRegistryKey: string, callback: Function) {
+    registerObserver(hookRegistryKey: string, callback: Function, prepend = false) {
         if (!this.observers[hookRegistryKey]) {
             this.observers[hookRegistryKey] = []
         }
 
-        this.observers[hookRegistryKey].push(callback)
+        if (prepend) {
+            this.observers[hookRegistryKey].unshift(callback)
+        } else {
+            this.observers[hookRegistryKey].push(callback)
+        }
     }
 
     /**
