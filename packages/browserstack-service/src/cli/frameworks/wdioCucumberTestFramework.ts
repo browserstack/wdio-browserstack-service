@@ -518,6 +518,8 @@ export default class WdioCucumberTestFramework extends TestFramework {
             [TestFrameworkConstants.KEY_TEST_RESULT_AT]: now,
             ...resolveFeatureFilePaths(featurePath),
             [KEY_TEST_SKIPPED_CASCADE]: true,
+            // Never ran, so never scanned: not an accessibility test whatever its tags.
+            [TestFrameworkConstants.KEY_TEST_ACCESSIBILITY]: false,
             [KEY_BDD_META_INFO]: {
                 feature: { name: feature.name, path: this.featureUriForMeta(), description: feature.description },
                 scenario: { name: scenario.name },

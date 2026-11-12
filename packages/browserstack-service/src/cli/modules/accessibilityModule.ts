@@ -358,21 +358,29 @@ export default class AccessibilityModule extends BaseModule {
             if (!testInstance) {
                 return
             }
-            const suiteTitle = (typeof args.suiteTitle === 'string' ? args.suiteTitle : '') || ''
-            const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string } : {}) || {}
-            const world = args.world as { [key: string]: unknown } | undefined
-            const inScope = Boolean(this.accessibility && this.autoScanning &&
-                shouldScanTestForAccessibility(suiteTitle, test.title || '', this.config.accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)))
-            TestFramework.setState(testInstance, TestFrameworkConstants.KEY_TEST_ACCESSIBILITY, inScope)
+            TestFramework.setState(testInstance, TestFrameworkConstants.KEY_TEST_ACCESSIBILITY, this.shouldScanTest(args))
         } catch (error) {
-            this.logger.debug(`setTestAccessibility: ${error}`)
+            this.logger.error(`setTestAccessibility: ${error}`)
         }
+    }
+
+    private shouldScanTest(args: Record<string, unknown>): boolean {
+        const suiteTitle = (typeof args.suiteTitle === 'string' ? args.suiteTitle : '') || ''
+        const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string } : {}) || {}
+        // Cucumber filters scans by gherkin tag, which needs the world object and the 6-arg
+        // form of shouldScanTestForAccessibility; the 3-arg form matches include/exclude tags
+        // against the test title instead and so silently scans every scenario. `args.world` is
+        // only ever populated on the cucumber path, so mocha and jasmine keep the exact 3-arg
+        // behaviour — both extra args arrive undefined/false and the tag branch is not taken.
+        const world = args.world as { [key: string]: unknown } | undefined
+        return Boolean(this.autoScanning &&
+            shouldScanTestForAccessibility(suiteTitle, test.title || '', this.config.accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)) &&
+            this.accessibility)
     }
 
     async onBeforeTest(args: Record<string, unknown>) {
         try {
             this.logger.debug('Accessibility before test hook. Starting accessibility scan for this test case.')
-            const suiteTitle = (typeof args.suiteTitle === 'string' ? args.suiteTitle : '') || ''
             const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string } : {}) || {}
 
             this.currentTestName = test.title || null
@@ -381,14 +389,7 @@ export default class AccessibilityModule extends BaseModule {
             const testInstance: TestFrameworkInstance = TestFramework.getTrackedInstance()
 
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
-            const accessibilityOptions = this.config.accessibilityOptions
-            // Cucumber filters scans by gherkin tag, which needs the world object and the 6-arg
-            // form of shouldScanTestForAccessibility; the 3-arg form matches include/exclude tags
-            // against the test title instead and so silently scans every scenario. `args.world` is
-            // only ever populated on the cucumber path, so mocha and jasmine keep the exact 3-arg
-            // behaviour — both extra args arrive undefined/false and the tag branch is not taken.
-            const world = args.world as { [key: string]: unknown } | undefined
-            const shouldScanTest = this.autoScanning && shouldScanTestForAccessibility(suiteTitle, test.title || '', accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)) && this.accessibility
+            const shouldScanTest = this.shouldScanTest(args)
 
             this.accessibilityMap.set(sessionId, shouldScanTest)
 
