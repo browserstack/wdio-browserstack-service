@@ -4,6 +4,7 @@ export const TestFrameworkConstants = {
     KEY_TEST_NAME : 'test_name',
     KEY_TEST_FILE_PATH : 'test_file_path',
     KEY_TEST_TAGS : 'test_tags',
+    KEY_TEST_ACCESSIBILITY : 'test_accessibility',
     KEY_TEST_RESULT : 'test_result',
     KEY_TEST_RESULT_AT : 'test_result_at',
     KEY_TEST_STARTED_AT : 'test_started_at',
