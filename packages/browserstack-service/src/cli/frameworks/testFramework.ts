@@ -92,6 +92,13 @@ export default class TestFramework {
    * @param {HookState} hookState
    * @param {*} args
    */
+    async runHooks(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, args: unknown = {}) {
+        logger.info(`runHooks: instance=${instance} automationFrameworkState=${testFrameworkState} hookState=${hookState}`)
+
+        const hookRegistryKey = CLIUtils.getHookRegistryKey(testFrameworkState, hookState)
+        await eventDispatcher.notifyObserver(hookRegistryKey, args)
+    }
+
     /**
      * Runs the TEST/POST observers, then ends the test: ended_at is restamped once every observer
      * (the a11y pre-save scan and save among them) has run, and the TestRunFinished send that
@@ -114,13 +121,6 @@ export default class TestFramework {
                 }
             }
         }
-    }
-
-    async runHooks(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, args: unknown = {}) {
-        logger.info(`runHooks: instance=${instance} automationFrameworkState=${testFrameworkState} hookState=${hookState}`)
-
-        const hookRegistryKey = CLIUtils.getHookRegistryKey(testFrameworkState, hookState)
-        await eventDispatcher.notifyObserver(hookRegistryKey, args)
     }
 
     /**
