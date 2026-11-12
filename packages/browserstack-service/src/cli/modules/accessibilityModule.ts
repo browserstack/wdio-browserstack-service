@@ -348,9 +348,9 @@ export default class AccessibilityModule extends BaseModule {
     }
 
     /**
-     * Per-test product_map.accessibility, as the classic handler's setTestRunAccessibilityVar:
-     * only tests in the include/exclude tag scope are accessibility tests. The binary falls back
-     * to its platform check when this is absent, which marks every test in the build.
+     * Per-test product_map.accessibility: only tests in the include/exclude tag scope are
+     * accessibility tests. Auto-scanning is left out so tests scanned manually keep their row.
+     * The binary falls back to its platform check when this is absent, which marks every test.
      */
     setTestAccessibility(args: Record<string, unknown>) {
         try {
@@ -358,13 +358,13 @@ export default class AccessibilityModule extends BaseModule {
             if (!testInstance) {
                 return
             }
-            TestFramework.setState(testInstance, TestFrameworkConstants.KEY_TEST_ACCESSIBILITY, this.shouldScanTest(args))
+            TestFramework.setState(testInstance, TestFrameworkConstants.KEY_TEST_ACCESSIBILITY, this.isTestInScope(args))
         } catch (error) {
             this.logger.error(`setTestAccessibility: ${error}`)
         }
     }
 
-    private shouldScanTest(args: Record<string, unknown>): boolean {
+    private isTestInScope(args: Record<string, unknown>): boolean {
         const suiteTitle = (typeof args.suiteTitle === 'string' ? args.suiteTitle : '') || ''
         const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string } : {}) || {}
         // Cucumber filters scans by gherkin tag, which needs the world object and the 6-arg
@@ -373,9 +373,8 @@ export default class AccessibilityModule extends BaseModule {
         // only ever populated on the cucumber path, so mocha and jasmine keep the exact 3-arg
         // behaviour — both extra args arrive undefined/false and the tag branch is not taken.
         const world = args.world as { [key: string]: unknown } | undefined
-        return Boolean(this.autoScanning &&
-            shouldScanTestForAccessibility(suiteTitle, test.title || '', this.config.accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)) &&
-            this.accessibility)
+        return Boolean(this.accessibility &&
+            shouldScanTestForAccessibility(suiteTitle, test.title || '', this.config.accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)))
     }
 
     async onBeforeTest(args: Record<string, unknown>) {
@@ -389,7 +388,7 @@ export default class AccessibilityModule extends BaseModule {
             const testInstance: TestFrameworkInstance = TestFramework.getTrackedInstance()
 
             const sessionId = AutomationFramework.getState(autoInstance, AutomationFrameworkConstants.KEY_FRAMEWORK_SESSION_ID)
-            const shouldScanTest = this.shouldScanTest(args)
+            const shouldScanTest = this.autoScanning && this.isTestInScope(args)
 
             this.accessibilityMap.set(sessionId, shouldScanTest)
 
