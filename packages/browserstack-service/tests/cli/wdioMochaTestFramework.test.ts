@@ -543,6 +543,8 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         vi.mocked(framework.runHooks).mockImplementation(async (inst: TestFrameworkInstance, state: State, hook: State, args: unknown) => {
             if (state === TestFrameworkState.TEST && hook === HookState.POST) {
                 endedAtSeenByObservers = TestFramework.getState(inst, TestFrameworkConstants.KEY_TEST_ENDED_AT) as string
+                // The observers take real time (the a11y scan and save), so the restamp must land later.
+                await new Promise((resolve) => setTimeout(resolve, 5))
             }
             await record(inst, state, hook, args)
         })

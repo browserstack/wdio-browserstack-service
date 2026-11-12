@@ -306,12 +306,14 @@ describe('TestHubModule — finish held until the TEST/POST observers end (cucum
 
         await (args.releaseHeldFinish as () => Promise<void>)()
         await (args.releaseHeldFinish as () => Promise<void>)()
-        await testHubModule.flushPendingTestFinishEvent()
 
         expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
         expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledWith(
             expect.objectContaining({ testFrameworkState: 'TEST', testHookState: 'POST', uuid: 's1' })
         )
+
+        await testHubModule.flushPendingTestFinishEvent()
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
     })
 
     it('still sends immediately when the framework does not ask to hold', () => {
