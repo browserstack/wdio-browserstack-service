@@ -218,7 +218,7 @@ export default class AccessibilityModule extends BaseModule {
                 shouldScanTestForAccessibility(suiteTitle, test.title || '', this.config.accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)))
             TestFramework.setState(testInstance, TestFrameworkConstants.KEY_TEST_ACCESSIBILITY, inScope)
         } catch (error) {
-            this.logger.debug(`setTestAccessibility: ${error}`)
+            this.logger.error(`setTestAccessibility: ${error}`)
         }
     }
 
