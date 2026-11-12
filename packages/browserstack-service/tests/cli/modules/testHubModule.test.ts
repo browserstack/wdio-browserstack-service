@@ -228,6 +228,39 @@ describe('TestHubModule', () => {
 
             expect(sendTestFrameworkEventSpy).toHaveBeenCalledWith(mockArgs)
         })
+
+        it('holds the TEST/POST send when asked and sends it once on release', async () => {
+            const mockInstance = {
+                getCurrentTestState: vi.fn(() => TestFrameworkState.TEST),
+                getCurrentHookState: vi.fn(() => HookState.POST)
+            }
+            vi.mocked(TestFramework.hasState).mockReturnValue(true)
+            const sendTestFrameworkEventSpy = vi.spyOn(testHubModule, 'sendTestFrameworkEvent').mockResolvedValue()
+            const mockArgs: Record<string, unknown> = { instance: mockInstance, holdFinishUntilHooksEnd: true }
+
+            await testHubModule.onAllTestEvents(mockArgs)
+            expect(sendTestFrameworkEventSpy).not.toHaveBeenCalled()
+
+            await (mockArgs.releaseHeldFinish as () => Promise<void>)()
+            await (mockArgs.releaseHeldFinish as () => Promise<void>)()
+            expect(sendTestFrameworkEventSpy).toHaveBeenCalledTimes(1)
+            expect(sendTestFrameworkEventSpy).toHaveBeenCalledWith(mockArgs)
+        })
+
+        it('sends the TEST/POST immediately when the framework does not ask to hold', async () => {
+            const mockInstance = {
+                getCurrentTestState: vi.fn(() => TestFrameworkState.TEST),
+                getCurrentHookState: vi.fn(() => HookState.POST)
+            }
+            vi.mocked(TestFramework.hasState).mockReturnValue(true)
+            const sendTestFrameworkEventSpy = vi.spyOn(testHubModule, 'sendTestFrameworkEvent').mockResolvedValue()
+            const mockArgs: Record<string, unknown> = { instance: mockInstance }
+
+            await testHubModule.onAllTestEvents(mockArgs)
+
+            expect(sendTestFrameworkEventSpy).toHaveBeenCalledTimes(1)
+            expect(mockArgs.releaseHeldFinish).toBeUndefined()
+        })
     })
 
     describe('sendTestFrameworkEvent', () => {

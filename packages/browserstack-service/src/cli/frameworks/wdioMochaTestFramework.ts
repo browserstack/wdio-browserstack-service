@@ -90,6 +90,10 @@ export default class WdioMochaTestFramework extends TestFramework {
             logger.error(`trackEvent: Error in tracking events: ${error} hookState=${hookState} testFrameworkState=${testFrameworkState}`)
         }
         args.instance = instance
+        if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.POST) {
+            await this.runTestEndHooks(instance, testFrameworkState, hookState, args)
+            return
+        }
         await this.runHooks(instance, testFrameworkState, hookState, args)
     }
 
