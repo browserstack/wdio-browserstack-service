@@ -270,7 +270,29 @@ export default class WdioCucumberTestFramework extends TestFramework {
         }
 
         args.instance = instance
-        await this.runHooks(instance, testFrameworkState, hookState, args)
+        const isTestEnd = testFrameworkState === TestFrameworkState.TEST && hookState === HookState.POST
+        if (!isTestEnd) {
+            await this.runHooks(instance, testFrameworkState, hookState, args)
+            return
+        }
+        args.holdFinishUntilHooksEnd = true
+        try {
+            await this.runHooks(instance, testFrameworkState, hookState, args)
+        } finally {
+            // Observers such as the a11y pre-save scan and save belong to this scenario, so the
+            // scenario ends after them, as it did on the non-CLI path.
+            instance.updateMultipleEntries({
+                [TestFrameworkConstants.KEY_TEST_ENDED_AT]: new Date().toISOString(),
+            })
+            const release = args.releaseHeldFinish as (() => Promise<void>) | undefined
+            if (release) {
+                try {
+                    await release()
+                } catch (error) {
+                    logger.debug(`trackEvent: releasing the held test finish failed: ${error}`)
+                }
+            }
+        }
     }
 
     /**

@@ -131,7 +131,16 @@ export default class TestHubModule extends BaseModule {
 
         if (testState === TestFrameworkState.TEST || CLIUtils.matchHookRegex(testState.toString().split('.')[1])) {
             const frameworkName = String(TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
-            if (testState === TestFrameworkState.TEST && hookState === HookState.POST && frameworkName.toLowerCase().includes('mocha')) {
+            if (testState === TestFrameworkState.TEST && hookState === HookState.POST && args.holdFinishUntilHooksEnd === true && !frameworkName.toLowerCase().includes('mocha')) {
+                // The framework stamps ended_at once every TEST/POST observer has run (the a11y
+                // pre-save scan and save among them) and then calls releaseHeldFinish, so the
+                // finish never predates work done for this test.
+                const holdUuid = String(
+                    TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_UUID) || instance.getRef()
+                )
+                this.pendingTestFinishes.set(holdUuid, { args, uuid: holdUuid })
+                args.releaseHeldFinish = () => this.flushTestFinish(holdUuid)
+            } else if (testState === TestFrameworkState.TEST && hookState === HookState.POST && frameworkName.toLowerCase().includes('mocha')) {
                 // Defer the TestRunFinished send past the Mocha after-each hook window so
                 // custom tags set in `afterEach` still make the payload (see field docs).
                 // SDK-7493: key the stash by the test's uuid, captured NOW. Two different tests
@@ -173,27 +182,41 @@ export default class TestHubModule extends BaseModule {
         // Test Hub reaps it at its ~60-min idle timeout → the passing build is stamped `timeout`.
         // Retry with backoff. Each entry is captured locally, so concurrent flushes can't clobber
         // one another.
-        const maxAttempts = 3
-        const sendOne = ({ args, uuid }: { args: Record<string, unknown>, uuid: string }): Promise<void> => {
-            // SDK-7493: pin the uuid captured at DEFER time. The payload is otherwise serialized
-            // from the instance's live data at send time, and an interleaved skip report can have
-            // rewritten the uuid on that instance since — which would close the wrong test_run and
-            // leave this one open forever.
-            const attempt = (n: number): Promise<void> =>
-                this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST', uuid }).then((sent) => {
-                    if (sent) {
-                        return
-                    }
-                    this.logger.debug(`flushPendingTestFinishEvent: uuid=${uuid} attempt ${n}/${maxAttempts} failed`)
-                    if (n >= maxAttempts) {
-                        this.logger.error(`flushPendingTestFinishEvent: deferred TEST/POST send failed after all retries (uuid=${uuid})`)
-                        return
-                    }
-                    return new Promise<void>((resolve) => setTimeout(resolve, 200 * n)).then(() => attempt(n + 1))
-                })
-            return attempt(1)
+        return Promise.all(batch.map((entry) => this.sendDeferredFinish(entry))).then(() => undefined)
+    }
+
+    /**
+     * Send one held TEST/POST now, if it is still pending. A no-op when an earlier flush (next
+     * test boundary, worker end) already sent it.
+     */
+    flushTestFinish(uuid: string): Promise<void> {
+        const entry = this.pendingTestFinishes.get(uuid)
+        if (!entry) {
+            return Promise.resolve()
         }
-        return Promise.all(batch.map(sendOne)).then(() => undefined)
+        this.pendingTestFinishes.delete(uuid)
+        return this.sendDeferredFinish(entry)
+    }
+
+    private sendDeferredFinish({ args, uuid }: { args: Record<string, unknown>, uuid: string }): Promise<void> {
+        const maxAttempts = 3
+        // SDK-7493: pin the uuid captured at DEFER time. The payload is otherwise serialized
+        // from the instance's live data at send time, and an interleaved skip report can have
+        // rewritten the uuid on that instance since — which would close the wrong test_run and
+        // leave this one open forever.
+        const attempt = (n: number): Promise<void> =>
+            this.sendTestFrameworkEvent(args, { testFrameworkState: 'TEST', testHookState: 'POST', uuid }).then((sent) => {
+                if (sent) {
+                    return
+                }
+                this.logger.debug(`flushPendingTestFinishEvent: uuid=${uuid} attempt ${n}/${maxAttempts} failed`)
+                if (n >= maxAttempts) {
+                    this.logger.error(`flushPendingTestFinishEvent: deferred TEST/POST send failed after all retries (uuid=${uuid})`)
+                    return
+                }
+                return new Promise<void>((resolve) => setTimeout(resolve, 200 * n)).then(() => attempt(n + 1))
+            })
+        return attempt(1)
     }
 
     async sendTestFrameworkEvent(args: Record<string, unknown>, stateOverride?: { testFrameworkState: string, testHookState: string, uuid?: string }): Promise<boolean> {
