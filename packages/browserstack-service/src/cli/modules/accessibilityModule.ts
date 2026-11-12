@@ -201,9 +201,9 @@ export default class AccessibilityModule extends BaseModule {
     }
 
     /**
-     * Per-test product_map.accessibility, as the classic handler's setTestRunAccessibilityVar:
-     * only tests in the include/exclude tag scope are accessibility tests. The binary falls back
-     * to its platform check when this is absent, which marks every test in the build.
+     * Per-test product_map.accessibility: only tests in the include/exclude tag scope are
+     * accessibility tests. Auto-scanning is left out so tests scanned manually keep their row.
+     * The binary falls back to its platform check when this is absent, which marks every test.
      */
     setTestAccessibility(args: Record<string, unknown>) {
         try {
@@ -214,7 +214,7 @@ export default class AccessibilityModule extends BaseModule {
             const suiteTitle = (typeof args.suiteTitle === 'string' ? args.suiteTitle : '') || ''
             const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string } : {}) || {}
             const world = args.world as { [key: string]: unknown } | undefined
-            const inScope = Boolean(this.accessibility && this.autoScanning &&
+            const inScope = Boolean(this.accessibility &&
                 shouldScanTestForAccessibility(suiteTitle, test.title || '', this.config.accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)))
             TestFramework.setState(testInstance, TestFrameworkConstants.KEY_TEST_ACCESSIBILITY, inScope)
         } catch (error) {

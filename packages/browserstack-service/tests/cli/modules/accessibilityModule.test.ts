@@ -336,12 +336,12 @@ describe('AccessibilityModule', () => {
             expect(TestFramework.setState).toHaveBeenCalledWith(mockTestInstance, 'test_accessibility', false)
         })
 
-        it('should mark no test when auto-scanning is off', () => {
+        it('should keep an in-scope test as an accessibility test when auto-scanning is off', () => {
             vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
             accessibilityModule.autoScanning = false
             accessibilityModule.setTestAccessibility({ instance: mockTestInstance, test: { title: 'Homepage' } })
 
-            expect(TestFramework.setState).toHaveBeenCalledWith(mockTestInstance, 'test_accessibility', false)
+            expect(TestFramework.setState).toHaveBeenCalledWith(mockTestInstance, 'test_accessibility', true)
         })
 
         it('should mark no test when the platform does not support accessibility', () => {
