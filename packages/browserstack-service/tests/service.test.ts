@@ -1194,6 +1194,48 @@ describe('beforeTest', () => {
                 }
             )
         })
+
+        it('should set suite name of first test as title when the suite has no title', async () => {
+            const browserWithExecuteScript = {
+                ...browser,
+                executeScript: browser.execute
+            } as WebdriverIO.Browser
+            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.beforeSuite({ file: '/specs/test.js' } as any)
+            await service.beforeTest({ fullName: 'foo bar baz', description: 'baz' } as any)
+            service.afterTest({ fullName: 'foo bar baz', description: 'baz' } as any, undefined as never, {} as any)
+            expect(service['_fullTitle']).toBe('foo bar')
+            expect(fetch).toBeCalledWith(
+                `${sessionBaseUrl}/${sessionId}.json`,
+                {
+                    method: 'PUT',
+                    body: JSON.stringify({ name: 'foo bar' }),
+                    headers
+                }
+            )
+        })
+
+        it('should set parent suite name as title when the suite has no title', async () => {
+            const browserWithExecuteScript = {
+                ...browser,
+                executeScript: browser.execute
+            } as WebdriverIO.Browser
+            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.beforeSuite({ file: '/specs/test.js' } as any)
+            await service.beforeTest({ fullName: 'foo bar baz', description: 'baz' } as any)
+            await service.beforeTest({ fullName: 'foo xyz', description: 'xyz' } as any)
+            service.afterTest({ fullName: 'foo bar baz', description: 'baz' } as any, undefined as never, {} as any)
+            service.afterTest({ fullName: 'foo xyz', description: 'xyz' } as any, undefined as never, {} as any)
+            expect(service['_fullTitle']).toBe('foo')
+            expect(fetch).toBeCalledWith(
+                `${sessionBaseUrl}/${sessionId}.json`,
+                {
+                    method: 'PUT',
+                    body: JSON.stringify({ name: 'foo' }),
+                    headers
+                }
+            )
+        })
     })
 })
 

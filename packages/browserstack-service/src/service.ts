@@ -588,10 +588,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
         let suiteTitle = this._suiteTitle
 
         if (test.fullName) {
-            // For Jasmine, `suite.title` is `Jasmine__TopLevel__Suite`.
+            // For Jasmine, `suite.title` is `Jasmine__TopLevel__Suite` (WDIO <= 9) or absent (WDIO 10).
             // This tweak allows us to set the real suite name.
             const testSuiteName = test.fullName.slice(0, test.fullName.indexOf(test.description || '') - 1)
-            if (this._suiteTitle === 'Jasmine__TopLevel__Suite') {
+            if (!this._suiteTitle || this._suiteTitle === 'Jasmine__TopLevel__Suite') {
                 suiteTitle = testSuiteName
             } else if (this._suiteTitle) {
                 suiteTitle = getParentSuiteName(this._suiteTitle, testSuiteName)
