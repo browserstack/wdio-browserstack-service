@@ -270,6 +270,10 @@ export default class WdioCucumberTestFramework extends TestFramework {
         }
 
         args.instance = instance
+        if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.POST) {
+            await this.runTestEndHooks(instance, testFrameworkState, hookState, args)
+            return
+        }
         await this.runHooks(instance, testFrameworkState, hookState, args)
     }
 

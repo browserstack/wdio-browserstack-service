@@ -111,12 +111,32 @@ export default class TestHubModule extends BaseModule {
             this.onAllTestEvents(args)
         }
 
+        if (testState === TestFrameworkState.TEST && hookState === HookState.POST && args.holdFinishUntilHooksEnd === true && !args.releaseHeldFinish) {
+            // The framework stamps ended_at once every TEST/POST observer has run (the a11y
+            // pre-save scan and save among them) and then releases this send.
+            let released = false
+            args.releaseHeldFinish = async () => {
+                if (released) {
+                    return
+                }
+                released = true
+                await this.sendTestFrameworkEvent(args)
+                this.resetMetadataAfterFinish(instance)
+            }
+            return
+        }
+
         if (testState === TestFrameworkState.TEST || CLIUtils.matchHookRegex(testState.toString().split('.')[1])) {
             this.sendTestFrameworkEvent(args)
         }
 
-        if (testState === TestFrameworkState.TEST && hookState === HookState.POST &&
-            TestFramework.hasState(instance, TestFrameworkConstants.KEY_TEST_RESULT_AT)) {
+        if (testState === TestFrameworkState.TEST && hookState === HookState.POST) {
+            this.resetMetadataAfterFinish(instance)
+        }
+    }
+
+    private resetMetadataAfterFinish(instance: TestFrameworkInstance) {
+        if (TestFramework.hasState(instance, TestFrameworkConstants.KEY_TEST_RESULT_AT)) {
             TestMetadata.reset()
         }
     }
