@@ -534,6 +534,26 @@ describe('WdioMochaTestFramework — a test finish is reported once, against its
         expect(finishes).toEqual([`fails ${uuid} passed=false`])
     })
 
+    it('ends the test after its TEST/POST observers, so the deferred finish carries the later ended_at', async () => {
+        const test = makeTest('scanned before save')
+        await start(test)
+        const instance = TestFramework.getTrackedInstance()
+        let endedAtSeenByObservers: string | undefined
+        const record = vi.mocked(framework.runHooks).getMockImplementation()!
+        vi.mocked(framework.runHooks).mockImplementation(async (inst: TestFrameworkInstance, state: State, hook: State, args: unknown) => {
+            if (state === TestFrameworkState.TEST && hook === HookState.POST) {
+                endedAtSeenByObservers = TestFramework.getState(inst, TestFrameworkConstants.KEY_TEST_ENDED_AT) as string
+            }
+            await record(inst, state, hook, args)
+        })
+
+        await afterTest(test, passed)
+
+        const endedAt = TestFramework.getState(instance, TestFrameworkConstants.KEY_TEST_ENDED_AT) as string
+        expect(endedAtSeenByObservers).toBeDefined()
+        expect(Date.parse(endedAt)).toBeGreaterThan(Date.parse(endedAtSeenByObservers!))
+    })
+
     it('closes a late afterTest against its own test run while the next test holds the slot', async () => {
         const first = makeTest('times out')
         const firstUuid = await start(first)

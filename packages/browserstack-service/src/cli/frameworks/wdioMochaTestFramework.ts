@@ -225,6 +225,14 @@ export default class WdioMochaTestFramework extends TestFramework {
         }
         args.instance = instance
         await this.runHooks(instance, testFrameworkState, hookState, args)
+        if (testFrameworkState === TestFrameworkState.TEST && hookState === HookState.POST) {
+            // The TestRunFinished send is deferred past afterEach and reads ended_at at send time,
+            // so restamping here moves the end past this test's own observers (the a11y pre-save
+            // scan and save among them), as on the non-CLI path.
+            instance.updateMultipleEntries({
+                [TestFrameworkConstants.KEY_TEST_ENDED_AT]: new Date().toISOString(),
+            })
+        }
         if (attempt && testFrameworkState === TestFrameworkState.TEST) {
             if (!this.settled && (args.fromMochaFail || this.mochaFailed(attempt))) {
                 // mocha has moved on: it runs the failed test's after-hooks after the reporter's
