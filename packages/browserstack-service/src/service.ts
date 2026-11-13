@@ -120,7 +120,8 @@ export default class BrowserstackService implements Services.ServiceInstance {
         process.env.BROWSERSTACK_TURBOSCALE_INTERNAL = String(this._turboScale)
 
         // Cucumber specific
-        const strict = Boolean(this._config.cucumberOpts && this._config.cucumberOpts.strict)
+        // cucumber-js 13 (WDIO 10) defaults strict to true, and the framework never writes the resolved value back.
+        const strict = this._config.cucumberOpts?.strict ?? true
         // See https://github.com/cucumber/cucumber-js/blob/master/src/runtime/index.ts#L136
         if (strict) {
             this._failureStatuses.push('pending')

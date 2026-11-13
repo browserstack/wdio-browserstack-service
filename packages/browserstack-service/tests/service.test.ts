@@ -1345,6 +1345,14 @@ describe('afterScenario', () => {
             'Step XYZ2 is ambiguous'])
     })
 
+    it('treats an unset cucumberOpts.strict as strict, the cucumber-js 13 default', () => {
+        service = new BrowserstackService({ testObservability: false } as any, [] as any,
+            { user: 'foo', key: 'bar', cucumberOpts: {}, capabilities: {} } as any)
+
+        service.afterScenario({ pickle: { name: 'Can do something' }, result: { duration: { seconds: 0, nanos: 1000000 }, willBeRetried: false, status: 'PENDING' } })
+        expect(service['_failReasons']).toEqual(['Some steps/hooks are pending for scenario "Can do something"'])
+    })
+
     it('should increment failure reasons on non-passing statuses (strict mode on)', () => {
         service = new BrowserstackService({ testObservability: false } as any, [] as any,
             { user: 'foo', key: 'bar', cucumberOpts: { strict: true }, capabilities: {} })
@@ -1709,6 +1717,8 @@ describe('after', () => {
         })
 
         it('should call _update with status "failed" when strict mode is "off" and only failed and pending tests ran', async () => {
+            service = new BrowserstackService({ testObservability: false } as any, [] as any,
+                { user: 'foo', key: 'bar', cucumberOpts: { strict: false } } as any)
             const updateSpy = vi.spyOn(service, '_update')
             const browserWithExecuteScript = {
                 ...browser,
