@@ -186,7 +186,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                     }
                 })
         } else if (typeof capabilities === 'object') {
-            Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+            Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                 if (!(caps.capabilities as WebdriverIO.Capabilities)['bstack:options']) {
                     if (isBStackSession(this._config)) {
                         const extensionCaps = Object.keys(caps.capabilities).filter((cap) => cap.includes(':'))
@@ -949,7 +949,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                 })
                 .forEach(strip)
         } else {
-            Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+            Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                 strip(caps.capabilities as WebdriverIO.Capabilities)
             })
         }
@@ -1016,7 +1016,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                         }
                     })
             } else if (typeof capabilities === 'object') {
-                Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+                Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                     if (
                         capType === 'goog:chromeOptions' && value &&
                         validateCapsWithNonBstackA11y(
@@ -1172,7 +1172,7 @@ export default class BrowserstackLauncherService implements Services.ServiceInst
                     }
                 })
         } else if (typeof capabilities === 'object') {
-            Object.entries(capabilities as Capabilities.RequestedMultiremoteCapabilities).forEach(([, caps]) => {
+            Object.entries(capabilities as Capabilities.RequestedMultiRemoteCapabilities).forEach(([, caps]) => {
                 if (!(caps.capabilities as WebdriverIO.Capabilities)['bstack:options']) {
                     const extensionCaps = Object.keys(caps.capabilities).filter((cap) => cap.includes(':'))
                     if (extensionCaps.length) {

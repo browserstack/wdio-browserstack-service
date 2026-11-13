@@ -74,7 +74,9 @@ import {
     isFalse,
     isFirstNavigation,
     getHookType,
-    frameworkSupportsHook
+    frameworkSupportsHook,
+    overwriteScanCommand,
+    getElementCommandProbe
 } from './util.js'
 import accessibilityScripts from './scripts/accessibility-scripts.js'
 import PerformanceTester from './instrumentation/performance/performance-tester.js'
@@ -315,6 +317,7 @@ class _AccessibilityHandler {
             return
         }
 
+        const elementProbe = await getElementCommandProbe(this._browser)
         accessibilityScripts.commandsToWrap
             .filter((command) => command.name && command.class)
             .forEach((command) => {
@@ -324,7 +327,7 @@ class _AccessibilityHandler {
                     const orig = browser[command.name as keyof WebdriverIO.Browser]
                     const prevImpl = orig ? orig.bind(browser) : undefined
                     // @ts-expect-error fix type
-                    browser.overwriteCommand(command.name, this.commandWrapper.bind(this, command, prevImpl), command.class === 'Element')
+                    overwriteScanCommand(browser, command.name, this.commandWrapper.bind(this, command, prevImpl), command.class === 'Element', elementProbe)
                 } catch (error) {
                     BStackLogger.debug(`Exception in overwrite command ${command.name} - ${error}`)
                 }
@@ -341,7 +344,7 @@ class _AccessibilityHandler {
 
     private supportsPreTestWindow(): boolean {
         return AccessibilityHandler.PRE_TEST_SCAN_FRAMEWORKS.includes(this._framework as string) &&
-            !this._browser?.isMultiremote
+            !this._browser?.isMultiRemote
     }
 
     async beforeTest (suiteTitle: string | undefined, test: Frameworks.Test) {
@@ -671,8 +674,8 @@ class _AccessibilityHandler {
             return true
         }
         if (Array.isArray(b?.instances)) {
-            const children = b as unknown as Record<string, { isBidi?: boolean } | undefined>
-            return b.instances.some((name) => children[name]?.isBidi === true)
+            const multi = browser as WebdriverIO.MultiRemoteBrowser
+            return b.instances.some((name) => multi.getInstance(name)?.isBidi === true)
         }
         return false
     }

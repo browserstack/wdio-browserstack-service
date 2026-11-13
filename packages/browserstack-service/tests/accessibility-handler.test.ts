@@ -55,13 +55,15 @@ describe('shouldSkipScanForBidiWindowCommand (SDK-5047)', () => {
     })
 
     it('skips for window commands when any multiremote child instance is BiDi', () => {
-        const multi = { instances: ['chromeA', 'chromeB'], chromeA: { isBidi: false }, chromeB: { isBidi: true } }
+        const children: Record<string, { isBidi?: boolean }> = { chromeA: { isBidi: false }, chromeB: { isBidi: true } }
+        const multi = { instances: ['chromeA', 'chromeB'], getInstance: (name: string) => children[name] }
         expect(skip(multi, { name: 'getWindowHandle', class: 'Browser' })).toBe(true)
         expect(skip(multi, { name: 'switchToWindow', class: 'Browser' })).toBe(true)
     })
 
     it('does not skip on multiremote when no child instance is BiDi', () => {
-        const multi = { instances: ['chromeA', 'chromeB'], chromeA: { isBidi: false }, chromeB: {} }
+        const children: Record<string, { isBidi?: boolean }> = { chromeA: { isBidi: false }, chromeB: {} }
+        const multi = { instances: ['chromeA', 'chromeB'], getInstance: (name: string) => children[name] }
         expect(skip(multi, { name: 'getWindowHandle', class: 'Browser' })).toBe(false)
     })
 })
@@ -83,7 +85,7 @@ beforeEach(() => {
             browserName: 'chrome'
         },
         instances: ['browserA', 'browserB'],
-        isMultiremote: false,
+        isMultiRemote: false,
         browserA: {
             sessionId: 'session456',
             capabilities: { 'bstack:options': {
@@ -525,7 +527,7 @@ describe('scans ahead of the first test (config-level hooks)', () => {
 
     it('skips multiremote, which has no session id to gate on', async () => {
         const handler = handlerFor('mocha')
-        handler['_browser'] = { ...browser, isMultiremote: true } as any
+        handler['_browser'] = { ...browser, isMultiRemote: true } as any
 
         await handler.before('session-multi')
 

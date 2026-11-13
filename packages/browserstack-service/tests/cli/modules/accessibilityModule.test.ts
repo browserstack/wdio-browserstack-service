@@ -39,6 +39,9 @@ vi.mock('../../../src/util.js', () => ({
     formatString: vi.fn().mockReturnValue('formatted-script'),
     o11yClassErrorHandler: vi.fn().mockImplementation((cls) => cls),
     isBrowserstackSession: vi.fn().mockReturnValue(true),
+    executeAccessibilityScript: vi.fn().mockResolvedValue([]),
+    getElementCommandProbe: vi.fn().mockResolvedValue(undefined),
+    overwriteScanCommand: vi.fn((browser, name, fn, attachToElement) => browser.overwriteCommand(name, fn, { attachToElement })),
     getMobileA11yScriptArgs: vi.fn().mockReturnValue({}),
     getMobileResultsArg: vi.fn().mockReturnValue(undefined),
     logRejectedMobileSave: vi.fn(),
@@ -66,6 +69,7 @@ import AutomationFramework from '../../../src/cli/frameworks/automationFramework
 import { AutomationFrameworkState } from '../../../src/cli/states/automationFrameworkState.js'
 import { HookState } from '../../../src/cli/states/hookState.js'
 import { TestFrameworkState } from '../../../src/cli/states/testFrameworkState.js'
+import { executeAccessibilityScript } from '../../../src/util.js'
 
 describe('AccessibilityModule', () => {
     let accessibilityModule: AccessibilityModule
@@ -76,6 +80,7 @@ describe('AccessibilityModule', () => {
 
     beforeEach(() => {
         vi.clearAllMocks()
+        vi.mocked(executeAccessibilityScript).mockResolvedValue([])
 
         mockAccessibilityConfig = {
             isAppAccessibility: false,
@@ -86,7 +91,6 @@ describe('AccessibilityModule', () => {
         mockBrowser = {
             // a live session: the wrapper skips scanning when the driver has no sessionId
             sessionId: 'session-w',
-            executeAsync: vi.fn().mockResolvedValue([]),
             execute: vi.fn().mockResolvedValue({}),
             overwriteCommand: vi.fn()
         }
@@ -268,11 +272,11 @@ describe('AccessibilityModule', () => {
             accessibilityModule.accessibilityMap.set('session-w', false)
             await fireUrl()
             expect(isFirstNavigation).toHaveBeenCalledWith('session-w', 'url')
-            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+            expect(executeAccessibilityScript).not.toHaveBeenCalled()
 
             accessibilityModule.accessibilityMap.set('session-w', true)
             await fireUrl()
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith(expect.anything(), { method: 'url' })
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, expect.anything(), { method: 'url' })
         })
 
         it('skips the first url and scans a later one on desktop web', async () => {
@@ -282,10 +286,10 @@ describe('AccessibilityModule', () => {
 
             vi.mocked(isFirstNavigation).mockReturnValueOnce(true)
             await fireUrl()
-            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+            expect(executeAccessibilityScript).not.toHaveBeenCalled()
 
             await fireUrl()
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith(expect.anything(), { method: 'url' })
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, expect.anything(), { method: 'url' })
         })
 
         it('records a mobile session\'s first url even when the first-navigation skip applies', async () => {
@@ -296,7 +300,7 @@ describe('AccessibilityModule', () => {
             await (accessibilityModule as any).commandWrapper({ name: 'url', class: 'Browser' }, vi.fn().mockResolvedValue('ok'), 'https://example.com')
 
             expect(isBeforeFirstMobileNavigation).toHaveBeenCalledWith('url')
-            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+            expect(executeAccessibilityScript).not.toHaveBeenCalled()
         })
 
         it('passes ms:edgeOptions to the caps check when goog:chromeOptions is absent', async () => {
@@ -547,7 +551,7 @@ describe('AccessibilityModule', () => {
 
             await accessibilityModule.onAfterTest()
 
-            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+            expect(executeAccessibilityScript).not.toHaveBeenCalled()
         })
 
         it('should return early when accessibility scan was not started', async () => {
@@ -558,7 +562,7 @@ describe('AccessibilityModule', () => {
 
             await accessibilityModule.onAfterTest()
 
-            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+            expect(executeAccessibilityScript).not.toHaveBeenCalled()
         })
     })
 
@@ -570,7 +574,7 @@ describe('AccessibilityModule', () => {
 
             expect(result).toBeUndefined()
             expect(mockBrowser.execute).not.toHaveBeenCalled()
-            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+            expect(executeAccessibilityScript).not.toHaveBeenCalled()
         })
 
         it('should call execute for app accessibility', async () => {
@@ -584,37 +588,36 @@ describe('AccessibilityModule', () => {
             expect(result).toEqual({ success: true })
         })
 
-        it('should call executeAsync for web accessibility', async () => {
+        it('should run the scan script for web accessibility', async () => {
             accessibilityModule.accessibility = true
             accessibilityModule.isAppAccessibility = false
-            mockBrowser.executeAsync.mockResolvedValue({ violations: [] })
+            vi.mocked(executeAccessibilityScript).mockResolvedValue({ violations: [] })
 
             const result = await (accessibilityModule as any).performScanCli(mockBrowser)
 
-            expect(mockBrowser.executeAsync).toHaveBeenCalled()
+            expect(executeAccessibilityScript).toHaveBeenCalled()
             expect(result).toEqual({ violations: [] })
         })
 
         it('should handle errors gracefully', async () => {
             accessibilityModule.accessibility = true
             accessibilityModule.isAppAccessibility = false
-            mockBrowser.executeAsync.mockRejectedValue(new Error('Scan failed'))
+            vi.mocked(executeAccessibilityScript).mockRejectedValue(new Error('Scan failed'))
 
             const result = await (accessibilityModule as any).performScanCli(mockBrowser)
 
             expect(result).toBeUndefined()
         })
 
-        it('should pass command name to executeAsync for web accessibility', async () => {
+        it('should pass command name to the scan script for web accessibility', async () => {
             accessibilityModule.accessibility = true
             accessibilityModule.isAppAccessibility = false
             const commandName = 'click'
-            mockBrowser.executeAsync.mockResolvedValue({})
+            vi.mocked(executeAccessibilityScript).mockResolvedValue({})
 
             await (accessibilityModule as any).performScanCli(mockBrowser, commandName)
 
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith(
-                'mock-perform-scan-script',
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, 'mock-perform-scan-script',
                 { method: commandName }
             )
         })
@@ -633,24 +636,24 @@ describe('AccessibilityModule', () => {
         it('passes the mobile args to the scan script', async () => {
             await (accessibilityModule as any).performScanCli(mockBrowser, 'click')
 
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-perform-scan-script', { method: 'click', ...mobileArgs })
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, 'mock-perform-scan-script', { method: 'click', ...mobileArgs })
         })
 
         it('passes the mobile args to the results and summary scripts', async () => {
             await accessibilityModule.getA11yResults(mockBrowser)
             await accessibilityModule.getA11yResultsSummary(mockBrowser)
 
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-get-results-script', mobileArgs)
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-get-results-summary-script', mobileArgs)
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, 'mock-get-results-script', mobileArgs)
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, 'mock-get-results-summary-script', mobileArgs)
         })
 
         it('saves with the mobile args and checks the save result', async () => {
             const saveResult = { success: false, msg: 'No intermediate results found for mobile session' }
-            mockBrowser.executeAsync.mockResolvedValue(saveResult)
+            vi.mocked(executeAccessibilityScript).mockResolvedValue(saveResult)
 
             await (accessibilityModule as any).sendTestStopEvent(mockBrowser, { thTestRunUuid: 'run-uuid' })
 
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-save-test-results-script', expect.objectContaining(mobileArgs))
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, 'mock-save-test-results-script', expect.objectContaining(mobileArgs))
             expect(logRejectedMobileSave).toHaveBeenCalledWith(saveResult)
         })
     })
@@ -662,7 +665,7 @@ describe('AccessibilityModule', () => {
             const result = await accessibilityModule.getA11yResults(mockBrowser)
 
             expect(result).toBeUndefined()
-            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+            expect(executeAccessibilityScript).not.toHaveBeenCalled()
         })
 
         it('should return accessibility results when accessibility is enabled', async () => {
@@ -671,18 +674,18 @@ describe('AccessibilityModule', () => {
                 { id: 'test-1', impact: 'serious', description: 'Test violation' },
                 { id: 'test-2', impact: 'moderate', description: 'Another violation' }
             ]
-            mockBrowser.executeAsync.mockResolvedValue(mockResults)
+            vi.mocked(executeAccessibilityScript).mockResolvedValue(mockResults)
 
             const result = await accessibilityModule.getA11yResults(mockBrowser)
 
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-perform-scan-script', { method: '' })
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-get-results-script')
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, 'mock-perform-scan-script', { method: '' })
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, 'mock-get-results-script', undefined)
             expect(result).toEqual(mockResults)
         })
 
         it('should handle errors gracefully and return empty array', async () => {
             accessibilityModule.accessibility = true
-            mockBrowser.executeAsync.mockRejectedValue(new Error('Script execution failed'))
+            vi.mocked(executeAccessibilityScript).mockRejectedValue(new Error('Script execution failed'))
 
             const result = await accessibilityModule.getA11yResults(mockBrowser)
 
@@ -697,7 +700,7 @@ describe('AccessibilityModule', () => {
             const result = await accessibilityModule.getA11yResultsSummary(mockBrowser)
 
             expect(result).toBeUndefined()
-            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+            expect(executeAccessibilityScript).not.toHaveBeenCalled()
         })
 
         it('should return accessibility results summary when accessibility is enabled', async () => {
@@ -708,18 +711,18 @@ describe('AccessibilityModule', () => {
                 moderateViolations: 3,
                 url: 'https://example.com'
             }
-            mockBrowser.executeAsync.mockResolvedValue(mockSummary)
+            vi.mocked(executeAccessibilityScript).mockResolvedValue(mockSummary)
 
             const result = await accessibilityModule.getA11yResultsSummary(mockBrowser)
 
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-perform-scan-script', { method: '' })
-            expect(mockBrowser.executeAsync).toHaveBeenCalledWith('mock-get-results-summary-script')
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, 'mock-perform-scan-script', { method: '' })
+            expect(executeAccessibilityScript).toHaveBeenCalledWith(mockBrowser, 'mock-get-results-summary-script', undefined)
             expect(result).toEqual(mockSummary)
         })
 
         it('should handle errors gracefully and return empty object', async () => {
             accessibilityModule.accessibility = true
-            mockBrowser.executeAsync.mockRejectedValue(new Error('Script execution failed'))
+            vi.mocked(executeAccessibilityScript).mockRejectedValue(new Error('Script execution failed'))
 
             const result = await accessibilityModule.getA11yResultsSummary(mockBrowser)
 
@@ -771,7 +774,7 @@ describe('AccessibilityModule', () => {
             expect(validateCapsWithA11y).not.toHaveBeenCalled()
         })
 
-        it('engages the app performScan path (execute, not web executeAsync)', async () => {
+        it('engages the app performScan path (execute, not the web scan script)', async () => {
             vi.mocked(validateCapsWithAppA11y).mockReturnValue(true)
             vi.mocked(validateCapsWithA11y).mockReturnValue(true)
             vi.mocked(AutomationFramework.getState).mockImplementation(appGetState as any)
@@ -781,7 +784,7 @@ describe('AccessibilityModule', () => {
             const result = await mockBrowser.performScan()
 
             expect(mockBrowser.execute).toHaveBeenCalled()
-            expect(mockBrowser.executeAsync).not.toHaveBeenCalled()
+            expect(executeAccessibilityScript).not.toHaveBeenCalled()
             expect(result).toEqual({ scanned: true })
         })
 
