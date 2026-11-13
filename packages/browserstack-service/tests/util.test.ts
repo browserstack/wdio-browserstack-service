@@ -2738,17 +2738,24 @@ describe('getTestTags', () => {
 
 describe('overwriteScanCommand', () => {
     const fn = vi.fn()
+    const elementProbe = { click: vi.fn() }
 
-    it('registers the override with the options form', () => {
+    it('registers an element override for a command elements have', () => {
         const browser = { overwriteCommand: vi.fn() } as any
-        utils.overwriteScanCommand(browser, 'click', fn, true)
+        utils.overwriteScanCommand(browser, 'click', fn, true, elementProbe)
         expect(browser.overwriteCommand).toHaveBeenCalledTimes(1)
         expect(browser.overwriteCommand).toHaveBeenCalledWith('click', fn, { attachToElement: true })
     })
 
-    it('throws without registering an element override for touchAction', () => {
+    it('throws without registering an element override for a command elements lack', () => {
         const browser = { overwriteCommand: vi.fn() } as any
-        expect(() => utils.overwriteScanCommand(browser, 'touchAction', fn, true)).toThrow('no command to be overwritten: touchAction')
+        expect(() => utils.overwriteScanCommand(browser, 'touchAction', fn, true, elementProbe)).toThrow('no command to be overwritten: touchAction')
+        expect(browser.overwriteCommand).not.toHaveBeenCalled()
+    })
+
+    it('registers no element override when there is no element to check against', () => {
+        const browser = { overwriteCommand: vi.fn() } as any
+        expect(() => utils.overwriteScanCommand(browser, 'click', fn, true)).toThrow('no command to be overwritten: click')
         expect(browser.overwriteCommand).not.toHaveBeenCalled()
     })
 
@@ -2756,5 +2763,57 @@ describe('overwriteScanCommand', () => {
         const browser = { overwriteCommand: vi.fn() } as any
         utils.overwriteScanCommand(browser, 'touchAction', fn, false)
         expect(browser.overwriteCommand).toHaveBeenCalledWith('touchAction', fn, { attachToElement: false })
+    })
+})
+
+describe('getElementCommandProbe', () => {
+    const ref = { 'element-6066-11e4-a52e-4f735466cecf': 'bstack-command-probe' }
+
+    it('builds an element from a local reference', async () => {
+        const probe = { click: vi.fn() }
+        const browser = { isMultiRemote: false, $: vi.fn().mockResolvedValue(probe) } as any
+        expect(await utils.getElementCommandProbe(browser)).toBe(probe)
+        expect(browser.$).toHaveBeenCalledWith(ref)
+    })
+
+    it('uses the first instance of a multiremote browser', async () => {
+        const probe = { click: vi.fn() }
+        const instance = { $: vi.fn().mockResolvedValue(probe) }
+        const browser = { isMultiRemote: true, instances: ['a', 'b'], getInstance: vi.fn().mockReturnValue(instance) } as any
+        expect(await utils.getElementCommandProbe(browser)).toBe(probe)
+        expect(browser.getInstance).toHaveBeenCalledWith('a')
+    })
+
+    it('returns undefined when the element cannot be built', async () => {
+        const browser = { isMultiRemote: false, $: vi.fn().mockRejectedValue(new Error('boom')) } as any
+        expect(await utils.getElementCommandProbe(browser)).toBeUndefined()
+    })
+})
+
+describe('executeAccessibilityScript', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it('sends the script through the async endpoint on iOS', async () => {
+        const browser = { isIOS: true, execute: vi.fn(), executeAsyncScript: vi.fn().mockResolvedValue({ success: true }) }
+        const result = await utils.executeAccessibilityScript(browser, 'arguments[1]({ success: true })', { method: 'click' })
+        expect(result).toEqual({ success: true })
+        expect(browser.executeAsyncScript).toHaveBeenCalledWith('arguments[1]({ success: true })', [{ method: 'click' }])
+        expect(browser.execute).not.toHaveBeenCalled()
+    })
+
+    it('passes no arguments on iOS when none are given', async () => {
+        const browser = { isIOS: true, execute: vi.fn(), executeAsyncScript: vi.fn() }
+        await utils.executeAccessibilityScript(browser, 'arguments[0]()')
+        expect(browser.executeAsyncScript).toHaveBeenCalledWith('arguments[0]()', [])
+    })
+
+    it('wraps the script in a Promise for execute elsewhere', async () => {
+        const browser = { isIOS: false, execute: vi.fn().mockResolvedValue({ success: true }), executeAsyncScript: vi.fn() }
+        await utils.executeAccessibilityScript(browser, 'arguments[1]({})', { method: 'click' })
+        expect(browser.executeAsyncScript).not.toHaveBeenCalled()
+        expect(browser.execute.mock.calls[0][0]).toContain('bstackSdkArgs[1]({})')
+        expect(browser.execute.mock.calls[0][0]).toContain('{"method":"click"}')
     })
 })

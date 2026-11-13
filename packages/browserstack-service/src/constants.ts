@@ -76,9 +76,6 @@ export const BROWSERSTACK_WDIO_CONFIG_STRATEGY = 'BROWSERSTACK_WDIO_CONFIG_STRAT
 export const SUPPORTED_WDIO_CONFIG_EXTENSIONS = ['.js', '.ts', '.mjs', '.mts', '.cjs', '.cts']
 export const DEFAULT_WDIO_CONFIG_BASENAME = 'wdio.conf'
 
-/* Element commands webdriverio 10 removed. An element override for a missing command is only
-validated when the first element is created, which would throw inside the user's test. */
-export const REMOVED_ELEMENT_COMMANDS = new Set(['touchAction'])
 /* `wdio <cmd>` verbs that must never be mistaken for the config positional */
 export const WDIO_CLI_SUBCOMMANDS = ['run', 'install', 'repl', 'config']
 

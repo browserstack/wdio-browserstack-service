@@ -48,8 +48,7 @@ import {
     STOP_BUILD_MAX_ATTEMPTS,
     STOP_BUILD_ATTEMPT_TIMEOUT_MS,
     STOP_BUILD_TOTAL_BUDGET_MS,
-    STOP_BUILD_BACKOFF_BASE_MS,
-    REMOVED_ELEMENT_COMMANDS
+    STOP_BUILD_BACKOFF_BASE_MS
 } from './constants.js'
 import CrashReporter from './crash-reporter.js'
 import { BStackLogger } from './bstackLogger.js'
@@ -2198,13 +2197,32 @@ async function makeGetRequest(url: string, params: Record<string, any>, headers:
     return response
 }
 
+const W3C_ELEMENT_KEY = 'element-6066-11e4-a52e-4f735466cecf'
+
+/* An element built from a local reference (no driver call), used to see which commands elements really have. */
+export async function getElementCommandProbe(
+    browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
+): Promise<Record<string, unknown> | undefined> {
+    try {
+        const target = browser.isMultiRemote
+            ? (browser as WebdriverIO.MultiRemoteBrowser).getInstance((browser as WebdriverIO.MultiRemoteBrowser).instances[0])
+            : browser as WebdriverIO.Browser
+        return await (target as any).$({ [W3C_ELEMENT_KEY]: 'bstack-command-probe' })
+    } catch (error) {
+        BStackLogger.debug(`Could not build an element to check element commands against: ${error}`)
+        return undefined
+    }
+}
+
 export function overwriteScanCommand(
     browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser,
     name: string,
     fn: (...args: any[]) => unknown,
-    attachToElement: boolean
+    attachToElement: boolean,
+    elementProbe?: Record<string, unknown>
 ) {
-    if (attachToElement && REMOVED_ELEMENT_COMMANDS.has(name)) {
+    // WebdriverIO only checks an element override when an element is created, so a missing command would fail every `$()`.
+    if (attachToElement && typeof elementProbe?.[name] !== 'function') {
         throw new Error(`overwriteCommand: no command to be overwritten: ${name}`)
     }
     return (browser as any).overwriteCommand(name, fn, { attachToElement })
@@ -2215,6 +2233,10 @@ export async function executeAccessibilityScript<ReturnType>(
     fnBody: string,
     arg?: unknown
 ): Promise<ReturnType> {
+    // Appium's iOS Safari (remote-debugger < 17) returns a Promise from sync execute unresolved, as {}.
+    if (browser.isIOS) {
+        return browser.executeAsyncScript(fnBody, arg === undefined ? [] : [arg])
+    }
     return browser.execute(
         `return (function (...bstackSdkArgs) {
             return new Promise((resolve, reject) => {

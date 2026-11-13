@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, executeAccessibilityScript, formatString, getAppA11yResults, getAppA11yResultsSummary, overwriteScanCommand, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, isBrowserstackSession, isFirstNavigation, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout, isBeforeFirstMobileNavigation } from '../../util.js'
+import { _getParamsForAppAccessibility, executeAccessibilityScript, formatString, getAppA11yResults, getAppA11yResultsSummary, getElementCommandProbe, overwriteScanCommand, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, isBrowserstackSession, isFirstNavigation, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout, isBeforeFirstMobileNavigation } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -258,6 +258,7 @@ export default class AccessibilityModule extends BaseModule {
             // driver doesn't register just skips (logged) rather than aborting the whole wrap loop, so
             // the commands appium DOES register (click, setValue, ...) still auto-scan on app.
             if ('overwriteCommand' in browser && Array.isArray(this.scriptInstance.commandsToWrap)) {
+                const elementProbe = await getElementCommandProbe(browser)
                 this.scriptInstance.commandsToWrap
                     .filter((command) => command.name && command.class)
                     .forEach((command) => {
@@ -266,7 +267,8 @@ export default class AccessibilityModule extends BaseModule {
                                 browser,
                                 command.name,
                                 this.commandWrapper.bind(this, command),
-                                command.class === 'Element'
+                                command.class === 'Element',
+                                elementProbe
                             )
                         } catch (wrapError) {
                             this.logger.debug(`Skipping command wrap for ${command.name}: ${wrapError}`)

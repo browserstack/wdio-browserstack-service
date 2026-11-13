@@ -40,6 +40,7 @@ vi.mock('../../../src/util.js', () => ({
     o11yClassErrorHandler: vi.fn().mockImplementation((cls) => cls),
     isBrowserstackSession: vi.fn().mockReturnValue(true),
     executeAccessibilityScript: vi.fn().mockResolvedValue([]),
+    getElementCommandProbe: vi.fn().mockResolvedValue(undefined),
     overwriteScanCommand: vi.fn((browser, name, fn, attachToElement) => browser.overwriteCommand(name, fn, { attachToElement })),
     getMobileA11yScriptArgs: vi.fn().mockReturnValue({}),
     getMobileResultsArg: vi.fn().mockReturnValue(undefined),
