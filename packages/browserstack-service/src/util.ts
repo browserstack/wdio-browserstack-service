@@ -8,6 +8,7 @@ import util from 'node:util'
 
 import type { Capabilities, Frameworks, Options } from '@wdio/types'
 import type { BeforeCommandArgs, AfterCommandArgs } from '@wdio/reporter'
+import { ELEMENT_KEY } from 'webdriver'
 
 import type { GitRepoInfo } from 'git-repo-info'
 import gitRepoInfo from 'git-repo-info'
@@ -2197,8 +2198,6 @@ async function makeGetRequest(url: string, params: Record<string, any>, headers:
     return response
 }
 
-const W3C_ELEMENT_KEY = 'element-6066-11e4-a52e-4f735466cecf'
-
 /* An element built from a local reference (no driver call), used to see which commands elements really have. */
 export async function getElementCommandProbe(
     browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
@@ -2207,7 +2206,7 @@ export async function getElementCommandProbe(
         const target = browser.isMultiRemote
             ? (browser as WebdriverIO.MultiRemoteBrowser).getInstance((browser as WebdriverIO.MultiRemoteBrowser).instances[0])
             : browser as WebdriverIO.Browser
-        return await (target as any).$({ [W3C_ELEMENT_KEY]: 'bstack-command-probe' })
+        return await (target as any).$({ [ELEMENT_KEY]: 'bstack-command-probe' })
     } catch (error) {
         BStackLogger.debug(`Could not build an element to check element commands against: ${error}`)
         return undefined
