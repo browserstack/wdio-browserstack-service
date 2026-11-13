@@ -103,10 +103,11 @@ export default class TestFramework {
    * @param {TestFrameworkState} testFrameworkState
    * @param {HookState} hookState
    * @param {*} callback
+   * @param {boolean} prepend - Run before observers already registered for this event
    * @returns {void}
    */
-    static registerObserver(testFrameworkState: State, hookState: State, callback: Function) {
-        eventDispatcher.registerObserver(CLIUtils.getHookRegistryKey(testFrameworkState, hookState), callback)
+    static registerObserver(testFrameworkState: State, hookState: State, callback: Function, prepend = false) {
+        eventDispatcher.registerObserver(CLIUtils.getHookRegistryKey(testFrameworkState, hookState), callback, prepend)
     }
 
     /**

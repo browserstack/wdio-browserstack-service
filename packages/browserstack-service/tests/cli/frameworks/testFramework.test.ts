@@ -140,7 +140,18 @@ describe('TestFramework', () => {
 
                 TestFramework.registerObserver(mockState as any, mockHook as any, mockCallback)
 
-                expect(eventDispatcher.registerObserver).toHaveBeenCalledWith('TEST_STATE-PRE_HOOK', mockCallback)
+                expect(eventDispatcher.registerObserver).toHaveBeenCalledWith('TEST_STATE-PRE_HOOK', mockCallback, false)
+            })
+
+            it('should forward prepend to the event dispatcher', async () => {
+                const mockCallback = vi.fn()
+                const { eventDispatcher } = await import('../../../src/cli/eventDispatcher.js')
+                const { CLIUtils } = await import('../../../src/cli/cliUtils.js')
+                vi.mocked(CLIUtils.getHookRegistryKey).mockReturnValue('TEST_STATE-PRE_HOOK')
+
+                TestFramework.registerObserver('TEST_STATE' as any, 'PRE_HOOK' as any, mockCallback, true)
+
+                expect(eventDispatcher.registerObserver).toHaveBeenCalledWith('TEST_STATE-PRE_HOOK', mockCallback, true)
             })
         })
     })

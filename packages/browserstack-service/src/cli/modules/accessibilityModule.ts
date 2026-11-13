@@ -12,6 +12,7 @@ import { HookState } from '../states/hookState.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
 import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, setBrowserstackAnnotation } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
+import { TestFrameworkConstants } from '../frameworks/constants/testFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
 import type { Capabilities } from '@wdio/types'
@@ -42,6 +43,8 @@ export default class AccessibilityModule extends BaseModule {
         this.name = 'AccessibilityModule'
         this.accessibilityConfig = accessibilityConfig
         AutomationFramework.registerObserver(AutomationFrameworkState.CREATE, HookState.POST, this.onBeforeExecute.bind(this))
+        // Prepended so the verdict is on the instance before TestHubModule serializes TestRunStarted.
+        TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.setTestAccessibility.bind(this), true)
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.PRE, this.onBeforeTest.bind(this))
         TestFramework.registerObserver(TestFrameworkState.TEST, HookState.POST, this.onAfterTest.bind(this))
         this.accessibility = Boolean(accessibilityConfig)
@@ -194,6 +197,28 @@ export default class AccessibilityModule extends BaseModule {
             this.logger.error(`Error in commandWrapper for ${command.name}: ${error}`)
             // Still execute the original command even if accessibility scan fails
             return await originFunction(...args)
+        }
+    }
+
+    /**
+     * Per-test product_map.accessibility: only tests in the include/exclude tag scope are
+     * accessibility tests. Auto-scanning is left out so tests scanned manually keep their row.
+     * The binary falls back to its platform check when this is absent, which marks every test.
+     */
+    setTestAccessibility(args: Record<string, unknown>) {
+        try {
+            const testInstance = (args.instance as TestFrameworkInstance) || TestFramework.getTrackedInstance()
+            if (!testInstance) {
+                return
+            }
+            const suiteTitle = (typeof args.suiteTitle === 'string' ? args.suiteTitle : '') || ''
+            const test = (args.test && typeof args.test === 'object' ? args.test as { title?: string } : {}) || {}
+            const world = args.world as { [key: string]: unknown } | undefined
+            const inScope = Boolean(this.accessibility &&
+                shouldScanTestForAccessibility(suiteTitle, test.title || '', this.config.accessibilityOptions as Record<string, string> | undefined, world, Boolean(world)))
+            TestFramework.setState(testInstance, TestFrameworkConstants.KEY_TEST_ACCESSIBILITY, inScope)
+        } catch (error) {
+            this.logger.error(`setTestAccessibility: ${error}`)
         }
     }
 
