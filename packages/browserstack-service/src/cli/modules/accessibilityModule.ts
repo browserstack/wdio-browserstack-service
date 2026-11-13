@@ -10,7 +10,7 @@ import { TestFrameworkState } from '../states/testFrameworkState.js'
 import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, setBrowserstackAnnotation } from '../../util.js'
+import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, setBrowserstackAnnotation, getMobileA11yScriptArgs, executeA11yResultsScript, logRejectedMobileSave, setMobileA11yScriptTimeout } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -79,6 +79,7 @@ export default class AccessibilityModule extends BaseModule {
                 browser_version: browserCaps?.browserVersion || 'latest',
                 platform_name: browserCaps?.platformName,
                 platform_version: this.getCapability(browserCaps, 'appium:platformVersion', 'platformVersion'),
+                os_version: this.getCapability(inputCaps, 'osVersion', 'os_version'),
             }
             if (this.isAppAccessibility) {
                 this.accessibility = validateCapsWithAppA11y(platformA11yMeta)
@@ -90,6 +91,7 @@ export default class AccessibilityModule extends BaseModule {
                 const device = this.getCapability(inputCaps, 'deviceName')
                 const chromeOptions = this.getCapability(inputCaps, 'goog:chromeOptions')
                 this.accessibility = validateCapsWithA11y(device, platformA11yMeta, chromeOptions)
+                await setMobileA11yScriptTimeout(browser)
             }
 
             //patching getA11yResultsSummary
@@ -410,7 +412,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     const results = await (browser as WebdriverIO.Browser).executeAsync(
                         this.scriptInstance.performScan as string,
-                        { 'method': commandName || '' }
+                        { 'method': commandName || '', ...getMobileA11yScriptArgs() }
                     )
                     return (results as { [key: string]: any; } | undefined)
                 } catch (err: any) {
@@ -439,8 +441,9 @@ export default class AccessibilityModule extends BaseModule {
             }
 
             await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.SAVE_RESULTS, async () => {
-                const results: unknown = await (browser as WebdriverIO.Browser).executeAsync(accessibilityScripts.saveTestResults as string, dataForExtension)
+                const results: unknown = await (browser as WebdriverIO.Browser).executeAsync(accessibilityScripts.saveTestResults as string, { ...dataForExtension, ...getMobileA11yScriptArgs() })
                 this.logger.debug(`save results : ${util.format(results as string)}`)
+                logRejectedMobileSave(results)
             })()
         } catch (error) {
             this.logger.error(`Error while sending test stop event: ${error}`)
@@ -458,7 +461,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results')
                     await this.performScanCli(browser)
-                    const results: Array<{ [key: string]: any; }> = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResults as string)
+                    const results: Array<{ [key: string]: any; }> = await executeA11yResultsScript<Array<{ [key: string]: any; }>>(browser, this.scriptInstance.getResults as string)
                     return results
                 } catch (error: any) {
                     this.logger.error('No accessibility results were found.')
@@ -480,7 +483,7 @@ export default class AccessibilityModule extends BaseModule {
                     }
                     this.logger.debug('Performing scan before getting results summary')
                     await this.performScanCli(browser)
-                    const summaryResults: { [key: string]: any; } = await (browser as WebdriverIO.Browser).executeAsync(this.scriptInstance.getResultsSummary as string)
+                    const summaryResults: { [key: string]: any; } = await executeA11yResultsScript<{ [key: string]: any; }>(browser, this.scriptInstance.getResultsSummary as string)
                     return summaryResults
                 } catch {
                     this.logger.error('No accessibility summary was found.')
