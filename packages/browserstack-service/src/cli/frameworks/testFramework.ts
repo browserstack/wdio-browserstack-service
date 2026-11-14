@@ -1,3 +1,5 @@
+import type { Frameworks } from '@wdio/types'
+
 import { CLIUtils } from '../cliUtils.js'
 import { eventDispatcher } from '../eventDispatcher.js'
 import { BStackLogger as logger } from '../cliLogger.js'
@@ -83,6 +85,21 @@ export default class TestFramework {
     trackEvent(testFrameworkState: State, hookState: State, args: unknown = {}) {
         logger.info(`trackEvent: testFrameworkState=${testFrameworkState}; hookState=${hookState}; args=${args}`)
     }
+
+    /**
+   * Pin a test the reporter's `fail` is about to report to the test run it belongs to, before
+   * that report is queued.
+   * @param {Frameworks.Test} _test
+   */
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    pinFailedAttempt(_test: Frameworks.Test): void {}
+
+    /**
+   * Wait for test finishes that are still being reported. A module calls this before it reads the
+   * final results of the run (session status, the last deferred test finish).
+   * @returns {Promise<void>}
+   */
+    async settleTestFinishes(): Promise<void> {}
 
     /**
    * run test hooks
