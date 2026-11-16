@@ -5,9 +5,9 @@ on:
   # Scan changed files in PRs (diff-aware scanning):
   # The branches below must be a subset of the branches above
   pull_request:
-    branches: ["master", "main"]
+    branches: ["master", "main", "v9", "v8"]
   push:
-    branches: ["master", "main"]
+    branches: ["master", "main", "v9", "v8"]
   schedule:
     - cron: '0 6 * * *'
 
