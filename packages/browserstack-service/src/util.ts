@@ -492,6 +492,40 @@ export const MOBILE_PLATFORM_UNSUPPORTED_WARNING = 'Accessibility Automation wil
 
 export const MOBILE_SCANNING_DISABLED_WARNING = 'Mobile Accessibility Automation is not enabled for your account. Accessibility scans will be skipped on mobile sessions. Contact BrowserStack to enable mobile accessibility scanning.'
 
+export const MOBILE_ADVANCED_RULES_WARNING = 'Advanced accessibility rules are not supported on mobile browsers. Mobile sessions run the standard rules only.'
+
+export const ACCESSIBILITY_BUILD_START_FAILED_WARNING = 'Accessibility Automation could not be started for this build. Accessibility scans will be skipped.'
+
+/* Platform requested in a capability, or undefined for a desktop one. A browser that isn't named defaults to the device's own. */
+export const getRequestedMobileA11yPlatform = (capability: Record<string, any>) => {
+    const bstackOptions = capability?.['bstack:options'] || {}
+    const deviceName = bstackOptions.deviceName ?? bstackOptions.device ?? capability?.['appium:deviceName'] ?? capability?.deviceName ?? capability?.device
+    if (!deviceName) {
+        return undefined
+    }
+    const platformName = String(capability.platformName || bstackOptions.os || '').toLowerCase()
+    const platform = /iphone|ipad/i.test(String(deviceName)) || platformName === 'ios' ? 'ios' : 'android'
+    const browserName = capability.browserName || bstackOptions.browserName || (platform === 'ios' ? 'safari' : 'chrome')
+    const osVersion = bstackOptions.osVersion ?? capability['appium:platformVersion'] ?? capability.platformVersion ?? capability.os_version
+    return { platform, browserName, deviceName, osVersion, supported: isMobileA11yPlatformPair(platform, browserName, deviceName, osVersion) }
+}
+
+/* The CLI flow adds the accessibility commands only when the build started accessibility; without them, a test calling one would throw. The classic flow always adds them. */
+export const addNoopAccessibilityCommands = (browser: WebdriverIO.Browser) => {
+    const noops: Record<string, () => Promise<unknown>> = {
+        getAccessibilityResultsSummary: async () => ({}),
+        getAccessibilityResults: async () => [],
+        performScan: async () => undefined,
+        startA11yScanning: async () => undefined,
+        stopA11yScanning: async () => undefined
+    }
+    for (const [name, noop] of Object.entries(noops)) {
+        if (typeof (browser as unknown as Record<string, unknown>)[name] !== 'function') {
+            (browser as unknown as Record<string, unknown>)[name] = noop
+        }
+    }
+}
+
 export const isMobileScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP === 'true'
 
 // The scanner fails inside Safari before iOS 18, so older iPhones are rejected when the version is known.
@@ -2202,6 +2236,10 @@ export async function executeAccessibilityScript<ReturnType>(
     fnBody: string,
     arg?: unknown
 ): Promise<ReturnType> {
+    // iOS Safari doesn't await a Promise returned from execute/sync; mobile sessions already have a script timeout set.
+    if (mobileA11ySession) {
+        return arg === undefined ? browser.executeAsync(fnBody) : browser.executeAsync(fnBody, arg)
+    }
     return browser.execute(
         `return (function (...bstackSdkArgs) {
             return new Promise((resolve, reject) => {

@@ -8,6 +8,7 @@ import {
     isBrowserstackSession,
     patchConsoleLogs,
     isTrue,
+    addNoopAccessibilityCommands,
     isFalse,
     getUniqueIdentifier,
     getHookType,
@@ -278,6 +279,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         // BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { sessionId })
                     } else {
                         await this._accessibilityHandler.before(sessionId)
+                    }
+                    if (this._isCliAccessibilityFlow()) {
+                        addNoopAccessibilityCommands(this._browser as WebdriverIO.Browser)
                     }
 
                     Listener.setAccessibilityOptions(this._options.accessibilityOptions)
