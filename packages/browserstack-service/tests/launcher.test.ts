@@ -954,6 +954,81 @@ describe('constructor', () => {
         ])
     })
 
+    it('turns accessibility off for the build when every capability is an unsupported mobile platform', async () => {
+        const warn = vi.spyOn(bstackLogger.BStackLogger, 'warn')
+        const serviceOptions: any = { accessibility: true }
+        const caps: any = [{ browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } }]
+        new BrowserstackLauncher(serviceOptions, caps, config)
+
+        expect(serviceOptions.accessibility).toEqual(false)
+        expect(caps[0]['bstack:options'].accessibility).toEqual(false)
+        expect(warn).toHaveBeenCalledWith('Accessibility Automation will run only on Desktop browsers, Chrome on Android or Safari on iPhone with iOS 18 or later.')
+    })
+
+    it('keeps accessibility on when any capability can be scanned, and warns about advanced rules on mobile', async () => {
+        const warn = vi.spyOn(bstackLogger.BStackLogger, 'warn')
+        const serviceOptions: any = { accessibility: true, accessibilityOptions: { includeIssueType: { advanced: true } } }
+        const caps: any = [
+            { browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } },
+            { browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 17', osVersion: '26' } },
+            { browserName: 'chrome', 'bstack:options': { os: 'Windows' } }
+        ]
+        new BrowserstackLauncher(serviceOptions, caps, config)
+
+        expect(serviceOptions.accessibility).toEqual(true)
+        expect(caps.map((c: any) => c['bstack:options'].accessibility)).toEqual([true, true, true])
+        expect(warn).toHaveBeenCalledWith('Advanced accessibility rules are not supported on mobile browsers. Mobile sessions run the standard rules only.')
+    })
+
+    it('checks every browser of a multiremote run', async () => {
+        const serviceOptions: any = { accessibility: true }
+        const caps: any = {
+            a: { capabilities: { browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } } },
+            b: { capabilities: { browserName: 'safari', 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '18' } } }
+        }
+        new BrowserstackLauncher(serviceOptions, caps, config)
+        expect(serviceOptions.accessibility).toEqual(false)
+        expect(caps.a.capabilities['bstack:options'].accessibility).toEqual(false)
+
+        const mixed: any = { accessibility: true }
+        new BrowserstackLauncher(mixed, {
+            a: { capabilities: { browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } } },
+            b: { capabilities: { browserName: 'chrome', 'bstack:options': { os: 'Windows' } } }
+        } as any, config)
+        expect(mixed.accessibility).toEqual(true)
+    })
+
+    it('leaves App Accessibility runs to their own platform checks', async () => {
+        const fromCaps: any = { accessibility: true }
+        new BrowserstackLauncher(fromCaps, [{ 'appium:app': 'bs://app', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } }] as any, config)
+        expect(fromCaps.accessibility).toEqual(true)
+
+        const fromOptions: any = { accessibility: true, app: 'bs://app' }
+        new BrowserstackLauncher(fromOptions, [{ 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '17' } }] as any, config)
+        expect(fromOptions.accessibility).toEqual(true)
+
+        const fromAppiumOptions: any = { accessibility: true }
+        new BrowserstackLauncher(fromAppiumOptions, [{ 'appium:options': { app: 'bs://app' }, 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '17' } }] as any, config)
+        expect(fromAppiumOptions.accessibility).toEqual(true)
+
+        const fromBundleId: any = { accessibility: true }
+        new BrowserstackLauncher(fromBundleId, [{ 'appium:bundleId': 'com.example.app', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } }] as any, config)
+        expect(fromBundleId.accessibility).toEqual(true)
+
+        const skipAppOverride: any = { accessibility: true, skipAppOverride: true }
+        new BrowserstackLauncher(skipAppOverride, [{ 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '17' } }] as any, config)
+        expect(skipAppOverride.accessibility).toEqual(true)
+    })
+
+    it('does not warn about advanced rules for desktop-only runs', async () => {
+        const warn = vi.spyOn(bstackLogger.BStackLogger, 'warn')
+        const serviceOptions: any = { accessibility: true, accessibilityOptions: { includeIssueType: { advanced: true } } }
+        new BrowserstackLauncher(serviceOptions, [{ browserName: 'chrome', 'bstack:options': { os: 'Windows' } }] as any, config)
+
+        expect(serviceOptions.accessibility).toEqual(true)
+        expect(warn).not.toHaveBeenCalledWith('Advanced accessibility rules are not supported on mobile browsers. Mobile sessions run the standard rules only.')
+    })
+
     it('should add the "accessibility" property to an array of capabilities inside "bstack:options" if any extension cap present', async () => {
         const serviceOptions = { accessibility: true }
         const caps: any = [{ 'moz:firefoxOptions': {} }, { 'goog:chromeOptions': {} }]

@@ -23,7 +23,7 @@ import WebdriverIOModule from './modules/webdriverIOModule.js'
 import AccessibilityModule from './modules/accessibilityModule.js'
 import CustomTagsModule from './modules/customTagsModule.js'
 import UploadAttachmentModule from './modules/uploadAttachmentModule.js'
-import { isObject, isTurboScale, processAccessibilityResponse, shouldAddServiceVersion } from '../util.js'
+import { ACCESSIBILITY_BUILD_START_FAILED_WARNING, isObject, isTrue, isTurboScale, processAccessibilityResponse, shouldAddServiceVersion } from '../util.js'
 import ObservabilityModule from './modules/observabilityModule.js'
 import type { BrowserstackConfig, BrowserstackOptions, LaunchResponse } from '../types.js'
 import CrashReporter from '../crash-reporter.js'
@@ -123,6 +123,9 @@ export class BrowserstackCLI {
         CrashReporter.recursivelyRedactKeysFromObject(redactedStartResponse, ['user', 'username', 'key', 'accesskey', 'password'])
         BStackLogger.debug(`start: startBinSession response=${JSON.stringify(redactedStartResponse)}`)
         this.loadModules(response)
+        if (isTrue((this.options as BrowserstackConfig & BrowserstackOptions).accessibility) && !response.accessibility?.success) {
+            BStackLogger.warn(ACCESSIBILITY_BUILD_START_FAILED_WARNING)
+        }
         this.isMainConnected = true
     }
 
