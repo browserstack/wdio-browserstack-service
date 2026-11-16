@@ -2876,6 +2876,7 @@ describe('BEFORE_ALL skip cascade + hook flag pass-through (SDK-7047)', () => {
             const data = args.instance.getAllData()
             expect(data.get('test_result')).toBe('skipped')
             expect(data.get('test_skipped_cascade')).toBe(true)
+            expect(data.get('test_accessibility')).toBe(false)
             // the cascade payload has no world, so no tags
             expect(data.get('test_tags')).toBeUndefined()
             expect(data.get('test_scopes')).toEqual(['Login'])
