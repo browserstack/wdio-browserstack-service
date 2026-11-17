@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 8.56.1
+
+### Patch Changes
+
+- afaef90: - Fixed accessibility results being attributed outside the test that produced them when using tag-scoped accessibility testing on the BrowserStack CLI flow.
+
 ## 8.56.0
 
 ### Minor Changes
