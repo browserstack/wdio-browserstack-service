@@ -177,6 +177,48 @@ describe('TestFramework', () => {
         })
     })
 
+    describe('runTestEndHooks', () => {
+        const endedAtKey = 'test_ended_at'
+        let order: string[]
+        let instance: { updateMultipleEntries: ReturnType<typeof vi.fn> }
+
+        beforeEach(() => {
+            order = []
+            instance = {
+                updateMultipleEntries: vi.fn((entries: Record<string, unknown>) => {
+                    if (endedAtKey in entries) {
+                        order.push('ended_at')
+                    }
+                })
+            }
+        })
+
+        it('stamps ended_at after the observers, then releases the held finish', async () => {
+            vi.spyOn(framework, 'runHooks').mockImplementation(async (_i: unknown, _s: unknown, _h: unknown, args: any) => {
+                order.push(args.holdFinishUntilHooksEnd === true ? 'observers(hold)' : 'observers')
+                args.releaseHeldFinish = async () => {
+                    order.push('release')
+                }
+            })
+
+            await framework.runTestEndHooks(instance as any, 'TEST' as any, 'POST' as any, {})
+
+            expect(order).toEqual(['observers(hold)', 'ended_at', 'release'])
+        })
+
+        it('still stamps and releases when an observer throws', async () => {
+            vi.spyOn(framework, 'runHooks').mockImplementation(async (_i: unknown, _s: unknown, _h: unknown, args: any) => {
+                args.releaseHeldFinish = async () => {
+                    order.push('release')
+                }
+                throw new Error('observer failed')
+            })
+
+            await expect(framework.runTestEndHooks(instance as any, 'TEST' as any, 'POST' as any, {})).rejects.toThrow('observer failed')
+            expect(order).toEqual(['ended_at', 'release'])
+        })
+    })
+
     describe('updateInstanceState', () => {
         it('should update instance state correctly', () => {
             const mockInstance = {

@@ -1,6 +1,7 @@
 import { CLIUtils } from '../cliUtils.js'
 import { eventDispatcher } from '../eventDispatcher.js'
 import { BStackLogger as logger } from '../cliLogger.js'
+import { TestFrameworkConstants } from './constants/testFrameworkConstants.js'
 import type TrackedContext from '../instances/trackedContext.js'
 import TrackedInstance from '../instances/trackedInstance.js'
 import type TestFrameworkInstance from '../instances/testFrameworkInstance.js'
@@ -96,6 +97,30 @@ export default class TestFramework {
 
         const hookRegistryKey = CLIUtils.getHookRegistryKey(testFrameworkState, hookState)
         await eventDispatcher.notifyObserver(hookRegistryKey, args)
+    }
+
+    /**
+     * Runs the TEST/POST observers, then ends the test: ended_at is restamped once every observer
+     * (the a11y pre-save scan and save among them) has run, and the TestRunFinished send that
+     * TestHub held for it is released, even when an observer throws.
+     */
+    async runTestEndHooks(instance: TestFrameworkInstance, testFrameworkState: State, hookState: State, args: Record<string, unknown>) {
+        args.holdFinishUntilHooksEnd = true
+        try {
+            await this.runHooks(instance, testFrameworkState, hookState, args)
+        } finally {
+            instance.updateMultipleEntries({
+                [TestFrameworkConstants.KEY_TEST_ENDED_AT]: new Date().toISOString(),
+            })
+            const release = args.releaseHeldFinish as (() => Promise<void>) | undefined
+            if (release) {
+                try {
+                    await release()
+                } catch (error) {
+                    logger.debug(`runTestEndHooks: releasing the held test finish failed: ${error}`)
+                }
+            }
+        }
     }
 
     /**
