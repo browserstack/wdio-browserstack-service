@@ -954,6 +954,41 @@ describe('constructor', () => {
         ])
     })
 
+    it('turns accessibility off for the build when every capability is an unsupported mobile platform', async () => {
+        const warn = vi.spyOn(bstackLogger.BStackLogger, 'warn')
+        const serviceOptions: any = { accessibility: true }
+        const caps: any = [{ browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } }]
+        new BrowserstackLauncher(serviceOptions, caps, config)
+
+        expect(serviceOptions.accessibility).toEqual(false)
+        expect(caps[0]['bstack:options'].accessibility).toEqual(false)
+        expect(warn).toHaveBeenCalledWith('Accessibility Automation will run only on Desktop browsers, Chrome on Android or Safari on iPhone with iOS 18 or later.')
+    })
+
+    it('keeps accessibility on when any capability can be scanned, and warns about advanced rules on mobile', async () => {
+        const warn = vi.spyOn(bstackLogger.BStackLogger, 'warn')
+        const serviceOptions: any = { accessibility: true, accessibilityOptions: { includeIssueType: { advanced: true } } }
+        const caps: any = [
+            { browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } },
+            { browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 17', osVersion: '26' } },
+            { browserName: 'chrome', 'bstack:options': { os: 'Windows' } }
+        ]
+        new BrowserstackLauncher(serviceOptions, caps, config)
+
+        expect(serviceOptions.accessibility).toEqual(true)
+        expect(caps.map((c: any) => c['bstack:options'].accessibility)).toEqual([true, true, true])
+        expect(warn).toHaveBeenCalledWith('Advanced accessibility rules are not supported on mobile browsers. Mobile sessions run the standard rules only.')
+    })
+
+    it('does not warn about advanced rules for desktop-only runs', async () => {
+        const warn = vi.spyOn(bstackLogger.BStackLogger, 'warn')
+        const serviceOptions: any = { accessibility: true, accessibilityOptions: { includeIssueType: { advanced: true } } }
+        new BrowserstackLauncher(serviceOptions, [{ browserName: 'chrome', 'bstack:options': { os: 'Windows' } }] as any, config)
+
+        expect(serviceOptions.accessibility).toEqual(true)
+        expect(warn).not.toHaveBeenCalledWith('Advanced accessibility rules are not supported on mobile browsers. Mobile sessions run the standard rules only.')
+    })
+
     it('should add the "accessibility" property to an array of capabilities inside "bstack:options" if any extension cap present', async () => {
         const serviceOptions = { accessibility: true }
         const caps: any = [{ 'moz:firefoxOptions': {} }, { 'goog:chromeOptions': {} }]
