@@ -229,6 +229,20 @@ describe('BrowserstackCLI', () => {
             expect(browserstackCLI.isMainConnected).toBe(true)
         })
 
+        it('warns when accessibility was requested but the build did not start it', async () => {
+            vi.spyOn(browserstackCLI, 'start').mockResolvedValue()
+            const warn = vi.spyOn(cliLogger.BStackLogger, 'warn').mockImplementation(() => {})
+            browserstackCLI.options = { accessibility: true }
+
+            await browserstackCLI.startMain()
+            expect(warn).toHaveBeenCalledWith('Accessibility Automation could not be started for this build. Accessibility scans will be skipped.')
+
+            warn.mockClear()
+            browserstackCLI.options = { accessibility: false }
+            await browserstackCLI.startMain()
+            expect(warn).not.toHaveBeenCalledWith('Accessibility Automation could not be started for this build. Accessibility scans will be skipped.')
+        })
+
         it('handles errors during start', async () => {
             const startError = new Error('Start failed')
             vi.spyOn(browserstackCLI, 'start').mockRejectedValue(startError)

@@ -75,6 +75,7 @@ export const BROWSERSTACK_WDIO_CONFIG_STRATEGY = 'BROWSERSTACK_WDIO_CONFIG_STRAT
 /* Mirrors create-wdio's SUPPORTED_CONFIG_FILE_EXTENSION (identical in wdio v8 and v9) */
 export const SUPPORTED_WDIO_CONFIG_EXTENSIONS = ['.js', '.ts', '.mjs', '.mts', '.cjs', '.cts']
 export const DEFAULT_WDIO_CONFIG_BASENAME = 'wdio.conf'
+
 /* `wdio <cmd>` verbs that must never be mistaken for the config positional */
 export const WDIO_CLI_SUBCOMMANDS = ['run', 'install', 'repl', 'config']
 

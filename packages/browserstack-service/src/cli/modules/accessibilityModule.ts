@@ -10,7 +10,7 @@ import { AutomationFrameworkState } from '../states/automationFrameworkState.js'
 import { HookState } from '../states/hookState.js'
 import type { Command } from '../../scripts/accessibility-scripts.js'
 import accessibilityScripts from '../../scripts/accessibility-scripts.js'
-import { _getParamsForAppAccessibility, formatString, getAppA11yResults, getAppA11yResultsSummary, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, isBrowserstackSession, isFirstNavigation, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout, isBeforeFirstMobileNavigation } from '../../util.js'
+import { _getParamsForAppAccessibility, executeAccessibilityScript, formatString, getAppA11yResults, getAppA11yResultsSummary, getElementCommandProbe, overwriteScanCommand, shouldScanTestForAccessibility, validateCapsWithA11y, validateCapsWithAppA11y, validateCapsWithNonBstackA11y, isBrowserstackSession, isFirstNavigation, getMobileA11yScriptArgs, getMobileResultsArg, logRejectedMobileSave, setMobileA11yScriptTimeout, isBeforeFirstMobileNavigation } from '../../util.js'
 import { AutomationFrameworkConstants } from '../frameworks/constants/automationFrameworkConstants.js'
 import util from 'node:util'
 import type { Accessibility } from '../../grpc/index.js'
@@ -258,15 +258,17 @@ export default class AccessibilityModule extends BaseModule {
             // driver doesn't register just skips (logged) rather than aborting the whole wrap loop, so
             // the commands appium DOES register (click, setValue, ...) still auto-scan on app.
             if ('overwriteCommand' in browser && Array.isArray(this.scriptInstance.commandsToWrap)) {
+                const elementProbe = await getElementCommandProbe(browser)
                 this.scriptInstance.commandsToWrap
                     .filter((command) => command.name && command.class)
                     .forEach((command) => {
                         try {
-                            browser.overwriteCommand(
-                                // @ts-expect-error fix type
+                            overwriteScanCommand(
+                                browser,
                                 command.name,
                                 this.commandWrapper.bind(this, command),
-                                command.class === 'Element'
+                                command.class === 'Element',
+                                elementProbe
                             )
                         } catch (wrapError) {
                             this.logger.debug(`Skipping command wrap for ${command.name}: ${wrapError}`)
@@ -576,11 +578,12 @@ export default class AccessibilityModule extends BaseModule {
                         BStackLogger.debug(util.format(results as string))
                         return (results as Record<string, unknown> | undefined)
                     }
-                    const results = await (browser as WebdriverIO.Browser).executeAsync(
+                    const results = await executeAccessibilityScript<Record<string, unknown> | undefined>(
+                        browser,
                         this.scriptInstance.performScan as string,
                         { 'method': commandName || '', ...getMobileA11yScriptArgs(isGlobalHook) }
                     )
-                    return (results as Record<string, unknown> | undefined)
+                    return results
                 } catch (err: unknown) {
                     this.logger.error('Accessibility Scan could not be performed : ' + err)
                     return
@@ -609,7 +612,7 @@ export default class AccessibilityModule extends BaseModule {
             }
 
             await PerformanceTester.measureWrapper(PERFORMANCE_SDK_EVENTS.A11Y_EVENTS.SAVE_RESULTS, async () => {
-                const results: unknown = await (browser as WebdriverIO.Browser).executeAsync(accessibilityScripts.saveTestResults as string, { ...dataForExtension, ...getMobileA11yScriptArgs() })
+                const results: unknown = await executeAccessibilityScript(browser, accessibilityScripts.saveTestResults as string, { ...dataForExtension, ...getMobileA11yScriptArgs() })
                 this.logger.debug(`save results : ${util.format(results as string)}`)
                 logRejectedMobileSave(results)
             })()
@@ -664,7 +667,7 @@ export default class AccessibilityModule extends BaseModule {
     // Desktop result scripts take no argument; mobile ones need the session flag and run uuid.
     private async executeResultsScript<T>(browser: WebdriverIO.Browser, script: string): Promise<T> {
         const mobileArg = getMobileResultsArg()
-        return (mobileArg ? browser.executeAsync(script, mobileArg) : browser.executeAsync(script)) as Promise<T>
+        return executeAccessibilityScript<T>(browser, script, mobileArg)
     }
 
     async getDriverExecuteParams(): Promise<Record<string, unknown>> {

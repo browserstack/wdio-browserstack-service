@@ -8,6 +8,7 @@ import util from 'node:util'
 
 import type { Capabilities, Frameworks, Options } from '@wdio/types'
 import type { BeforeCommandArgs, AfterCommandArgs } from '@wdio/reporter'
+import { ELEMENT_KEY } from 'webdriver'
 
 import type { GitRepoInfo } from 'git-repo-info'
 import gitRepoInfo from 'git-repo-info'
@@ -126,11 +127,11 @@ export function getBrowserDescription(cap: WebdriverIO.Capabilities) {
  * @param browserName browser name in case of multiremote
  */
 export function getBrowserCapabilities(browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser, caps?: Capabilities.ResolvedTestrunnerCapabilities, browserName?: string) {
-    if (!browser.isMultiremote) {
+    if (!browser.isMultiRemote) {
         return { ...browser.capabilities, ...caps } as WebdriverIO.Capabilities
     }
 
-    const multiCaps = caps as Capabilities.RequestedMultiremoteCapabilities
+    const multiCaps = caps as Capabilities.RequestedMultiRemoteCapabilities
     const globalCap = browserName && browser.getInstance(browserName) ? browser.getInstance(browserName).capabilities : {}
     const cap = browserName && multiCaps[browserName] ? multiCaps[browserName].capabilities : {}
     return { ...globalCap, ...cap } as WebdriverIO.Capabilities
@@ -492,6 +493,40 @@ export const MOBILE_PLATFORM_UNSUPPORTED_WARNING = 'Accessibility Automation wil
 
 export const MOBILE_SCANNING_DISABLED_WARNING = 'Mobile Accessibility Automation is not enabled for your account. Accessibility scans will be skipped on mobile sessions. Contact BrowserStack to enable mobile accessibility scanning.'
 
+export const MOBILE_ADVANCED_RULES_WARNING = 'Advanced accessibility rules are not supported on mobile browsers. Mobile sessions run the standard rules only.'
+
+export const ACCESSIBILITY_BUILD_START_FAILED_WARNING = 'Accessibility Automation could not be started for this build. Accessibility scans will be skipped.'
+
+/* Platform requested in a capability, or undefined for a desktop one. A browser that isn't named defaults to the device's own. */
+export const getRequestedMobileA11yPlatform = (capability: Record<string, any>) => {
+    const bstackOptions = capability?.['bstack:options'] || {}
+    const deviceName = bstackOptions.deviceName ?? capability?.['appium:deviceName'] ?? capability?.deviceName ?? capability?.device
+    if (!deviceName) {
+        return undefined
+    }
+    const platformName = String(capability.platformName || bstackOptions.os || '').toLowerCase()
+    const platform = /iphone|ipad/i.test(String(deviceName)) || platformName === 'ios' ? 'ios' : 'android'
+    const browserName = capability.browserName || bstackOptions.browserName || (platform === 'ios' ? 'safari' : 'chrome')
+    const osVersion = bstackOptions.osVersion ?? capability['appium:platformVersion'] ?? capability.platformVersion ?? capability.os_version
+    return { platform, browserName, deviceName, osVersion, supported: isMobileA11yPlatformPair(platform, browserName, deviceName, osVersion) }
+}
+
+/* The CLI flow adds the accessibility commands only when the build started accessibility; without them, a test calling one would throw. */
+export const addNoopAccessibilityCommands = (browser: WebdriverIO.Browser) => {
+    const noops: Record<string, () => Promise<unknown>> = {
+        getAccessibilityResultsSummary: async () => ({}),
+        getAccessibilityResults: async () => [],
+        performScan: async () => undefined,
+        startA11yScanning: async () => undefined,
+        stopA11yScanning: async () => undefined
+    }
+    for (const [name, noop] of Object.entries(noops)) {
+        if (typeof (browser as unknown as Record<string, unknown>)[name] !== 'function') {
+            (browser as unknown as Record<string, unknown>)[name] = noop
+        }
+    }
+}
+
 export const isMobileScanningEnabledForGroup = () => process.env.BROWSERSTACK_A11Y_MOBILE_SCANNING_ENABLED_FOR_GROUP === 'true'
 
 // The scanner fails inside Safari before iOS 18, so older iPhones are rejected when the version is known.
@@ -545,7 +580,7 @@ export const getMobileResultsArg = () => (mobileA11ySession ? getMobileA11yScrip
 /* The backend's scannerProcessingTimeout (seconds) from build start; 30s when it isn't sent, as in the Node SDK. */
 export const getMobileA11yScriptTimeoutMs = () => (parseInt(process.env.BSTACK_A11Y_SCANNER_PROCESSING_TIMEOUT || '', 10) || 30) * 1000
 
-/* Appium XCUITest starts iOS sessions with a ~0 ms async script timeout, so every executeAsync scan times out until one is set. */
+/* Appium XCUITest starts iOS sessions with a ~0 ms async script timeout, so every scan script times out until one is set. */
 export const setMobileA11yScriptTimeout = async (browser: WebdriverIO.Browser) => {
     if (!mobileA11ySession) {
         return
@@ -1273,7 +1308,7 @@ export function getCloudProvider(browser: WebdriverIO.Browser | WebdriverIO.Mult
     if (browser && 'instances' in browser) {
         // Loop through all instances
         for (const instanceName of browser.instances) {
-            const instance = (browser as any)[instanceName] as WebdriverIO.Browser
+            const instance = (browser as WebdriverIO.MultiRemoteBrowser).getInstance(instanceName)
             if (instance.options && instance.options.hostname && instance.options.hostname.includes('browserstack')) {
                 return 'browserstack'
             }
@@ -2197,11 +2232,44 @@ async function makeGetRequest(url: string, params: Record<string, any>, headers:
     return response
 }
 
+/* An element built from a local reference (no driver call), used to see which commands elements really have. */
+export async function getElementCommandProbe(
+    browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser
+): Promise<Record<string, unknown> | undefined> {
+    try {
+        const target = browser.isMultiRemote
+            ? (browser as WebdriverIO.MultiRemoteBrowser).getInstance((browser as WebdriverIO.MultiRemoteBrowser).instances[0])
+            : browser as WebdriverIO.Browser
+        return await (target as any).$({ [ELEMENT_KEY]: 'bstack-command-probe' })
+    } catch (error) {
+        BStackLogger.debug(`Could not build an element to check element commands against: ${error}`)
+        return undefined
+    }
+}
+
+export function overwriteScanCommand(
+    browser: WebdriverIO.Browser | WebdriverIO.MultiRemoteBrowser,
+    name: string,
+    fn: (...args: any[]) => unknown,
+    attachToElement: boolean,
+    elementProbe?: Record<string, unknown>
+) {
+    // WebdriverIO only checks an element override when an element is created, so a missing command would fail every `$()`.
+    if (attachToElement && typeof elementProbe?.[name] !== 'function') {
+        throw new Error(`overwriteCommand: no command to be overwritten: ${name}`)
+    }
+    return (browser as any).overwriteCommand(name, fn, { attachToElement })
+}
+
 export async function executeAccessibilityScript<ReturnType>(
     browser: any,
     fnBody: string,
     arg?: unknown
 ): Promise<ReturnType> {
+    // Appium's iOS Safari (remote-debugger < 17) returns a Promise from sync execute unresolved, as {}.
+    if (browser.isIOS) {
+        return browser.executeAsyncScript(fnBody, arg === undefined ? [] : [arg])
+    }
     return browser.execute(
         `return (function (...bstackSdkArgs) {
             return new Promise((resolve, reject) => {

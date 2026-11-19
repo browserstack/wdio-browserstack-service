@@ -226,7 +226,7 @@ export default class UploadAttachmentModule extends BaseModule {
      * uploadAttachment is called from the customer's test body, and the very next statement
      * is usually a browser command that the accessibility module wraps with a pre-command
      * scan. Awaiting a binary round-trip on that stack was observed to stall the following
-     * `executeAsync` scan under load (chrome sessions reaped at the framework timeout), so
+     * scan under load (chrome sessions reaped at the framework timeout), so
      * the event is written and its ack observed off the caller's stack. The ack carries no
      * information the caller can act on: the binary streams the file from `filePath` while
      * draining its own upload queue.
