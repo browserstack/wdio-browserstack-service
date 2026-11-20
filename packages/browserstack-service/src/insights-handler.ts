@@ -24,7 +24,9 @@ import {
     o11yClassErrorHandler,
     removeAnsiColors,
     getObservabilityProduct,
-    isTrue
+    isTrue,
+    getSessionBrowserVersion,
+    getSessionPlatformName
 } from './util.js'
 import type {
     TestData,
@@ -975,8 +977,8 @@ class _InsightsHandler {
             capabilities: caps,
             session_id: sessionId,
             browser: caps?.browserName,
-            browser_version: caps?.browserVersion,
-            platform: caps?.platformName,
+            browser_version: getSessionBrowserVersion(caps),
+            platform: getSessionPlatformName(caps),
             product: this._platformMeta?.product,
             platform_version: getPlatformVersion(caps, this._userCaps as WebdriverIO.Capabilities)
         }
