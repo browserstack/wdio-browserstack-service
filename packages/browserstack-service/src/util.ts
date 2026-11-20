@@ -1655,6 +1655,15 @@ export const ObjectsAreEqual = (object1: any, object2: any) => {
     return true
 }
 
+// JSONWP-dialect sessions (e.g. Chrome 87 on Automate) return `platform`/`version` instead of the W3C keys
+export function getSessionPlatformName (caps?: WebdriverIO.Capabilities) {
+    return caps?.platformName || (caps as { platform?: string } | undefined)?.platform
+}
+
+export function getSessionBrowserVersion (caps?: WebdriverIO.Capabilities) {
+    return caps?.browserVersion || (caps as { version?: string } | undefined)?.version
+}
+
 export const getPlatformVersion = o11yErrorHandler(function getPlatformVersion(caps: WebdriverIO.Capabilities, userCaps: WebdriverIO.Capabilities) {
     if (!caps && !userCaps) {
         return undefined
