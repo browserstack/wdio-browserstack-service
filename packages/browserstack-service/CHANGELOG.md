@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.44.3
+
+### Patch Changes
+
+- 03d847a: - Fixed tests outside `includeTagsInTestingScope` / `excludeTagsInTestingScope` being reported as accessibility tests when using the CLI.
+
 ## 9.44.2
 
 ### Patch Changes
