@@ -922,6 +922,14 @@ describe('beforeTest', () => {
             expect(service['_jasmineCurrentSpec']).toBeUndefined()
         })
 
+        it('registers the spec tracker once per worker', async () => {
+            const addReporter = vi.fn()
+            ;(globalThis as any).jasmine = { getEnv: () => ({ addReporter }) }
+            await service.before(service['_config'] as any, [], browser)
+            await service.before(service['_config'] as any, [], browser)
+            expect(addReporter).toHaveBeenCalledTimes(1)
+        })
+
         it('does not name the session after the top-level suite placeholder', async () => {
             await service.before(service['_config'] as any, [], browser)
             await service.beforeSuite({ title: jasmineSuiteTitle } as any)

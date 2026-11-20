@@ -49,6 +49,8 @@ import WdioCucumberTestFramework from './cli/frameworks/wdioCucumberTestFramewor
 import WdioMochaTestFramework from './cli/frameworks/wdioMochaTestFramework.js'
 import type TestHubModule from './cli/modules/testHubModule.js'
 
+const JASMINE_TOP_LEVEL_SUITE = 'Jasmine__TopLevel__Suite'
+
 export default class BrowserstackService implements Services.ServiceInstance {
     private _sessionBaseUrl = `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/automate/sessions`
     private _failReasons: string[] = []
@@ -61,6 +63,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     private _suiteFile?: string
     private _fullTitle?: string
     private _jasmineCurrentSpec?: { fullName?: string, description?: string }
+    private _jasmineSpecTrackerRegistered = false
     private _options: BrowserstackConfig & BrowserstackOptions
     private _specsRan: boolean = false
     private _observability
@@ -378,7 +381,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
         this._accessibilityHandler?.setSuiteFile(suite.file)
         this._setCliSuiteFile(suite.file)
 
-        if (suite.title && suite.title !== 'Jasmine__TopLevel__Suite') {
+        if (suite.title && suite.title !== JASMINE_TOP_LEVEL_SUITE) {
             if (!BrowserstackCLI.getInstance().isRunning() || this._config.framework !== 'mocha'){
                 await this._setSessionName(suite.title)
             }
@@ -492,14 +495,14 @@ export default class BrowserstackService implements Services.ServiceInstance {
             // For Jasmine, `suite.title` is `Jasmine__TopLevel__Suite`.
             // This tweak allows us to set the real suite name.
             const testSuiteName = fullName.slice(0, fullName.indexOf(description || '') - 1)
-            if (this._suiteTitle === 'Jasmine__TopLevel__Suite') {
+            if (this._suiteTitle === JASMINE_TOP_LEVEL_SUITE) {
                 suiteTitle = testSuiteName
             } else if (this._suiteTitle) {
                 suiteTitle = getParentSuiteName(this._suiteTitle, testSuiteName)
             }
         }
 
-        await this._setAnnotation(`Test: ${test.fullName ?? test.title}`)
+        await this._setAnnotation(`Test: ${fullName ?? test.title}`)
 
         if (BrowserstackCLI.getInstance().isRunning()) {
             await BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(TestFrameworkState.INIT_TEST, HookState.PRE, { test })
@@ -1101,6 +1104,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
 
     /** jasmine-core 5.10 dropped the `Spec.prototype.execute` hook jasmine-framework v8 reads the running spec from; a reporter still sees it. */
     private _trackJasmineSpecs() {
+        if (this._jasmineSpecTrackerRegistered) {
+            return
+        }
         try {
             const env = (globalThis as { jasmine?: { getEnv?: () => { addReporter?: (reporter: object) => void } } }).jasmine?.getEnv?.()
             env?.addReporter?.({
@@ -1111,6 +1117,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
                     this._jasmineCurrentSpec = undefined
                 }
             })
+            this._jasmineSpecTrackerRegistered = Boolean(env?.addReporter)
         } catch (err) {
             BStackLogger.debug(`Could not register the Jasmine spec tracker: ${util.format(err)}`)
         }
@@ -1139,7 +1146,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             const capSessionName = (this._caps as any)?.['bstack:options']?.sessionName
             if (capSessionName) {
                 name = capSessionName
-            } else if (suiteTitle === 'Jasmine__TopLevel__Suite') {
+            } else if (suiteTitle === JASMINE_TOP_LEVEL_SUITE) {
                 return
             }
         }
