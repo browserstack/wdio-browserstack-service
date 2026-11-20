@@ -29,7 +29,9 @@ import {
     getObservabilityProduct,
     generateHashCodeFromFields,
     isTrue,
-    isFalse
+    isFalse,
+    getSessionBrowserVersion,
+    getSessionPlatformName
 } from './util.js'
 import type {
     TestData,
@@ -1219,10 +1221,12 @@ class _InsightsHandler {
             capabilities: caps,
             session_id: (this._ltsActive && this._ltsSessionId) ? this._ltsSessionId : sessionId,
             browser: caps?.browserName,
-            browser_version: caps?.browserVersion,
-            platform: caps?.platformName,
+            browser_version: getSessionBrowserVersion(caps),
+            platform: getSessionPlatformName(caps),
             product: this._ltsActive ? 'loadTesting' : this._platformMeta?.product,
-            platform_version: getPlatformVersion(caps, this._userCaps as WebdriverIO.Capabilities),
+            // a JSONWP session reports no OS version, and _userCaps may already hold the session caps
+            platform_version: getPlatformVersion(caps, this._userCaps as WebdriverIO.Capabilities)
+                ?? getPlatformVersion(undefined as unknown as WebdriverIO.Capabilities, (this._browser as WebdriverIO.Browser)?.requestedCapabilities as WebdriverIO.Capabilities),
             device: getResolvedDeviceName(caps, this._userCaps as WebdriverIO.Capabilities)
         }
     }
