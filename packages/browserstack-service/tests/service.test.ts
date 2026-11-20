@@ -878,6 +878,60 @@ describe('beforeTest', () => {
             )
         })
     })
+
+    describe('Jasmine framework', () => {
+        const nameUpdate = (name: string) => [
+            `${sessionBaseUrl}/${sessionId}.json`,
+            { json: { name }, username: 'foo', password: 'bar' }
+        ]
+
+        beforeEach(() => {
+            service['_config'].framework = 'jasmine'
+        })
+
+        afterEach(() => {
+            delete (globalThis as any).jasmine
+        })
+
+        it('names the session after the suite when no sessionName capability is set', async () => {
+            await service.before(service['_config'] as any, [], browser)
+            await service.beforeSuite({ title: jasmineSuiteTitle } as any)
+            await service.beforeTest({ fullName: 'foo bar baz', description: 'baz' } as any)
+            expect(got.put).toBeCalledWith(...nameUpdate('foo bar'))
+        })
+
+        it('keeps the sessionName capability over the suite title', async () => {
+            service['_caps'] = { 'bstack:options': { sessionName: 'custom name' } } as any
+            await service.before(service['_config'] as any, [], browser)
+            await service.beforeSuite({ title: jasmineSuiteTitle } as any)
+            await service.beforeTest({ fullName: 'foo bar baz', description: 'baz' } as any)
+            expect(got.put).toBeCalledWith(...nameUpdate('custom name'))
+            expect(got.put).not.toBeCalledWith(...nameUpdate('foo bar'))
+        })
+
+        it('names the session from the tracked spec when hooks receive an empty test', async () => {
+            let reporter: { specStarted: (result: object) => void, specDone: () => void } | undefined
+            (globalThis as any).jasmine = { getEnv: () => ({ addReporter: (r: typeof reporter) => { reporter = r } }) }
+            await service.before(service['_config'] as any, [], browser)
+            await service.beforeSuite({ title: jasmineSuiteTitle } as any)
+            reporter!.specStarted({ fullName: 'foo bar baz', description: 'baz' })
+            await service.beforeTest({} as any)
+            expect(got.put).toBeCalledWith(...nameUpdate('foo bar'))
+
+            reporter!.specDone()
+            expect(service['_jasmineCurrentSpec']).toBeUndefined()
+        })
+
+        it('does not name the session after the top-level suite placeholder', async () => {
+            await service.before(service['_config'] as any, [], browser)
+            await service.beforeSuite({ title: jasmineSuiteTitle } as any)
+            await service.beforeTest({} as any)
+            expect(got.put).not.toBeCalledWith(
+                `${sessionBaseUrl}/${sessionId}.json`,
+                expect.objectContaining({ json: expect.objectContaining({ name: expect.anything() }) })
+            )
+        })
+    })
 })
 
 describe('afterTest', () => {
