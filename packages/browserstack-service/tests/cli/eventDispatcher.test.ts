@@ -60,6 +60,17 @@ describe('EventDispatcher', () => {
             expect(eventDispatcher.observers[hookKey][1]).toBe(callback2)
         })
 
+        it('should run a prepended observer before those already registered', () => {
+            const callback1 = vi.fn()
+            const callback2 = vi.fn()
+            const hookKey = 'testHook'
+
+            eventDispatcher.registerObserver(hookKey, callback1)
+            eventDispatcher.registerObserver(hookKey, callback2, true)
+
+            expect(eventDispatcher.observers[hookKey]).toEqual([callback2, callback1])
+        })
+
         it('should register observers for different hooks', () => {
             const callback1 = vi.fn()
             const callback2 = vi.fn()
