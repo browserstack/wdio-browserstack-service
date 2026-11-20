@@ -25,7 +25,9 @@ import {
     getResolvedDeviceName,
     isObjectEmpty,
     generateHashCodeFromFields,
-    getTestTags
+    getTestTags,
+    getSessionBrowserVersion,
+    getSessionPlatformName
 } from './util.js'
 import { BStackLogger } from './bstackLogger.js'
 import type { Capabilities } from '@wdio/types'
@@ -371,17 +373,20 @@ class _TestReporter extends WDIOReporter {
             // second (regex/input-cap fallback) so the resolver never has to
             // fall back to `this._capabilities` (negotiated runner caps,
             // which may omit bstack:options).
-            const liveBrowserCaps = (globalThis as unknown as {
-                browser?: { capabilities?: WebdriverIO.Capabilities }
-            })?.browser?.capabilities
+            const liveBrowser = (globalThis as unknown as {
+                browser?: { capabilities?: WebdriverIO.Capabilities, requestedCapabilities?: WebdriverIO.Capabilities }
+            })?.browser
+            const liveBrowserCaps = liveBrowser?.capabilities
             /* istanbul ignore next */
             testData.integrations[cloudProvider] = {
                 capabilities: this._capabilities,
                 session_id: (ltsActive && ltsSessionId) ? ltsSessionId : this._sessionId,
                 browser: this._capabilities?.browserName,
-                browser_version: this._capabilities?.browserVersion,
-                platform: this._capabilities?.platformName,
-                platform_version: getPlatformVersion(this._capabilities, this._userCaps as WebdriverIO.Capabilities),
+                browser_version: getSessionBrowserVersion(this._capabilities),
+                platform: getSessionPlatformName(this._capabilities),
+                // a JSONWP session reports no OS version, and _userCaps may already hold the session caps
+                platform_version: getPlatformVersion(this._capabilities, this._userCaps as WebdriverIO.Capabilities)
+                    ?? getPlatformVersion(undefined as unknown as WebdriverIO.Capabilities, liveBrowser?.requestedCapabilities as WebdriverIO.Capabilities),
                 device: getResolvedDeviceName(liveBrowserCaps, this._userCaps as WebdriverIO.Capabilities),
                 ...(ltsActive ? { product: 'loadTesting' } : {})
             }
