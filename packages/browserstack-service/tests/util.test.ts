@@ -2772,3 +2772,33 @@ describe('getTestTags', () => {
         expect(utils.getTestTags(test as any)).toEqual(['@regression', '@smoke'])
     })
 })
+
+describe('getSessionPlatformName', () => {
+    it('prefers the W3C platformName', () => {
+        expect(utils.getSessionPlatformName({ platformName: 'Windows', platform: 'WINDOWS' } as WebdriverIO.Capabilities)).toBe('Windows')
+    })
+
+    it('falls back to the JSONWP platform key', () => {
+        expect(utils.getSessionPlatformName({ platform: 'WINDOWS' } as WebdriverIO.Capabilities)).toBe('WINDOWS')
+    })
+
+    it('returns undefined when neither key is present', () => {
+        expect(utils.getSessionPlatformName({} as WebdriverIO.Capabilities)).toBeUndefined()
+        expect(utils.getSessionPlatformName(undefined)).toBeUndefined()
+    })
+})
+
+describe('getSessionBrowserVersion', () => {
+    it('prefers the W3C browserVersion', () => {
+        expect(utils.getSessionBrowserVersion({ browserVersion: '120.0', version: '87.0.4280.66' } as WebdriverIO.Capabilities)).toBe('120.0')
+    })
+
+    it('falls back to the JSONWP version key', () => {
+        expect(utils.getSessionBrowserVersion({ version: '87.0.4280.66' } as WebdriverIO.Capabilities)).toBe('87.0.4280.66')
+    })
+
+    it('returns undefined when neither key is present', () => {
+        expect(utils.getSessionBrowserVersion({} as WebdriverIO.Capabilities)).toBeUndefined()
+        expect(utils.getSessionBrowserVersion(undefined)).toBeUndefined()
+    })
+})

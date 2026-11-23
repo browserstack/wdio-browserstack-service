@@ -660,6 +660,22 @@ describe('getIntegrationsObject', () => {
         browser.capabilities.os = existingOs
     })
 
+    it('reads JSONWP session caps when the W3C keys are missing', () => {
+        (browser as WebdriverIO.Browser).capabilities = { browserName: 'chrome', platform: 'WINDOWS', version: '87.0.4280.66' } as WebdriverIO.Capabilities
+        const integrationsObject = insightsHandler['getIntegrationsObject']()
+        expect(integrationsObject.platform).toEqual('WINDOWS')
+        expect(integrationsObject.browser_version).toEqual('87.0.4280.66')
+    })
+
+    it('falls back to the requested capabilities for the OS version', () => {
+        const requestedCapabilities = { 'bstack:options': { osVersion: '11' } }
+        ;(browser as unknown as { requestedCapabilities: object }).requestedCapabilities = requestedCapabilities
+        getPlatformVersionSpy.mockImplementationOnce(() => undefined).mockImplementationOnce(() => '11')
+        const integrationsObject = insightsHandler['getIntegrationsObject']()
+        expect(integrationsObject.platform_version).toEqual('11')
+        expect(getPlatformVersionSpy).toHaveBeenLastCalledWith(undefined, requestedCapabilities)
+    })
+
     afterAll(() => {
         getPlatformVersionSpy.mockReset()
     })
