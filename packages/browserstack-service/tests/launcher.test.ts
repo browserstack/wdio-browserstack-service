@@ -980,6 +980,46 @@ describe('constructor', () => {
         expect(warn).toHaveBeenCalledWith('Advanced accessibility rules are not supported on mobile browsers. Mobile sessions run the standard rules only.')
     })
 
+    it('checks every browser of a multiremote run', async () => {
+        const serviceOptions: any = { accessibility: true }
+        const caps: any = {
+            a: { capabilities: { browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } } },
+            b: { capabilities: { browserName: 'safari', 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '18' } } }
+        }
+        new BrowserstackLauncher(serviceOptions, caps, config)
+        expect(serviceOptions.accessibility).toEqual(false)
+        expect(caps.a.capabilities['bstack:options'].accessibility).toEqual(false)
+
+        const mixed: any = { accessibility: true }
+        new BrowserstackLauncher(mixed, {
+            a: { capabilities: { browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } } },
+            b: { capabilities: { browserName: 'chrome', 'bstack:options': { os: 'Windows' } } }
+        } as any, config)
+        expect(mixed.accessibility).toEqual(true)
+    })
+
+    it('leaves App Accessibility runs to their own platform checks', async () => {
+        const fromCaps: any = { accessibility: true }
+        new BrowserstackLauncher(fromCaps, [{ 'appium:app': 'bs://app', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } }] as any, config)
+        expect(fromCaps.accessibility).toEqual(true)
+
+        const fromOptions: any = { accessibility: true, app: 'bs://app' }
+        new BrowserstackLauncher(fromOptions, [{ 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '17' } }] as any, config)
+        expect(fromOptions.accessibility).toEqual(true)
+
+        const fromAppiumOptions: any = { accessibility: true }
+        new BrowserstackLauncher(fromAppiumOptions, [{ 'appium:options': { app: 'bs://app' }, 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '17' } }] as any, config)
+        expect(fromAppiumOptions.accessibility).toEqual(true)
+
+        const fromBundleId: any = { accessibility: true }
+        new BrowserstackLauncher(fromBundleId, [{ 'appium:bundleId': 'com.example.app', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } }] as any, config)
+        expect(fromBundleId.accessibility).toEqual(true)
+
+        const skipAppOverride: any = { accessibility: true, skipAppOverride: true }
+        new BrowserstackLauncher(skipAppOverride, [{ 'bstack:options': { deviceName: 'iPad Pro 13 2024', osVersion: '17' } }] as any, config)
+        expect(skipAppOverride.accessibility).toEqual(true)
+    })
+
     it('does not warn about advanced rules for desktop-only runs', async () => {
         const warn = vi.spyOn(bstackLogger.BStackLogger, 'warn')
         const serviceOptions: any = { accessibility: true, accessibilityOptions: { includeIssueType: { advanced: true } } }
