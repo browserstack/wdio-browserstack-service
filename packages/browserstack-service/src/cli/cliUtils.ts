@@ -43,6 +43,8 @@ const CLI_LOCK_POLL_MS = 1000
 const CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000
 const CLI_DOWNLOAD_TMP_PREFIX = 'downloaded_file_'
 const CLI_DOWNLOAD_TMP_SUFFIX = '.zip'
+// A staging env name is a single DNS label; anything else (dots, slashes, ...) is ignored.
+const STAGING_ENV_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
 export class CLIUtils {
     static automationFrameworkDetail = {}
@@ -227,101 +229,56 @@ export class CLIUtils {
 
         PerformanceTester.start(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
         logger.info(`Current CLI Path Found: ${existingCliPath}`)
-        // Single close for the span on every path, including a rejected download.
-        try {
-            const queryParams: Record<string, string> = {
-                sdk_version: CLIUtils.getSdkVersion(),
-                os: platform(),
-                os_arch: arch(),
-                cli_version: '0',
-                sdk_language: this.getSdkLanguage(),
+        const queryParams: Record<string, string> = {
+            sdk_version: CLIUtils.getSdkVersion(),
+            os: platform(),
+            os_arch: arch(),
+            cli_version: '0',
+            sdk_language: this.getSdkLanguage(),
+        }
+        if (!isNullOrEmpty(existingCliPath)) {
+            // If binary is busy (being executed by another process), skip version check
+            // and API call entirely — use existing binary as-is
+            if (this.isBinaryBusy(existingCliPath)) {
+                logger.warn(`Existing binary is currently in use, skipping update: ${existingCliPath}`)
+                PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
+                return existingCliPath
             }
-            if (!isNullOrEmpty(existingCliPath)) {
-                // If binary is busy (being executed by another process), skip version check
-                // and API call entirely — use existing binary as-is
-                if (this.isBinaryBusy(existingCliPath)) {
-                    logger.warn(`Existing binary is currently in use, skipping update: ${existingCliPath}`)
-                    return existingCliPath
-                }
-                const version = await this.runShellCommand(
-                    `${existingCliPath} version`,
-                )
-                if (version.toLowerCase().includes('text file busy')) {
-                    logger.warn(`Binary busy during version check, skipping update: ${existingCliPath}`)
-                    return existingCliPath
-                }
-                queryParams.cli_version = version
+            const version = await this.runShellCommand(
+                `${existingCliPath} version`,
+            )
+            if (version.toLowerCase().includes('text file busy')) {
+                logger.warn(`Binary busy during version check, skipping update: ${existingCliPath}`)
+                PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
+                return existingCliPath
             }
+            queryParams.cli_version = version
+        }
+        const response = await this.requestToUpdateCLI(queryParams, config)
+        if (nestedKeyValue(response, ['updated_cli_version'])) {
+            logger.debug(
+                `Need to update binary, current binary version: ${queryParams.cli_version}`,
+            )
+
             const browserStackBinaryUrl =
                 process.env.BROWSERSTACK_BINARY_URL || null
-
-            const fallbackToBinaryUrl = async (reason: unknown) => {
-                logger.warn(
-                    `update_cli request failed (${reason}); falling back to BROWSERSTACK_BINARY_URL`,
-                )
-                try {
-                    return await this.downloadLatestBinary(browserStackBinaryUrl as string, cliDir)
-                } catch (downloadErr) {
-                    if (isNullOrEmpty(existingCliPath)) {
-                        throw downloadErr
-                    }
-                    logger.warn(
-                        `BROWSERSTACK_BINARY_URL download failed (${util.format(downloadErr)}); using cached binary ${existingCliPath}`,
-                    )
-                    return existingCliPath
-                }
-            }
-
-            let response
-            try {
-                response = await this.requestToUpdateCLI(queryParams, config)
-            } catch (err) {
-                // update_cli runs during bootstrap — before the binary is spawned and before GRR
-                // localizes the API hosts — so it always targets the production api host. On an internal
-                // staging run (BROWSERSTACK_STAGING_ENV) the staging creds are rejected there (401). If an
-                // explicit binary URL was supplied, use it so the run is not blocked on this call. Opt-in
-                // only: with no BROWSERSTACK_BINARY_URL behaviour is exactly as before.
-                const statusCode = (err as { response?: { statusCode?: number } })?.response?.statusCode
-                if (!isNullOrEmpty(browserStackBinaryUrl)) {
-                    return await fallbackToBinaryUrl(statusCode ?? (err as Error)?.message)
-                }
-                if (statusCode !== undefined) {
-                    // A non-2xx reply used to be returned as a body without `updated_cli_version`,
-                    // which kept the existing binary — preserve that.
-                    return existingCliPath
-                }
-                throw err
-            }
-
-            // A 2xx reply with neither `updated_cli_version` nor `url` means there is nothing to update:
-            // keep a cached binary, and only fetch from the explicit binary URL when there is none.
-            if (!isNullOrEmpty(browserStackBinaryUrl) && isNullOrEmpty(existingCliPath) &&
-                !nestedKeyValue(response, ['updated_cli_version']) && !nestedKeyValue(response, ['url'])) {
-                return await fallbackToBinaryUrl(JSON.stringify(response))
-            }
-
-            if (nestedKeyValue(response, ['updated_cli_version'])) {
+            if (!isNullOrEmpty(browserStackBinaryUrl)) {
                 logger.debug(
-                    `Need to update binary, current binary version: ${queryParams.cli_version}`,
+                    `Using BROWSERSTACK_BINARY_URL: ${browserStackBinaryUrl}`,
                 )
-
-                if (!isNullOrEmpty(browserStackBinaryUrl)) {
-                    logger.debug(
-                        `Using BROWSERSTACK_BINARY_URL: ${browserStackBinaryUrl}`,
-                    )
-                    response.url = browserStackBinaryUrl
-                }
-
-                return await this.downloadLatestBinary(
-                    nestedKeyValue(response, ['url']),
-                    cliDir,
-                    nestedKeyValue(response, ['updated_cli_version']),
-                )
+                response.url = browserStackBinaryUrl
             }
-            return existingCliPath
-        } finally {
+
+            const finalBinaryPath = await this.downloadLatestBinary(
+                nestedKeyValue(response, ['url']),
+                cliDir,
+                nestedKeyValue(response, ['updated_cli_version']),
+            )
             PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
+            return finalBinaryPath
         }
+        PerformanceTester.end(PerformanceEvents.SDK_CLI_CHECK_UPDATE)
+        return existingCliPath
     }
 
     static getCliDir() {
@@ -458,6 +415,39 @@ export class CLIUtils {
         }
     }
 
+    /**
+     * Internal staging env name from BROWSERSTACK_STAGING_ENV (trimmed, lowercased), or
+     * undefined when unset or not a single DNS label.
+     */
+    static stagingEnv(): string | undefined {
+        const raw = process.env.BROWSERSTACK_STAGING_ENV
+        if (raw === undefined) {
+            return undefined
+        }
+        const env = raw.trim().toLowerCase()
+        if (!env) {
+            return undefined
+        }
+        if (!STAGING_ENV_PATTERN.test(env)) {
+            logger.debug(`Ignoring invalid BROWSERSTACK_STAGING_ENV: ${JSON.stringify(raw)}`)
+            return undefined
+        }
+        return env
+    }
+
+    /**
+     * REST API host of the staging env that serves update_cli, or undefined when no valid
+     * staging env is set (callers then keep their existing host).
+     * preprod -> https://api-preprod.bsstag.com, <env> -> https://api<env>.bsstag.com
+     */
+    static stagingApiBaseUrl(): string | undefined {
+        const env = this.stagingEnv()
+        if (!env) {
+            return undefined
+        }
+        return env === 'preprod' ? 'https://api-preprod.bsstag.com' : `https://api${env}.bsstag.com`
+    }
+
     static requestToUpdateCLI = async (
         queryParams: Record<string, string>,
         config: Options.Testrunner,
@@ -470,19 +460,9 @@ export class CLIUtils {
             },
         }
         const response = await fetch(
-            `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/${UPDATED_CLI_ENDPOINT}?${params.toString()}`,
+            `${CLIUtils.stagingApiBaseUrl() ?? APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/${UPDATED_CLI_ENDPOINT}?${params.toString()}`,
             requestInit,
         )
-        if (!response.ok) {
-            // Check the status before parsing: an LB error page (HTML/empty 5xx) must still carry
-            // its status code rather than surface as a SyntaxError.
-            const body = await response.json().catch(() => null)
-            logger.debug(`response ${response.status} ${JSON.stringify(body)}`)
-            throw Object.assign(
-                new Error(`update_cli request failed with status ${response.status}`),
-                { response: { statusCode: response.status, body } },
-            )
-        }
         const jsonResponse = await response.json()
         logger.debug(`response ${JSON.stringify(jsonResponse)}`)
         return jsonResponse

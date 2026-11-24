@@ -2,6 +2,6 @@
 "@wdio/browserstack-service": patch
 ---
 
-fix(cli): fall back to `BROWSERSTACK_BINARY_URL` when `update_cli` fails (SDK-6948)
+fix(cli): send `update_cli` to the staging env's REST API host when `BROWSERSTACK_STAGING_ENV` is set (SDK-6948)
 
-`update_cli` runs during bootstrap against production `api.browserstack.com`, so on an internal staging run (`BROWSERSTACK_STAGING_ENV`) it answers `401`. The SDK then found no CLI binary and fell back to the non-CLI flow, or silently reused a stale cached binary. When `BROWSERSTACK_BINARY_URL` is set and `update_cli` fails (non-2xx or network error), the binary is now downloaded from that URL. If that download fails, a cached binary is used when there is one. A 2xx reply with neither `url` nor `updated_cli_version` keeps the cached binary, and only downloads from the URL when none is cached. `CLIUtils.requestToUpdateCLI` now rejects on a non-2xx reply (with `response.statusCode`) instead of resolving the error body. With `BROWSERSTACK_BINARY_URL` unset, behaviour is unchanged: a non-2xx reply keeps the existing binary, and network errors propagate.
+`update_cli` runs during bootstrap, before GRR localizes the API hosts, so on an internal staging run it went to production `api.browserstack.com` and was rejected (401) with staging creds. When `BROWSERSTACK_STAGING_ENV` holds a valid env name (one DNS label, trimmed and lowercased), the request now goes to that env's API host: `https://api-preprod.bsstag.com` for `preprod`, otherwise `https://api<env>.bsstag.com`. An unset or invalid value leaves the request unchanged. Nothing else changes: there is no client-side fallback, and `BROWSERSTACK_BINARY_URL` is still applied only after a successful `update_cli` reply.
