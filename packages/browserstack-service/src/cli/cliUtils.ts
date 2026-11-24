@@ -445,7 +445,7 @@ export class CLIUtils {
         if (!env) {
             return undefined
         }
-        return env === 'preprod' ? 'https://api-preprod.bsstag.com' : `https://api${env}.bsstag.com`
+        return env === 'preprod' ? `https://api-${env}.bsstag.com` : `https://api${env}.bsstag.com`
     }
 
     static requestToUpdateCLI = async (
