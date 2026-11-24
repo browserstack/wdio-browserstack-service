@@ -236,6 +236,7 @@ describe('WdioCucumberTestFramework', () => {
             expect(first[TestFrameworkConstants.KEY_TEST_SCOPE]).toBe('Plain one')
             expect(first[TestFrameworkConstants.KEY_TEST_RESULT]).toBe('skipped')
             expect(first.test_skipped_cascade).toBe(true)
+            expect(first[TestFrameworkConstants.KEY_TEST_ACCESSIBILITY]).toBe(false)
             expect(first[TestFrameworkConstants.KEY_TEST_TAGS]).toBeUndefined()
             expect(first.bdd_meta_info.steps).toEqual([{ id: 's1', text: 'I do a thing', keyword: 'Given ', result: 'skipped' }])
             // the cascade builds its own meta blob, so it needs the same relative/absolute split
