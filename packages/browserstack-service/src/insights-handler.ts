@@ -341,7 +341,7 @@ class _InsightsHandler {
         this.listener.hookStarted(this.getRunData(test, 'HookRunStarted'))
     }
 
-    async afterHook (test: Frameworks.Test|CucumberHook|undefined, result: Frameworks.TestResult) {
+    async afterHook (test: Frameworks.Test|CucumberHook|undefined, result: Frameworks.TestResult, hookFailure?: Frameworks.TestResult) {
         if (!frameworkSupportsHook('after', this._framework)) {
             return
         }
@@ -376,7 +376,8 @@ class _InsightsHandler {
         const hookType = getHookType(test.title)
         /*
             If any of the `beforeAll`, `beforeEach`, `afterEach` then the tests after the hook won't run in mocha (https://github.com/mochajs/mocha/issues/4392)
-            So if any of this hook fails, then we are sending the next tests in the suite as skipped.
+            So if any of this hook fails, then we are sending the next tests in the suite as skipped,
+            or as failed with `hookFailure` when mocha's `failHookAffectedTests` fails them instead.
             This won't be needed for `afterAll`, as even if `afterAll` fails all the tests that we need are already run by then, so we don't need to send the stats for them separately
          */
         if (!result.passed && (hookType === 'BEFORE_EACH' || hookType === 'BEFORE_ALL' || hookType === 'AFTER_EACH')) {
@@ -391,7 +392,9 @@ class _InsightsHandler {
                         startedAt: (new Date()).toISOString(),
                         finishedAt: (new Date()).toISOString()
                     }
-                    this.listener.testFinished(this.getRunData(skippedTest, 'TestRunSkipped'))
+                    this.listener.testFinished(hookFailure
+                        ? this.getRunData(skippedTest, 'TestRunFinished', hookFailure)
+                        : this.getRunData(skippedTest, 'TestRunSkipped'))
                 }
             }
 

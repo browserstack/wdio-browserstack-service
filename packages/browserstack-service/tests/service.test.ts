@@ -3276,3 +3276,79 @@ describe('service.after() — skip drain must precede the deferred-finish flush 
         expect(flushPendingTestFinishEvent).toHaveBeenCalledTimes(1)
     })
 })
+
+describe('mocha failHookAffectedTests: tests behind a failed hook', () => {
+    let getInstanceSpy: ReturnType<typeof vi.spyOn> | undefined
+
+    afterEach(() => {
+        getInstanceSpy?.mockRestore()
+    })
+
+    const runFailedHook = async (hookTitle: string, testTitle: string, mochaOpts?: Record<string, unknown>) => {
+        const trackEvent = vi.fn().mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => ({ trackEvent })
+        } as any)
+        const svc = new BrowserstackService({} as any, [] as any, { user: 'foo', key: 'bar', framework: 'mocha', mochaOpts } as any)
+        const suite = { title: 'suite', tests: [] as unknown[], suites: [] }
+        suite.tests.push({ title: testTitle, parent: suite, file: '/spec/a.spec.js' })
+        const error = new Error('hook boom')
+        await svc.afterHook({ title: hookTitle, parent: 'suite', ctx: { test: { parent: suite } } } as any,
+            undefined as never, { passed: false, error, duration: 5, retries: { attempts: 0, limit: 0 } } as any)
+        const report = trackEvent.mock.calls.find(([state, hook, args]) =>
+            state === TestFrameworkState.LOG_REPORT && hook === HookState.POST && args.test.title === testTitle)
+        return { result: report?.[2].result as Frameworks.TestResult | undefined, error }
+    }
+
+    it('reports the tests behind a failed beforeEach as failed with the hook error by default', async () => {
+        const { result, error } = await runFailedHook('"before each" hook for "first"', 'fhat before each default')
+        expect(result).toMatchObject({ passed: false, skipped: false, error })
+    })
+
+    it('reports the tests behind a failed before as failed by default', async () => {
+        const { result, error } = await runFailedHook('"before all" hook for "first"', 'fhat before all default', {})
+        expect(result).toMatchObject({ passed: false, skipped: false, error })
+    })
+
+    it('keeps reporting them skipped when failHookAffectedTests is false', async () => {
+        const { result } = await runFailedHook('"before each" hook for "first"', 'fhat before each off', { failHookAffectedTests: false })
+        expect(result).toEqual({ passed: false, skipped: true })
+    })
+
+    it('keeps reporting tests behind a failed afterEach skipped', async () => {
+        const { result } = await runFailedHook('"after each" hook for "first"', 'fhat after each')
+        expect(result).toEqual({ passed: false, skipped: true })
+    })
+
+    it('keeps reporting tests behind a this.skip() before hook skipped', async () => {
+        const trackEvent = vi.fn().mockResolvedValue(undefined)
+        getInstanceSpy = vi.spyOn(BrowserstackCLI, 'getInstance').mockReturnValue({
+            isRunning: () => true,
+            getTestFramework: () => ({ trackEvent })
+        } as any)
+        const svc = new BrowserstackService({} as any, [] as any, { user: 'foo', key: 'bar', framework: 'mocha' } as any)
+        const suite = { title: 'suite', tests: [] as unknown[], suites: [] }
+        suite.tests.push({ title: 'fhat hook skip', parent: suite, file: '/spec/a.spec.js' })
+        await svc.afterHook({ title: '"before each" hook for "first"', parent: 'suite', ctx: { test: { parent: suite } } } as any,
+            undefined as never, { passed: false, skipped: true, error: new Error('sync skip; aborting execution') } as any)
+        const report = trackEvent.mock.calls.find(([state, hook]) => state === TestFrameworkState.LOG_REPORT && hook === HookState.POST)
+        expect(report?.[2].result).toEqual({ passed: false, skipped: true })
+    })
+
+    it('passes the failure to the insights cascade off the CLI flow', async () => {
+        const svc = new BrowserstackService({} as any, [] as any, { user: 'foo', key: 'bar', framework: 'mocha' } as any)
+        const afterHook = vi.fn().mockResolvedValue(undefined)
+        svc['_insightsHandler'] = { afterHook } as any
+        const error = new Error('hook boom')
+        await svc.afterHook({ title: '"before each" hook for "first"', parent: 'suite' } as any,
+            undefined as never, { passed: false, error } as any)
+        expect(afterHook.mock.calls[0][2]).toMatchObject({ passed: false, skipped: false, error })
+
+        const off = new BrowserstackService({} as any, [] as any, { user: 'foo', key: 'bar', framework: 'mocha', mochaOpts: { failHookAffectedTests: false } } as any)
+        off['_insightsHandler'] = { afterHook } as any
+        await off.afterHook({ title: '"before each" hook for "first"', parent: 'suite' } as any,
+            undefined as never, { passed: false, error } as any)
+        expect(afterHook.mock.calls[1][2]).toBeUndefined()
+    })
+})

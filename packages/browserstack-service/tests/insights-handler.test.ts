@@ -614,6 +614,28 @@ describe('afterHook', () => {
             expect(insightsHandler['_tests']).toEqual({ 'test title': { finishedAt: '2020-01-01T00:00:00.000Z', } })
             expect(insightsHandler['getRunData']).toBeCalledTimes(1)
         })
+
+        describe('tests behind a failed hook', () => {
+            const suite = { tests: [{ title: 'affected', parent: { title: 'suite' } }], suites: [] }
+            const hook = { parent: 'suite', title: '"before each" hook for "first"', ctx: { test: { parent: suite } } }
+
+            beforeEach(() => {
+                insightsHandler['_tests'] = {}
+                insightsHandler['listener'].hookFinished = vi.fn()
+                insightsHandler['listener'].testFinished = vi.fn()
+            })
+
+            it('are reported skipped without a hook failure', async () => {
+                await insightsHandler.afterHook(hook as any, { passed: false } as any)
+                expect(insightsHandler['getRunData']).toHaveBeenLastCalledWith(suite.tests[0], 'TestRunSkipped')
+            })
+
+            it('are reported failed with the hook failure when given one', async () => {
+                const hookFailure = { passed: false, skipped: false, error: new Error('hook boom') }
+                await insightsHandler.afterHook(hook as any, { passed: false } as any, hookFailure as any)
+                expect(insightsHandler['getRunData']).toHaveBeenLastCalledWith(suite.tests[0], 'TestRunFinished', hookFailure)
+            })
+        })
     })
 
     describe('cucumber', () => {
