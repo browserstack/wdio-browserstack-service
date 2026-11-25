@@ -246,6 +246,8 @@ export const PERF_METRICS_WAIT_TIME = 2000
 // rather than by attempt count alone.
 export const STOP_BUILD_MAX_ATTEMPTS = 4
 export const STOP_BUILD_ATTEMPT_TIMEOUT_MS = 10000
+// The scenario's after-hook waits at most this long for its held finish; the send itself carries on.
+export const HELD_TEST_FINISH_RELEASE_TIMEOUT_MS = 5000
 export const STOP_BUILD_TOTAL_BUDGET_MS = 30000
 export const STOP_BUILD_BACKOFF_BASE_MS = 1000
 

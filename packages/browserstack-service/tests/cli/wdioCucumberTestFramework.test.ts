@@ -107,6 +107,22 @@ describe('scenario end — stamped after the TEST/POST observers', () => {
         expect(order).toEqual(['ended_at', 'ended_at', 'release'])
     })
 
+    it('stops waiting for a held finish that does not settle', async () => {
+        vi.useFakeTimers()
+        try {
+            framework.runHooks = vi.fn(async (_i: unknown, _s: unknown, _h: unknown, args: Record<string, unknown>) => {
+                args.releaseHeldFinish = () => new Promise<void>(() => {})
+            }) as never
+
+            const done = framework.trackEvent(TestFrameworkState.TEST, HookState.POST, {})
+            await vi.advanceTimersByTimeAsync(5000)
+
+            await expect(done).resolves.toBeUndefined()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
     it('does not hold or restamp for other states', async () => {
         const runHooks = vi.fn(async () => {})
         framework.runHooks = runHooks as never

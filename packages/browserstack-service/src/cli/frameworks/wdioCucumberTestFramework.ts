@@ -9,6 +9,7 @@ import TrackedInstance from '../instances/trackedInstance.js'
 import { CLIUtils } from '../cliUtils.js'
 import { TestFrameworkConstants } from './constants/testFrameworkConstants.js'
 import { BStackLogger as logger } from '../cliLogger.js'
+import { HELD_TEST_FINISH_RELEASE_TIMEOUT_MS } from '../../constants.js'
 import { TEST_ANALYTICS_ID } from '../../constants.js'
 import { getScenarioExamples, removeAnsiColors } from '../../util.js'
 
@@ -286,10 +287,18 @@ export default class WdioCucumberTestFramework extends TestFramework {
             })
             const release = args.releaseHeldFinish as (() => Promise<void>) | undefined
             if (release) {
+                let timer: ReturnType<typeof setTimeout> | undefined
                 try {
-                    await release()
+                    await Promise.race([
+                        release(),
+                        new Promise<void>((resolve) => {
+                            timer = setTimeout(resolve, HELD_TEST_FINISH_RELEASE_TIMEOUT_MS)
+                        })
+                    ])
                 } catch (error) {
                     logger.debug(`trackEvent: releasing the held test finish failed: ${error}`)
+                } finally {
+                    clearTimeout(timer)
                 }
             }
         }

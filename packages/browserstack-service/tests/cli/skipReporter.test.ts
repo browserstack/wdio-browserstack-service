@@ -32,6 +32,7 @@ describe('skipReporter', () => {
             [TestFrameworkState.LOG_REPORT, HookState.POST],
             [TestFrameworkState.TEST, HookState.POST],
         ])
+        expect(calls[1][2]).toMatchObject({ suiteTitle: 'suite', neverRan: true })
         expect(calls[2][2]).toMatchObject({ result: { passed: false, skipped: true } })
     })
 

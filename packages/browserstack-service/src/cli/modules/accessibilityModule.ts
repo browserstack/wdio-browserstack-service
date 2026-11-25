@@ -360,7 +360,9 @@ export default class AccessibilityModule extends BaseModule {
             if (!testInstance) {
                 return
             }
-            TestFramework.setState(testInstance, TestFrameworkConstants.KEY_TEST_ACCESSIBILITY, this.isTestInScope(args))
+            // Never ran, so never scanned: not an accessibility test whatever its tags (as the cucumber cascade).
+            const inScope = args.neverRan === true ? false : this.isTestInScope(args)
+            TestFramework.setState(testInstance, TestFrameworkConstants.KEY_TEST_ACCESSIBILITY, inScope)
         } catch (error) {
             this.logger.error(`setTestAccessibility: ${error}`)
         }

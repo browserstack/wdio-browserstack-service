@@ -530,6 +530,13 @@ describe('AccessibilityModule', () => {
             expect(TestFramework.setState).toHaveBeenCalledWith(mockTestInstance, 'test_accessibility', true)
         })
 
+        it('should mark a test that never ran as not an accessibility test, even in scope', () => {
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+            accessibilityModule.setTestAccessibility({ instance: mockTestInstance, test: { title: 'logs in' }, suiteTitle: 'Login', neverRan: true })
+
+            expect(TestFramework.setState).toHaveBeenCalledWith(mockTestInstance, 'test_accessibility', false)
+        })
+
         it('should mark an out-of-scope test as not an accessibility test', () => {
             vi.mocked(shouldScanTestForAccessibility).mockReturnValue(false)
             accessibilityModule.setTestAccessibility({ instance: mockTestInstance, test: { title: 'Basket' }, suiteTitle: 'Feature', world })
