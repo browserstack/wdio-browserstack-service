@@ -91,6 +91,22 @@ describe('skipReporter', () => {
         expect(reported).toEqual(['undetermined', 'nested undetermined'])
     })
 
+    it('reports the suite\'s undetermined tests failed when given a failure', async () => {
+        const framework = makeFramework()
+        const failure = { passed: false, skipped: false, error: new Error('hook boom'), duration: 0 } as unknown as Frameworks.TestResult
+        const parent = { title: 'outer' }
+        const suite = {
+            tests: [{ title: 'failed by hook', parent }],
+            suites: [{ tests: [{ title: 'nested failed by hook', parent: { title: 'inner' } }], suites: [] }],
+        }
+        await reportSuiteSkipped(framework, suite, failure)
+        const results = vi.mocked(framework.trackEvent).mock.calls
+            .filter(([state]) => state === TestFrameworkState.LOG_REPORT || state === TestFrameworkState.TEST)
+            .filter(([, hook]) => hook === HookState.POST)
+            .map(([, , args]) => (args as { result: unknown }).result)
+        expect(results).toEqual([failure, failure, failure, failure])
+    })
+
     it('resolves spec file from the runner spec when the test has none', () => {
         expect(resolveSpecFile('/abs/spec.js', 'file:///runner/spec.js')).toBe('/abs/spec.js')
         expect(resolveSpecFile(undefined, 'file:///runner/spec.js')).toBe('/runner/spec.js')
