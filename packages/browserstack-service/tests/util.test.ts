@@ -153,7 +153,7 @@ describe('getBrowserCapabilities', () => {
 
     it('should get multiremote browser capabilities', () => {
         const browser = {
-            isMultiremote: true,
+            isMultiRemote: true,
             getInstance: vi.fn().mockImplementation((browserName: string) => browser[browserName]),
             browserA: {
                 capabilities: {
@@ -167,7 +167,7 @@ describe('getBrowserCapabilities', () => {
 
     it('should handle null multiremote browser capabilities', () => {
         const browser = {
-            isMultiremote: true,
+            isMultiRemote: true,
             getInstance: vi.fn().mockImplementation((browserName: string) => browser[browserName]),
             browserA: {}
         } as unknown as WebdriverIO.MultiRemoteBrowser
@@ -187,7 +187,7 @@ describe('getBrowserCapabilities', () => {
 
     it('should merge multiremote service capabilities and browser capabilities', () => {
         const browser = {
-            isMultiremote: true,
+            isMultiRemote: true,
             getInstance: vi.fn().mockImplementation((browserName: string) => browser[browserName]),
             browserA: {
                 capabilities: {
@@ -203,7 +203,7 @@ describe('getBrowserCapabilities', () => {
 
     it('should handle null multiremote browser capabilities', () => {
         const browser = {
-            isMultiremote: true,
+            isMultiRemote: true,
             getInstance: vi.fn().mockImplementation((browserName: string) => browser[browserName]),
             browserA: {}
         } as unknown as WebdriverIO.MultiRemoteBrowser
@@ -213,7 +213,7 @@ describe('getBrowserCapabilities', () => {
 
     it('should handle null multiremote browser capabilities', () => {
         const browser = {
-            isMultiremote: true,
+            isMultiRemote: true,
             getInstance: vi.fn().mockImplementation((browserName: string) => browser[browserName]),
             browserA: {}
         } as unknown as WebdriverIO.MultiRemoteBrowser
@@ -556,11 +556,9 @@ describe('getCloudProvider', () => {
     })
     it('return Browserstack if test being run on browserstack with multiremote', () => {
         const browser = {
-            isMultiremote: true,
+            isMultiRemote: true,
             instances: ['browserA'],
-            browserA: {
-                options: { hostname: 'hub.browserstack.com' }
-            }
+            getInstance: (name: string) => ({ browserA: { options: { hostname: 'hub.browserstack.com' } } } as any)[name]
         } as unknown as WebdriverIO.MultiRemoteBrowser
         expect(getCloudProvider(browser)).toEqual('browserstack')
     })
@@ -1504,6 +1502,27 @@ describe('validateCapsWithA11y', () => {
             expect(validateCapsWithA11y('Google Pixel 7', { browser_name: 'chrome', platform_name: 'android', platform_version: '13.0' })).toEqual(true)
         })
 
+        it('adds no-op accessibility commands without replacing existing ones', async () => {
+            const summary = vi.fn()
+            const browser: any = { getAccessibilityResultsSummary: summary }
+            utils.addNoopAccessibilityCommands(browser)
+            expect(browser.getAccessibilityResultsSummary).toBe(summary)
+            expect(await browser.getAccessibilityResults()).toEqual([])
+            expect(await browser.performScan()).toBeUndefined()
+            await browser.startA11yScanning()
+            await browser.stopA11yScanning()
+        })
+
+        it('reads the requested mobile platform from a capability', async () => {
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'chrome', 'bstack:options': { os: 'Windows' } })).toBeUndefined()
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'safari', 'bstack:options': { deviceName: 'iPhone 15', osVersion: '17' } })?.supported).toEqual(false)
+            expect(utils.getRequestedMobileA11yPlatform({ 'bstack:options': { deviceName: 'iPhone 17', osVersion: '26' } })?.supported).toEqual(true)
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'safari', 'bstack:options': { deviceName: 'iPad Pro 13 2024' } })?.supported).toEqual(false)
+            expect(utils.getRequestedMobileA11yPlatform({ platformName: 'android', 'appium:deviceName': 'Google Pixel 8', 'appium:platformVersion': '14.0' })?.supported).toEqual(true)
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'samsung', 'bstack:options': { deviceName: 'Samsung Galaxy S23' } })?.supported).toEqual(false)
+            expect(utils.getRequestedMobileA11yPlatform({ browserName: 'safari', 'bstack:options': { device: 'iPhone 15', osVersion: '17' } })?.supported).toEqual(false)
+        })
+
         it('reads the iOS major from any version string and allows 18 and later', async () => {
             expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 15', 'iOS 17')).toEqual(false)
             expect(utils.isMobileA11yPlatformPair('ios', 'safari', 'iPhone 15', 17)).toEqual(false)
@@ -1541,18 +1560,18 @@ describe('validateCapsWithA11y', () => {
                 vi.spyOn(AccessibilityScripts, 'getResultsSummary', 'get').mockReturnValue('summaryScript')
             ]
             try {
-                const browser = { execute: vi.fn().mockResolvedValue({}), executeAsync: vi.fn().mockResolvedValue({}) } as unknown as WebdriverIO.Browser
-                const mobileArgs = JSON.stringify({ is_mobile_session: true, thTestRunUuid: 'test-run-uuid' })
+                const browser = { isIOS: true, execute: vi.fn().mockResolvedValue({}), executeAsyncScript: vi.fn().mockResolvedValue({}) } as unknown as WebdriverIO.Browser
+                const mobileArgs = { is_mobile_session: true, thTestRunUuid: 'test-run-uuid' }
                 validateCapsWithA11y('iPhone 17', { browser_name: 'safari', platform_name: 'ios' })
 
                 await utils.performA11yScan(false, browser, true, true, 'click')
                 await utils.getA11yResults(false, browser, true, true)
                 await utils.getA11yResultsSummary(false, browser, true, true)
 
-                const scripts = vi.mocked(browser.execute).mock.calls.map((call) => String(call[0]))
-                expect(scripts.find((s) => s.includes('scanScript'))).toContain(JSON.stringify({ method: 'click', is_mobile_session: true, thTestRunUuid: 'test-run-uuid' }))
-                expect(scripts.find((s) => s.includes('resultsScript'))).toContain(mobileArgs)
-                expect(scripts.find((s) => s.includes('summaryScript'))).toContain(mobileArgs)
+                expect(browser.execute).not.toHaveBeenCalled()
+                expect(browser.executeAsyncScript).toHaveBeenCalledWith('scanScript', [{ method: 'click', ...mobileArgs }])
+                expect(browser.executeAsyncScript).toHaveBeenCalledWith('resultsScript', [mobileArgs])
+                expect(browser.executeAsyncScript).toHaveBeenCalledWith('summaryScript', [mobileArgs])
             } finally {
                 spies.forEach((spy) => spy.mockRestore())
                 delete process.env.BSTACK_A11Y_JWT
@@ -1768,7 +1787,7 @@ describe('getA11yResults', () => {
             browserName: 'chrome'
         },
         instances: ['browserA', 'browserB'],
-        isMultiremote: false,
+        isMultiRemote: false,
         browserA: {
             sessionId: 'session456',
             capabilities: { 'bstack:options': {
@@ -1816,7 +1835,7 @@ describe('getA11yResultsSummary', () => {
             browserName: 'chrome'
         },
         instances: ['browserA', 'browserB'],
-        isMultiremote: false,
+        isMultiRemote: false,
         browserA: {
             sessionId: 'session456',
             capabilities: { 'bstack:options': {
@@ -2635,7 +2654,7 @@ describe('getAppA11yResultsSummary', () => {
             browserName: 'chrome'
         },
         instances: ['browserA', 'browserB'],
-        isMultiremote: false,
+        isMultiRemote: false,
         browserA: {
             sessionId: 'session456',
             capabilities: { 'bstack:options': {
@@ -2735,5 +2754,87 @@ describe('getTestTags', () => {
     it('derives scopes from the jasmine hierarchy when none are supplied', () => {
         const test = { description: 'logs in @smoke', fullName: 'auth @regression logs in @smoke' }
         expect(utils.getTestTags(test as any)).toEqual(['@regression', '@smoke'])
+    })
+})
+
+describe('overwriteScanCommand', () => {
+    const fn = vi.fn()
+    const elementProbe = { click: vi.fn() }
+
+    it('registers an element override for a command elements have', () => {
+        const browser = { overwriteCommand: vi.fn() } as any
+        utils.overwriteScanCommand(browser, 'click', fn, true, elementProbe)
+        expect(browser.overwriteCommand).toHaveBeenCalledTimes(1)
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('click', fn, { attachToElement: true })
+    })
+
+    it('throws without registering an element override for a command elements lack', () => {
+        const browser = { overwriteCommand: vi.fn() } as any
+        expect(() => utils.overwriteScanCommand(browser, 'touchAction', fn, true, elementProbe)).toThrow('no command to be overwritten: touchAction')
+        expect(browser.overwriteCommand).not.toHaveBeenCalled()
+    })
+
+    it('registers no element override when there is no element to check against', () => {
+        const browser = { overwriteCommand: vi.fn() } as any
+        expect(() => utils.overwriteScanCommand(browser, 'click', fn, true)).toThrow('no command to be overwritten: click')
+        expect(browser.overwriteCommand).not.toHaveBeenCalled()
+    })
+
+    it('passes a non-element override through', () => {
+        const browser = { overwriteCommand: vi.fn() } as any
+        utils.overwriteScanCommand(browser, 'touchAction', fn, false)
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('touchAction', fn, { attachToElement: false })
+    })
+})
+
+describe('getElementCommandProbe', () => {
+    const ref = { 'element-6066-11e4-a52e-4f735466cecf': 'bstack-command-probe' }
+
+    it('builds an element from a local reference', async () => {
+        const probe = { click: vi.fn() }
+        const browser = { isMultiRemote: false, $: vi.fn().mockResolvedValue(probe) } as any
+        expect(await utils.getElementCommandProbe(browser)).toBe(probe)
+        expect(browser.$).toHaveBeenCalledWith(ref)
+    })
+
+    it('uses the first instance of a multiremote browser', async () => {
+        const probe = { click: vi.fn() }
+        const instance = { $: vi.fn().mockResolvedValue(probe) }
+        const browser = { isMultiRemote: true, instances: ['a', 'b'], getInstance: vi.fn().mockReturnValue(instance) } as any
+        expect(await utils.getElementCommandProbe(browser)).toBe(probe)
+        expect(browser.getInstance).toHaveBeenCalledWith('a')
+    })
+
+    it('returns undefined when the element cannot be built', async () => {
+        const browser = { isMultiRemote: false, $: vi.fn().mockRejectedValue(new Error('boom')) } as any
+        expect(await utils.getElementCommandProbe(browser)).toBeUndefined()
+    })
+})
+
+describe('executeAccessibilityScript', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it('sends the script through the async endpoint on iOS', async () => {
+        const browser = { isIOS: true, execute: vi.fn(), executeAsyncScript: vi.fn().mockResolvedValue({ success: true }) }
+        const result = await utils.executeAccessibilityScript(browser, 'arguments[1]({ success: true })', { method: 'click' })
+        expect(result).toEqual({ success: true })
+        expect(browser.executeAsyncScript).toHaveBeenCalledWith('arguments[1]({ success: true })', [{ method: 'click' }])
+        expect(browser.execute).not.toHaveBeenCalled()
+    })
+
+    it('passes no arguments on iOS when none are given', async () => {
+        const browser = { isIOS: true, execute: vi.fn(), executeAsyncScript: vi.fn() }
+        await utils.executeAccessibilityScript(browser, 'arguments[0]()')
+        expect(browser.executeAsyncScript).toHaveBeenCalledWith('arguments[0]()', [])
+    })
+
+    it('wraps the script in a Promise for execute elsewhere', async () => {
+        const browser = { isIOS: false, execute: vi.fn().mockResolvedValue({ success: true }), executeAsyncScript: vi.fn() }
+        await utils.executeAccessibilityScript(browser, 'arguments[1]({})', { method: 'click' })
+        expect(browser.executeAsyncScript).not.toHaveBeenCalled()
+        expect(browser.execute.mock.calls[0][0]).toContain('bstackSdkArgs[1]({})')
+        expect(browser.execute.mock.calls[0][0]).toContain('{"method":"click"}')
     })
 })
