@@ -136,7 +136,7 @@ beforeEach(() => {
             browserName: 'chrome'
         },
         instances: ['browserA', 'browserB'],
-        isMultiremote: false,
+        isMultiRemote: false,
         getInstance: vi.fn().mockImplementation((browserName: string) => browser[browserName]),
         browserA: {
             sessionId: sessionIdA,
@@ -180,7 +180,7 @@ describe('onReload()', () => {
 
     it('should update and get multiremote session', async () => {
         const isBrowserstackSessionSpy = vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
-        browser.isMultiremote = true as any
+        browser.isMultiRemote = true as any
         service['_browser'] = browser
         const updateSpy = vi.spyOn(service, '_update')
         await service.onReload('1', '2')
@@ -443,7 +443,7 @@ describe('_update', () => {
 
 describe('_printSessionURL', () => {
     it('should get and log session details', async () => {
-        browser.isMultiremote = false
+        browser.isMultiRemote = false
         service['_browser'] = browser
         const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
         const isBrowserstackSessionSpy = vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
@@ -459,7 +459,7 @@ describe('_printSessionURL', () => {
     })
 
     it('should get and log multi remote session details', async () => {
-        browser.isMultiremote = true as any
+        browser.isMultiRemote = true as any
         service['_browser'] = browser
         const logInfoSpy = vi.spyOn(log, 'info').mockImplementation((string) => string)
         const isBrowserstackSessionSpy = vi.spyOn(utils, 'isBrowserstackSession').mockReturnValue(true)
@@ -785,24 +785,13 @@ describe('before', () => {
         expect(browser.overwriteCommand).not.toHaveBeenCalled()
     })
 
-    it('should overwrite executeAsync command to route browserstack_executor via executeAsyncScript', async () => {
+    it('should only overwrite execute for BiDi executor routing', async () => {
         (browser as any).isBidi = true
         const service = new BrowserstackService({} as any, [{}] as any, { user: 'foo', key: 'bar', capabilities: {} })
         service['_routeBidiExecutorToHttp'](browser)
 
-        expect(browser.overwriteCommand).toHaveBeenCalledWith('executeAsync', expect.any(Function))
-
-        const overwrite = vi.mocked(browser.overwriteCommand).mock.calls
-            .find(([command]) => command === 'executeAsync')?.[1] as Function
-        const originalExecuteAsync = vi.fn()
-
-        await overwrite(originalExecuteAsync, 'browserstack_executor: {"action":"annotate"}')
-        expect(browser.executeAsyncScript).toHaveBeenCalledWith('browserstack_executor: {"action":"annotate"}', [])
-        expect(originalExecuteAsync).not.toHaveBeenCalled()
-
-        const extraArg = { key: 'value' }
-        await overwrite(originalExecuteAsync, 'arguments[0](1)', extraArg)
-        expect(originalExecuteAsync).toHaveBeenCalledWith('arguments[0](1)', extraArg)
+        expect(browser.overwriteCommand).toHaveBeenCalledTimes(1)
+        expect(browser.overwriteCommand).toHaveBeenCalledWith('execute', expect.any(Function))
     })
 
     it('should not overwrite execute command for non-BrowserStack BiDi sessions', async () => {
@@ -821,7 +810,7 @@ describe('before', () => {
         const browserB = { executeScript: vi.fn(), executeAsyncScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
         const multiRemoteBrowser = {
             ...browser,
-            isMultiremote: true,
+            isMultiRemote: true,
             getInstance: vi.fn().mockImplementation((name: string) => name === 'browserA' ? browserA : browserB)
         } as unknown as WebdriverIO.MultiRemoteBrowser
 
@@ -849,7 +838,7 @@ describe('before', () => {
         const browserB = { executeScript: vi.fn(), executeAsyncScript: vi.fn(), overwriteCommand: vi.fn(), sessionId: 'sessionB', isBidi: true }
         const multiRemoteBrowser = {
             ...browser,
-            isMultiremote: true,
+            isMultiRemote: true,
             getInstance: vi.fn()
                 .mockImplementationOnce(() => {
                     throw new Error('no such instance')
@@ -1205,6 +1194,48 @@ describe('beforeTest', () => {
                 }
             )
         })
+
+        it('should set suite name of first test as title when the suite has no title', async () => {
+            const browserWithExecuteScript = {
+                ...browser,
+                executeScript: browser.execute
+            } as WebdriverIO.Browser
+            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.beforeSuite({ file: '/specs/test.js' } as any)
+            await service.beforeTest({ fullName: 'foo bar baz', description: 'baz' } as any)
+            service.afterTest({ fullName: 'foo bar baz', description: 'baz' } as any, undefined as never, {} as any)
+            expect(service['_fullTitle']).toBe('foo bar')
+            expect(fetch).toBeCalledWith(
+                `${sessionBaseUrl}/${sessionId}.json`,
+                {
+                    method: 'PUT',
+                    body: JSON.stringify({ name: 'foo bar' }),
+                    headers
+                }
+            )
+        })
+
+        it('should set parent suite name as title when the suite has no title', async () => {
+            const browserWithExecuteScript = {
+                ...browser,
+                executeScript: browser.execute
+            } as WebdriverIO.Browser
+            await service.before(service['_config'] as any, [], browserWithExecuteScript)
+            await service.beforeSuite({ file: '/specs/test.js' } as any)
+            await service.beforeTest({ fullName: 'foo bar baz', description: 'baz' } as any)
+            await service.beforeTest({ fullName: 'foo xyz', description: 'xyz' } as any)
+            service.afterTest({ fullName: 'foo bar baz', description: 'baz' } as any, undefined as never, {} as any)
+            service.afterTest({ fullName: 'foo xyz', description: 'xyz' } as any, undefined as never, {} as any)
+            expect(service['_fullTitle']).toBe('foo')
+            expect(fetch).toBeCalledWith(
+                `${sessionBaseUrl}/${sessionId}.json`,
+                {
+                    method: 'PUT',
+                    body: JSON.stringify({ name: 'foo' }),
+                    headers
+                }
+            )
+        })
     })
 })
 
@@ -1312,6 +1343,14 @@ describe('afterScenario', () => {
             'I too am Error',
             'Step XYZ is undefined',
             'Step XYZ2 is ambiguous'])
+    })
+
+    it('treats an unset cucumberOpts.strict as strict, the cucumber-js 13 default', () => {
+        service = new BrowserstackService({ testObservability: false } as any, [] as any,
+            { user: 'foo', key: 'bar', cucumberOpts: {}, capabilities: {} } as any)
+
+        service.afterScenario({ pickle: { name: 'Can do something' }, result: { duration: { seconds: 0, nanos: 1000000 }, willBeRetried: false, status: 'PENDING' } })
+        expect(service['_failReasons']).toEqual(['Some steps/hooks are pending for scenario "Can do something"'])
     })
 
     it('should increment failure reasons on non-passing statuses (strict mode on)', () => {
@@ -1678,6 +1717,8 @@ describe('after', () => {
         })
 
         it('should call _update with status "failed" when strict mode is "off" and only failed and pending tests ran', async () => {
+            service = new BrowserstackService({ testObservability: false } as any, [] as any,
+                { user: 'foo', key: 'bar', cucumberOpts: { strict: false } } as any)
             const updateSpy = vi.spyOn(service, '_update')
             const browserWithExecuteScript = {
                 ...browser,

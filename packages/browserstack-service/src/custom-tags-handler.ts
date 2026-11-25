@@ -61,7 +61,7 @@ class _CustomTagsHandler {
         // Fan out to every MultiRemote instance (mirror service._executeCommand),
         // plus the top-level browser object the user calls directly.
         register(this._browser)
-        if ((this._browser as WebdriverIO.Browser).isMultiremote) {
+        if ((this._browser as WebdriverIO.Browser).isMultiRemote) {
             const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
             Object.keys(this._caps).forEach((browserName) => {
                 try {

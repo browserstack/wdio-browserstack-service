@@ -39,7 +39,7 @@ beforeEach(() => {
             browserName: 'chrome'
         },
         instances: ['browserA', 'browserB'],
-        isMultiremote: false,
+        isMultiRemote: false,
         browserA: {
             sessionId: 'session456',
             capabilities: { 'bstack:options': {

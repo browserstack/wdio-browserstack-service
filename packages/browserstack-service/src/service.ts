@@ -8,6 +8,7 @@ import {
     isBrowserstackSession,
     patchConsoleLogs,
     isTrue,
+    addNoopAccessibilityCommands,
     isFalse,
     getUniqueIdentifier,
     getHookType,
@@ -120,7 +121,8 @@ export default class BrowserstackService implements Services.ServiceInstance {
         process.env.BROWSERSTACK_TURBOSCALE_INTERNAL = String(this._turboScale)
 
         // Cucumber specific
-        const strict = Boolean(this._config.cucumberOpts && this._config.cucumberOpts.strict)
+        // cucumber-js 13 (WDIO 10) defaults strict to true, and the framework never writes the resolved value back.
+        const strict = this._config.cucumberOpts?.strict ?? true
         // See https://github.com/cucumber/cucumber-js/blob/master/src/runtime/index.ts#L136
         if (strict) {
             this._failureStatuses.push('pending')
@@ -132,7 +134,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
     }
 
     _updateCaps (fn: (caps: WebdriverIO.Capabilities) => void) {
-        const multiRemoteCap = this._caps as Capabilities.RequestedMultiremoteCapabilities
+        const multiRemoteCap = this._caps as Capabilities.RequestedMultiRemoteCapabilities
 
         if (multiRemoteCap.capabilities) {
             return Object.entries(multiRemoteCap).forEach(([, caps]) => fn(caps.capabilities as WebdriverIO.Capabilities))
@@ -244,11 +246,11 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 try {
                     this._routeBidiExecutorToHttp(resolveBrowser())
                 } catch (err) {
-                    BStackLogger.warn(`Failed to patch execute/executeAsync for BiDi browserstack_executor routing${label ? ` on ${label}` : ''}; executor commands may not work in BiDi sessions: ${err}`)
+                    BStackLogger.warn(`Failed to patch execute for BiDi browserstack_executor routing${label ? ` on ${label}` : ''}; executor commands may not work in BiDi sessions: ${err}`)
                 }
             }
 
-            if (this._browser.isMultiremote) {
+            if (this._browser.isMultiRemote) {
                 const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
                 Object.keys(this._caps).forEach((browserName) => {
                     patchBidiExecutorRouting(() => multiRemoteBrowser.getInstance(browserName), browserName)
@@ -278,6 +280,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
                         // BrowserstackCLI.getInstance().getTestFramework()!.trackEvent(AutomationFrameworkState.CREATE, HookState.POST, { sessionId })
                     } else {
                         await this._accessibilityHandler.before(sessionId)
+                    }
+                    if (this._isCliAccessibilityFlow()) {
+                        addNoopAccessibilityCommands(this._browser as WebdriverIO.Browser)
                     }
 
                     Listener.setAccessibilityOptions(this._options.accessibilityOptions)
@@ -588,10 +593,10 @@ export default class BrowserstackService implements Services.ServiceInstance {
         let suiteTitle = this._suiteTitle
 
         if (test.fullName) {
-            // For Jasmine, `suite.title` is `Jasmine__TopLevel__Suite`.
+            // For Jasmine, `suite.title` is `Jasmine__TopLevel__Suite` (WDIO <= 9) or absent (WDIO 10).
             // This tweak allows us to set the real suite name.
             const testSuiteName = test.fullName.slice(0, test.fullName.indexOf(test.description || '') - 1)
-            if (this._suiteTitle === 'Jasmine__TopLevel__Suite') {
+            if (!this._suiteTitle || this._suiteTitle === 'Jasmine__TopLevel__Suite') {
                 suiteTitle = testSuiteName
             } else if (this._suiteTitle) {
                 suiteTitle = getParentSuiteName(this._suiteTitle, testSuiteName)
@@ -1100,7 +1105,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             failureReason = hasReasons ? this._failReasons.join('\n') : undefined
         }
 
-        if (!this._browser.isMultiremote) {
+        if (!this._browser.isMultiRemote) {
             BStackLogger.info(`Update (reloaded) job with sessionId ${oldSessionId}, ${sessionStatus}`)
         } else {
             const browserName = (this._browser as unknown as WebdriverIO.MultiRemoteBrowser).instances.filter(
@@ -1168,13 +1173,6 @@ export default class BrowserstackService implements Services.ServiceInstance {
             }
             return originalExecute(script, ...args)
         })
-
-        browser.overwriteCommand('executeAsync', async (originalExecuteAsync, script, ...args) => {
-            if (isBrowserstackExecutorScript(script)) {
-                return browser.executeAsyncScript(script, args)
-            }
-            return originalExecuteAsync(script, ...args)
-        })
     }
 
     _multiRemoteAction (action: MultiRemoteAction) {
@@ -1182,7 +1180,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
             return Promise.resolve()
         }
 
-        if (!this._browser.isMultiremote) {
+        if (!this._browser.isMultiRemote) {
             return action(this._browser.sessionId)
         }
 
@@ -1330,7 +1328,7 @@ export default class BrowserstackService implements Services.ServiceInstance {
         const cmd = { action, ...(args ? { arguments: args } : {}) }
         const script = `browserstack_executor: ${JSON.stringify(cmd)}`
 
-        if (this._browser.isMultiremote) {
+        if (this._browser.isMultiRemote) {
             const multiRemoteBrowser = this._browser as unknown as WebdriverIO.MultiRemoteBrowser
             return Promise.all(Object.keys(this._caps).map(async (browserName) => {
                 const browser = multiRemoteBrowser.getInstance(browserName)
