@@ -18,7 +18,9 @@ import {
     removeAnsiColors,
     getHookType,
     getPlatformVersion,
-    getTestTags
+    getTestTags,
+    getSessionBrowserVersion,
+    getSessionPlatformName
 } from './util.js'
 import { BStackLogger } from './bstackLogger.js'
 import type { Capabilities } from '@wdio/types'
@@ -296,8 +298,8 @@ class _TestReporter extends WDIOReporter {
                 capabilities: this._capabilities,
                 session_id: this._sessionId,
                 browser: this._capabilities?.browserName,
-                browser_version: this._capabilities?.browserVersion,
-                platform: this._capabilities?.platformName,
+                browser_version: getSessionBrowserVersion(this._capabilities),
+                platform: getSessionPlatformName(this._capabilities),
                 platform_version: getPlatformVersion(this._capabilities, this._userCaps as WebdriverIO.Capabilities)
             }
         }
