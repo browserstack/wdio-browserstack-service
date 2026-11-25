@@ -1,5 +1,12 @@
 # @wdio/browserstack-service
 
+## 10.0.0
+
+### Major Changes
+
+- 05ce553: - Supports WebdriverIO 10. This release requires WebdriverIO 10 and Node.js 22.23.4+ on 22.x, 24.22.1+ on 24.x, or 26.12.1+ (the same range as WebdriverIO 10). For WebdriverIO 9 projects, use the `v9` release line (`npm i -D @wdio/browserstack-service@v9`); for WebdriverIO 8, use `@wdio/browserstack-service@v8`.
+  - Accessibility Automation, including per-command auto-scans, works on WebdriverIO 10.
+
 ## 9.44.0
 
 ### Minor Changes
