@@ -619,6 +619,30 @@ describe('beforeHook / afterHook (hook scans)', () => {
         expect(accessibilityHandler['_currentHookRunUuid']).toBe('hook-uuid-1')
     })
 
+    // SDK-8295: before/after-all hooks were never tag-checked, so an excluded suite's hook
+    // scans still went out and were attributed to its first/last test.
+    it.each(['"before all" hook', '"after all" hook', '"before each" hook', '"after each" hook'])(
+        'keeps the scan gate closed in a %s wrapping an out-of-scope test',
+        async (title) => {
+            const filter = vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(false)
+            AccessibilityHandler['_a11yScanSessionMap']['session123'] = false
+            await accessibilityHandler.beforeHook(
+                { title, parent: 'hook suite' } as any,
+                { currentTest: { parent: { title: 'Search Tests @search' }, title: 'should search' } },
+                'hook-uuid-x'
+            )
+            expect(filter).toHaveBeenCalledWith('Search Tests @search', 'should search', accessibilityOpts)
+            expect(AccessibilityHandler['_a11yScanSessionMap']['session123']).toBe(false)
+        }
+    )
+
+    it('matches a hook that wraps no test on its suite title alone', async () => {
+        const filter = vi.spyOn(utils, 'shouldScanTestForAccessibility').mockReturnValue(true)
+        await accessibilityHandler.beforeHook({ title: '"before all" hook', parent: 'Outer @a11y' } as any, {}, 'hook-uuid-y')
+        expect(filter).toHaveBeenCalledWith('Outer @a11y', '', accessibilityOpts)
+        expect(AccessibilityHandler['_a11yScanSessionMap']['session123']).toBe(true)
+    })
+
     it('clears the hook run uuid on afterHook so test-body scans are not stamped', async () => {
         await accessibilityHandler.beforeHook(
             { title: '"after each" hook', parent: 'suite' } as any,

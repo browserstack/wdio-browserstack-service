@@ -97,11 +97,27 @@ export default class AccessibilityModule extends BaseModule {
             const frameworkName = String(TestFramework.getState(testInstance, TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) || '')
             const isMocha = frameworkName.toLowerCase().includes('mocha')
             if (this.autoScanning && isMocha && sessionId) {
-                this.accessibilityMap.set(sessionId, true)
+                this.accessibilityMap.set(sessionId, this.shouldScanHook(args.test))
             }
         } catch (error) {
             this.logger.error(`Exception in accessibility onHookStart: ${error}`)
         }
+    }
+
+    /**
+     * A hook's scans are reconciled onto the test it wraps, so the hook takes that test's
+     * include/exclude verdict. Mocha sets ctx.currentTest for every hook type (first test for
+     * `before all`, last for `after all`); without one, only the suite title can be matched.
+     */
+    private shouldScanHook(hook: unknown): boolean {
+        const runnable = (hook && typeof hook === 'object' ? hook : {}) as {
+            parent?: unknown
+            ctx?: { currentTest?: { title?: string, parent?: { title?: string } } }
+        }
+        const wrappedTest = runnable.ctx?.currentTest
+        const suiteTitle = wrappedTest?.parent?.title ?? (typeof runnable.parent === 'string' ? runnable.parent : '')
+        const accessibilityOptions = this.config.accessibilityOptions as Record<string, string> | undefined
+        return Boolean(shouldScanTestForAccessibility(suiteTitle, wrappedTest?.title || '', accessibilityOptions))
     }
 
     async onHookEnd() {

@@ -73,7 +73,6 @@ import {
     isBeforeFirstMobileNavigation,
     isFalse,
     isFirstNavigation,
-    getHookType,
     frameworkSupportsHook,
     overwriteScanCommand,
     getElementCommandProbe
@@ -521,17 +520,20 @@ class _AccessibilityHandler {
             this._currentHookRunUuid = hookRunUuid || null
 
             if (this._framework === 'mocha' && this._sessionId) {
-                let shouldScan = this._autoScanning
-                const hookType = (test && typeof test.title === 'string') ? getHookType(test.title) : 'unknown'
+                // Hook scans are attributed to the test the hook wraps, so every hook type takes
+                // that test's include/exclude verdict (SDK-8295). Mocha sets currentTest for
+                // `before all`/`after all` too; without one, only the suite title can be matched.
                 const wrappedTest = (context as { currentTest?: Frameworks.Test } | undefined)?.currentTest
-                if ((hookType === 'BEFORE_EACH' || hookType === 'AFTER_EACH') && wrappedTest) {
-                    let suiteTitle: unknown = wrappedTest.parent
-                    if (suiteTitle && typeof suiteTitle === 'object') {
-                        suiteTitle = (suiteTitle as { title?: string }).title
-                    }
-                    // @ts-expect-error fix type
-                    shouldScan = this._autoScanning && shouldScanTestForAccessibility(suiteTitle as string | undefined, wrappedTest.title, this._accessibilityOptions)
+                let suiteTitle: unknown = wrappedTest ? wrappedTest.parent : test?.parent
+                if (suiteTitle && typeof suiteTitle === 'object') {
+                    suiteTitle = (suiteTitle as { title?: string }).title
                 }
+                const shouldScan = this._autoScanning && shouldScanTestForAccessibility(
+                    typeof suiteTitle === 'string' ? suiteTitle : '',
+                    wrappedTest?.title || '',
+                    // @ts-expect-error fix type
+                    this._accessibilityOptions
+                )
                 AccessibilityHandler._a11yScanSessionMap[this._sessionId] = shouldScan
             }
         } catch (error) {
