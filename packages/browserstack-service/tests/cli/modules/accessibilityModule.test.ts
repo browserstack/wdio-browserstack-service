@@ -838,6 +838,7 @@ describe('AccessibilityModule', () => {
 
         it('captures the hook run uuid and opens the scan gate at hook start', async () => {
             mockInstanceState('WebdriverIO-mocha')
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
 
             await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
 
@@ -861,10 +862,46 @@ describe('AccessibilityModule', () => {
 
         it('re-opens a closed gate for mocha — the opposite answer on the same input', async () => {
             mockInstanceState('WebdriverIO-mocha')
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
             accessibilityModule.accessibilityMap.set(12345, false)
 
             await accessibilityModule.onHookStart({ instance: mockTestInstance } as any)
 
+            expect(accessibilityModule.accessibilityMap.get(12345)).toBe(true)
+        })
+
+        // SDK-8295: a hook's scans are attributed to the test it wraps, so a hook wrapping an
+        // out-of-scope test must not re-open the gate onBeforeTest closed.
+        it.each([
+            ['before each', 'should search'],
+            ['before all', 'should search'],
+            ['after each', 'should search'],
+            ['after all', 'should search']
+        ])('keeps the gate closed in a "%s" hook wrapping an out-of-scope test', async (kind, testTitle) => {
+            mockInstanceState('WebdriverIO-mocha')
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(false)
+            accessibilityModule.accessibilityMap.set(12345, false)
+            const options = { includeTagsInTestingScope: ['a11y'], excludeTagsInTestingScope: ['search'] }
+            accessibilityModule.config = { accessibilityOptions: options }
+            const hook = {
+                title: `"${kind}" hook: wrappedHook for "${testTitle}"`,
+                parent: 'Hook Suite',
+                ctx: { currentTest: { title: testTitle, parent: { title: 'Wrapping Suite @a11y' } } }
+            }
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance, test: hook } as any)
+
+            expect(shouldScanTestForAccessibility).toHaveBeenCalledWith('Wrapping Suite @a11y', testTitle, options)
+            expect(accessibilityModule.accessibilityMap.get(12345)).toBe(false)
+        })
+
+        it('matches on the suite title alone when the hook wraps no test', async () => {
+            mockInstanceState('WebdriverIO-mocha')
+            vi.mocked(shouldScanTestForAccessibility).mockReturnValue(true)
+
+            await accessibilityModule.onHookStart({ instance: mockTestInstance, test: { title: '"before all" hook', parent: 'Outer @a11y' } } as any)
+
+            expect(shouldScanTestForAccessibility).toHaveBeenCalledWith('Outer @a11y', '', {})
             expect(accessibilityModule.accessibilityMap.get(12345)).toBe(true)
         })
 
