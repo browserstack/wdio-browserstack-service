@@ -1,5 +1,12 @@
 # @wdio/browserstack-service
 
+## 8.56.2
+
+### Patch Changes
+
+- 6e70341: - Fixed the OS name and browser version showing as "Unknown" in Test Reporting & Analytics for sessions on older browsers such as Chrome 87.
+- dced3bf: - Fixed Automate session names staying empty for WebdriverIO v8 Jasmine tests when no `sessionName` capability is set.
+
 ## 8.56.1
 
 ### Patch Changes
