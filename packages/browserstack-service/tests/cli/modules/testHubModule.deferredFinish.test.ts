@@ -330,4 +330,27 @@ describe('TestHubModule — finish held until the TEST/POST observers end (cucum
         expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
         expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledWith(expect.objectContaining({ uuid: 's3' }))
     })
+
+    it('worker-end flush waits for a released finish that is still sending', async () => {
+        let settle!: (value: unknown) => void
+        mockGrpcClient.testFrameworkEvent.mockReturnValueOnce(new Promise((resolve) => { settle = resolve }))
+        const args: Record<string, unknown> = { instance: cucumberInstance('s4'), holdFinishUntilHooksEnd: true }
+        testHubModule.onAllTestEvents(args)
+
+        // The scenario end stopped waiting on this release (its timeout fired); the send is still open.
+        void (args.releaseHeldFinish as () => Promise<void>)()
+
+        let drained = false
+        const drain = testHubModule.flushPendingTestFinishEvent()
+        expect(drain).toBeDefined()
+        drain!.then(() => { drained = true })
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(drained).toBe(false)
+
+        settle({ success: true })
+        await drain
+        expect(drained).toBe(true)
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
+        expect(testHubModule.flushPendingTestFinishEvent()).toBeUndefined()
+    })
 })

@@ -56,6 +56,10 @@ export default class TestHubModule extends BaseModule {
      */
     private pendingTestFinishes: Map<string, { args: Record<string, unknown>, uuid: string }> = new Map()
 
+    // Sends already taken off pendingTestFinishes. A held cucumber finish whose release outlived
+    // its caller's timeout is still in here, so the worker-end flush waits for it.
+    private inFlightTestFinishes: Set<Promise<void>> = new Set()
+
     /**
      * Create a new TestHubModule
      */
@@ -168,7 +172,11 @@ export default class TestHubModule extends BaseModule {
      */
     flushPendingTestFinishEvent(): Promise<void> | undefined {
         if (this.pendingTestFinishes.size === 0) {
-            return undefined
+            if (this.inFlightTestFinishes.size === 0) {
+                return undefined
+            }
+            this.logger.debug(`flushPendingTestFinishEvent: waiting for ${this.inFlightTestFinishes.size} in-flight TEST/POST event(s)`)
+            return Promise.all([...this.inFlightTestFinishes]).then(() => undefined)
         }
         // Drain every pending finish, not just the newest. Take and clear the whole batch up
         // front so a concurrent stash (the detached skip chain) starts a fresh entry rather
@@ -182,7 +190,8 @@ export default class TestHubModule extends BaseModule {
         // Test Hub reaps it at its ~60-min idle timeout → the passing build is stamped `timeout`.
         // Retry with backoff. Each entry is captured locally, so concurrent flushes can't clobber
         // one another.
-        return Promise.all(batch.map((entry) => this.sendDeferredFinish(entry))).then(() => undefined)
+        batch.forEach((entry) => this.trackInFlight(this.sendDeferredFinish(entry)))
+        return Promise.all([...this.inFlightTestFinishes]).then(() => undefined)
     }
 
     /**
@@ -195,7 +204,14 @@ export default class TestHubModule extends BaseModule {
             return Promise.resolve()
         }
         this.pendingTestFinishes.delete(uuid)
-        return this.sendDeferredFinish(entry)
+        return this.trackInFlight(this.sendDeferredFinish(entry))
+    }
+
+    private trackInFlight(send: Promise<void>): Promise<void> {
+        this.inFlightTestFinishes.add(send)
+        const done = () => { this.inFlightTestFinishes.delete(send) }
+        send.then(done, done)
+        return send
     }
 
     private sendDeferredFinish({ args, uuid }: { args: Record<string, unknown>, uuid: string }): Promise<void> {
