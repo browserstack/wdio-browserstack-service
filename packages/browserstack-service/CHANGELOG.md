@@ -1,5 +1,11 @@
 # @wdio/browserstack-service
 
+## 9.44.4
+
+### Patch Changes
+
+- 621b9ea: - Fixed the OS name and browser version showing as "Unknown" in Test Reporting & Analytics for sessions on older browsers such as Chrome 87.
+
 ## 9.44.3
 
 ### Patch Changes
