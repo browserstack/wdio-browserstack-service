@@ -45,6 +45,8 @@ const CLI_LOCK_POLL_MS = 1000
 const CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000
 const CLI_DOWNLOAD_TMP_PREFIX = 'downloaded_file_'
 const CLI_DOWNLOAD_TMP_SUFFIX = '.zip'
+// A staging env name is a single DNS label; anything else (dots, slashes, ...) is ignored.
+const STAGING_ENV_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
 export class CLIUtils {
     static automationFrameworkDetail = {}
@@ -533,6 +535,39 @@ export class CLIUtils {
         }
     }
 
+    /**
+     * Internal staging env name from BROWSERSTACK_STAGING_ENV (trimmed, lowercased), or
+     * undefined when unset or not a single DNS label.
+     */
+    static stagingEnv(): string | undefined {
+        const raw = process.env.BROWSERSTACK_STAGING_ENV
+        if (raw === undefined) {
+            return undefined
+        }
+        const env = raw.trim().toLowerCase()
+        if (!env) {
+            return undefined
+        }
+        if (!STAGING_ENV_PATTERN.test(env)) {
+            logger.debug(`Ignoring invalid BROWSERSTACK_STAGING_ENV: ${JSON.stringify(raw)}`)
+            return undefined
+        }
+        return env
+    }
+
+    /**
+     * REST API host of the staging env that serves update_cli, or undefined when no valid
+     * staging env is set (callers then keep their existing host).
+     * preprod -> https://api-preprod.bsstag.com, <env> -> https://api<env>.bsstag.com
+     */
+    static stagingApiBaseUrl(): string | undefined {
+        const env = this.stagingEnv()
+        if (!env) {
+            return undefined
+        }
+        return env === 'preprod' ? `https://api-${env}.bsstag.com` : `https://api${env}.bsstag.com`
+    }
+
     static requestToUpdateCLI = async (
         queryParams: Record<string, string>,
         config: Options.Testrunner,
@@ -545,7 +580,7 @@ export class CLIUtils {
             },
         }
         const response = await fetch(
-            `${APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/${UPDATED_CLI_ENDPOINT}?${params.toString()}`,
+            `${CLIUtils.stagingApiBaseUrl() ?? APIUtils.BROWSERSTACK_AUTOMATE_API_URL}/${UPDATED_CLI_ENDPOINT}?${params.toString()}`,
             requestInit,
         )
         const jsonResponse = await response.json()

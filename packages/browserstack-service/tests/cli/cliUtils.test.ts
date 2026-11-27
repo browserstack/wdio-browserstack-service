@@ -733,6 +733,48 @@ describe('CLIUtils', () => {
                 .rejects
                 .toThrow('Network error')
         })
+
+        describe('update_cli host with BROWSERSTACK_STAGING_ENV (SDK-6948)', () => {
+            const savedStagingEnv = process.env.BROWSERSTACK_STAGING_ENV
+
+            afterEach(() => {
+                if (savedStagingEnv === undefined) {
+                    delete process.env.BROWSERSTACK_STAGING_ENV
+                } else {
+                    process.env.BROWSERSTACK_STAGING_ENV = savedStagingEnv
+                }
+            })
+
+            const requestedUrl = async () => {
+                await CLIUtils.requestToUpdateCLI({ sdk_language: 'node' }, mockConfig)
+                return (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
+            }
+
+            it.each([
+                ['k8s', 'https://apik8s.bsstag.com'],
+                ['rengg-stag-app-a11y', 'https://apirengg-stag-app-a11y.bsstag.com'],
+                ['preprod', 'https://api-preprod.bsstag.com'],
+                [' K8S ', 'https://apik8s.bsstag.com'],
+            ])('BROWSERSTACK_STAGING_ENV=%j -> %s', async (env, host) => {
+                process.env.BROWSERSTACK_STAGING_ENV = env
+                expect(CLIUtils.stagingApiBaseUrl()).toBe(host)
+                expect(await requestedUrl()).toBe(`${host}/sdk/v1/update_cli?sdk_language=node`)
+            })
+
+            it.each(['evil.com/x', 'a.b', '', '   ', '-k8s', 'k8s-'])(
+                'ignores invalid BROWSERSTACK_STAGING_ENV=%j and keeps the existing host', async (env) => {
+                    process.env.BROWSERSTACK_STAGING_ENV = env
+                    expect(CLIUtils.stagingEnv()).toBeUndefined()
+                    expect(CLIUtils.stagingApiBaseUrl()).toBeUndefined()
+                    expect(await requestedUrl()).toBe('https://api.browserstack.com/sdk/v1/update_cli?sdk_language=node')
+                })
+
+            it('keeps the existing host when BROWSERSTACK_STAGING_ENV is unset', async () => {
+                delete process.env.BROWSERSTACK_STAGING_ENV
+                expect(CLIUtils.stagingApiBaseUrl()).toBeUndefined()
+                expect(await requestedUrl()).toBe('https://api.browserstack.com/sdk/v1/update_cli?sdk_language=node')
+            })
+        })
     })
 
     describe('runShellCommand', () => {
