@@ -1,6 +1,6 @@
 {
   "name": "@wdio/browserstack-service",
-  "version": "10.0.0",
+  "version": "10.0.1",
   "description": "WebdriverIO service for better Browserstack integration",
   "author": "BrowserStack <support@browserstack.com>",
   "homepage": "https://github.com/browserstack/wdio-browserstack-service",
