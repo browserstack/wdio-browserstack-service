@@ -9,6 +9,7 @@ import TrackedInstance from '../instances/trackedInstance.js'
 import { CLIUtils } from '../cliUtils.js'
 import { TestFrameworkConstants } from './constants/testFrameworkConstants.js'
 import { BStackLogger as logger } from '../cliLogger.js'
+import { HELD_TEST_FINISH_RELEASE_TIMEOUT_MS } from '../../constants.js'
 import { TEST_ANALYTICS_ID } from '../../constants.js'
 import { getScenarioExamples, removeAnsiColors } from '../../util.js'
 
@@ -270,7 +271,37 @@ export default class WdioCucumberTestFramework extends TestFramework {
         }
 
         args.instance = instance
-        await this.runHooks(instance, testFrameworkState, hookState, args)
+        const isTestEnd = testFrameworkState === TestFrameworkState.TEST && hookState === HookState.POST
+        if (!isTestEnd) {
+            await this.runHooks(instance, testFrameworkState, hookState, args)
+            return
+        }
+        args.holdFinishUntilHooksEnd = true
+        try {
+            await this.runHooks(instance, testFrameworkState, hookState, args)
+        } finally {
+            // Observers such as the a11y pre-save scan and save belong to this scenario, so the
+            // scenario ends after them, as it did on the non-CLI path.
+            instance.updateMultipleEntries({
+                [TestFrameworkConstants.KEY_TEST_ENDED_AT]: new Date().toISOString(),
+            })
+            const release = args.releaseHeldFinish as (() => Promise<void>) | undefined
+            if (release) {
+                let timer: ReturnType<typeof setTimeout> | undefined
+                try {
+                    await Promise.race([
+                        release(),
+                        new Promise<void>((resolve) => {
+                            timer = setTimeout(resolve, HELD_TEST_FINISH_RELEASE_TIMEOUT_MS)
+                        })
+                    ])
+                } catch (error) {
+                    logger.debug(`trackEvent: releasing the held test finish failed: ${error}`)
+                } finally {
+                    clearTimeout(timer)
+                }
+            }
+        }
     }
 
     /**
@@ -518,6 +549,8 @@ export default class WdioCucumberTestFramework extends TestFramework {
             [TestFrameworkConstants.KEY_TEST_RESULT_AT]: now,
             ...resolveFeatureFilePaths(featurePath),
             [KEY_TEST_SKIPPED_CASCADE]: true,
+            // Never ran, so never scanned: not an accessibility test whatever its tags.
+            [TestFrameworkConstants.KEY_TEST_ACCESSIBILITY]: false,
             [KEY_BDD_META_INFO]: {
                 feature: { name: feature.name, path: this.featureUriForMeta(), description: feature.description },
                 scenario: { name: scenario.name },

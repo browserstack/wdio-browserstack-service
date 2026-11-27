@@ -2,6 +2,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'node:path'
 import * as bstackLogger from '../../src/bstackLogger.js'
 import WdioCucumberTestFramework from '../../src/cli/frameworks/wdioCucumberTestFramework.js'
+import { TestFrameworkState } from '../../src/cli/states/testFrameworkState.js'
+import { HookState } from '../../src/cli/states/hookState.js'
+import { TestFrameworkConstants } from '../../src/cli/frameworks/constants/testFrameworkConstants.js'
 
 vi.spyOn(bstackLogger.BStackLogger, 'logToFile').mockImplementation(() => {})
 
@@ -56,5 +59,78 @@ describe.each([
 
         expect(meta.feature.path).not.toBe(framework['featurePath']())
         expect(meta.feature.path).not.toContain(process.cwd())
+    })
+})
+
+describe('scenario end — stamped after the TEST/POST observers', () => {
+    let framework: WdioCucumberTestFramework
+    let order: string[]
+    let instance: { updateMultipleEntries: ReturnType<typeof vi.fn> }
+
+    beforeEach(() => {
+        framework = new WdioCucumberTestFramework(['WebdriverIO-cucumber'], { 'WebdriverIO-cucumber': '9.0.0' }, 'bin-1')
+        order = []
+        instance = {
+            updateMultipleEntries: vi.fn((entries: Record<string, unknown>) => {
+                if (TestFrameworkConstants.KEY_TEST_ENDED_AT in entries) {
+                    order.push('ended_at')
+                }
+            })
+        }
+        framework['resolveInstance'] = vi.fn(() => instance) as never
+        framework['loadScenarioResult'] = vi.fn() as never
+    })
+
+    it('restamps ended_at after the observers, then releases the held finish', async () => {
+        const runHooks = vi.fn(async (_i: unknown, _s: unknown, _h: unknown, args: Record<string, unknown>) => {
+            order.push(args.holdFinishUntilHooksEnd === true ? 'observers(hold)' : 'observers')
+            args.releaseHeldFinish = async () => {
+                order.push('release')
+            }
+        })
+        framework.runHooks = runHooks as never
+
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.POST, {})
+
+        expect(order).toEqual(['ended_at', 'observers(hold)', 'ended_at', 'release'])
+    })
+
+    it('still restamps and releases when an observer throws', async () => {
+        framework.runHooks = vi.fn(async (_i: unknown, _s: unknown, _h: unknown, args: Record<string, unknown>) => {
+            args.releaseHeldFinish = async () => {
+                order.push('release')
+            }
+            throw new Error('observer failed')
+        }) as never
+
+        await expect(framework.trackEvent(TestFrameworkState.TEST, HookState.POST, {})).rejects.toThrow('observer failed')
+        expect(order).toEqual(['ended_at', 'ended_at', 'release'])
+    })
+
+    it('stops waiting for a held finish that does not settle', async () => {
+        vi.useFakeTimers()
+        try {
+            framework.runHooks = vi.fn(async (_i: unknown, _s: unknown, _h: unknown, args: Record<string, unknown>) => {
+                args.releaseHeldFinish = () => new Promise<void>(() => {})
+            }) as never
+
+            const done = framework.trackEvent(TestFrameworkState.TEST, HookState.POST, {})
+            await vi.advanceTimersByTimeAsync(5000)
+
+            await expect(done).resolves.toBeUndefined()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('does not hold or restamp for other states', async () => {
+        const runHooks = vi.fn(async () => {})
+        framework.runHooks = runHooks as never
+        const args: Record<string, unknown> = {}
+
+        await framework.trackEvent(TestFrameworkState.TEST, HookState.PRE, args)
+
+        expect(args.holdFinishUntilHooksEnd).toBeUndefined()
+        expect(order).toEqual([])
     })
 })

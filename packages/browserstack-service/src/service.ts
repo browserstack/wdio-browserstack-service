@@ -88,6 +88,9 @@ export default class BrowserstackService implements Services.ServiceInstance {
      * on it would report tests as skipped that are about to execute.
      */
     private _mochaBail: boolean = false
+    // @wdio/mocha-framework 10 defaults mocha's `failHookAffectedTests` on: tests behind a
+    // failed before/beforeEach hook are failed rather than dropped
+    private _mochaFailHookAffectedTests: boolean = false
 
     constructor (
         options: BrowserstackConfig & Options.Testrunner,
@@ -109,6 +112,8 @@ export default class BrowserstackService implements Services.ServiceInstance {
         // strict 'true' string compare and would miss a numeric `bail: 1`
         const bailOpt: unknown = this._config?.mochaOpts?.bail
         this._mochaBail = this._config?.framework === 'mocha' && Boolean(bailOpt) && !isFalse(bailOpt)
+        const failHookAffectedTestsOpt: unknown = this._config?.mochaOpts?.failHookAffectedTests
+        this._mochaFailHookAffectedTests = this._config?.framework === 'mocha' && failHookAffectedTestsOpt !== false
 
         PerformanceTester.startMonitoring('performance-report-service.csv')
         if (shouldProcessEventForTesthub('')) {
@@ -534,18 +539,32 @@ export default class BrowserstackService implements Services.ServiceInstance {
                 }
                 // a failed (or skipping) before/each hook silently drops the suite's remaining
                 // tests in mocha — report them as skipped so they surface on the dashboard and
-                // attribute their Automate session (port of the legacy insights-handler cascade)
+                // attribute their Automate session (port of the legacy insights-handler cascade),
+                // or as failed when mocha fails them instead
                 const hookType = getHookType((test as Frameworks.Test).title)
                 const suite = (test as Frameworks.Test).ctx?.test?.parent
                 if (result && !result.passed && ['BEFORE_ALL', 'BEFORE_EACH', 'AFTER_EACH'].includes(hookType) && suite) {
-                    await reportSuiteSkipped(framework, suite)
+                    await reportSuiteSkipped(framework, suite, this._hookAffectedTestsFailure(hookType, result))
                 }
             }
             return
         }
 
-        await this._insightsHandler?.afterHook(test, result)
+        const hookFailure = this._config.framework === 'mocha'
+            ? this._hookAffectedTestsFailure(getHookType((test as Frameworks.Test).title), result)
+            : undefined
+        await this._insightsHandler?.afterHook(test, result, hookFailure)
         await this._accessibilityHandler?.afterHook()
+    }
+
+    /** The result mocha fails the tests behind this failed hook with, if it fails them. */
+    private _hookAffectedTestsFailure(hookType: string, result?: Frameworks.TestResult): Frameworks.TestResult | undefined {
+        if (!this._mochaFailHookAffectedTests || !result || result.passed || result.skipped
+            || (hookType !== 'BEFORE_ALL' && hookType !== 'BEFORE_EACH')
+            || result.error?.message?.includes('sync skip; aborting execution')) {
+            return undefined
+        }
+        return { ...result, passed: false, skipped: false, duration: 0 }
     }
 
     /**

@@ -32,6 +32,7 @@ describe('skipReporter', () => {
             [TestFrameworkState.LOG_REPORT, HookState.POST],
             [TestFrameworkState.TEST, HookState.POST],
         ])
+        expect(calls[1][2]).toMatchObject({ suiteTitle: 'suite', neverRan: true })
         expect(calls[2][2]).toMatchObject({ result: { passed: false, skipped: true } })
     })
 
@@ -89,6 +90,22 @@ describe('skipReporter', () => {
             .filter(([state]) => state === TestFrameworkState.INIT_TEST)
             .map(([, , args]) => (args as { test: { title: string } }).test.title)
         expect(reported).toEqual(['undetermined', 'nested undetermined'])
+    })
+
+    it('reports the suite\'s undetermined tests failed when given a failure', async () => {
+        const framework = makeFramework()
+        const failure = { passed: false, skipped: false, error: new Error('hook boom'), duration: 0 } as unknown as Frameworks.TestResult
+        const parent = { title: 'outer' }
+        const suite = {
+            tests: [{ title: 'failed by hook', parent }],
+            suites: [{ tests: [{ title: 'nested failed by hook', parent: { title: 'inner' } }], suites: [] }],
+        }
+        await reportSuiteSkipped(framework, suite, failure)
+        const results = vi.mocked(framework.trackEvent).mock.calls
+            .filter(([state]) => state === TestFrameworkState.LOG_REPORT || state === TestFrameworkState.TEST)
+            .filter(([, hook]) => hook === HookState.POST)
+            .map(([, , args]) => (args as { result: unknown }).result)
+        expect(results).toEqual([failure, failure, failure, failure])
     })
 
     it('resolves spec file from the runner spec when the test has none', () => {

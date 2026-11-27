@@ -261,3 +261,96 @@ describe('TestHubModule — deferred last-test-finish delivery (SDK-7265)', () =
         expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
     })
 })
+
+describe('TestHubModule — finish held until the TEST/POST observers end (cucumber)', () => {
+    let testHubModule: TestHubModule
+    let mockGrpcClient: { testFrameworkEvent: ReturnType<typeof vi.fn> }
+
+    const cucumberInstance = (uuid: string) => ({
+        ...makeMochaTestInstance(uuid),
+        getAllData: () => new Map<string, unknown>([
+            [TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME, 'WebdriverIO-cucumber'],
+            [TestFrameworkConstants.KEY_TEST_ENDED_AT, '2026-08-10T20:53:02Z']
+        ])
+    })
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        process.env.WDIO_WORKER_ID = '0-1'
+        mockGrpcClient = { testFrameworkEvent: vi.fn().mockResolvedValue({ success: true }) }
+        vi.mocked(GrpcClient.getInstance).mockReturnValue(mockGrpcClient as never)
+        vi.mocked(TestFramework.hasState).mockReturnValue(true)
+        vi.mocked(TestFramework.getState).mockImplementation((instance: any, key: unknown) => {
+            if (key === TestFrameworkConstants.KEY_TEST_FRAMEWORK_NAME) {
+                return 'WebdriverIO-cucumber'
+            }
+            if (key === TestFrameworkConstants.KEY_TEST_UUID) {
+                return instance?.__uuid
+            }
+            return ''
+        })
+        testHubModule = new TestHubModule({ enabled: true, hubUrl: 'https://hub.browserstack.com' })
+    })
+
+    afterEach(() => {
+        vi.resetAllMocks()
+        delete process.env.WDIO_WORKER_ID
+    })
+
+    it('holds the finish and hands back a release that sends it once', async () => {
+        const args: Record<string, unknown> = { instance: cucumberInstance('s1'), holdFinishUntilHooksEnd: true }
+        testHubModule.onAllTestEvents(args)
+
+        expect(mockGrpcClient.testFrameworkEvent).not.toHaveBeenCalled()
+        expect(typeof args.releaseHeldFinish).toBe('function')
+
+        await (args.releaseHeldFinish as () => Promise<void>)()
+        await (args.releaseHeldFinish as () => Promise<void>)()
+
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledWith(
+            expect.objectContaining({ testFrameworkState: 'TEST', testHookState: 'POST', uuid: 's1' })
+        )
+
+        await testHubModule.flushPendingTestFinishEvent()
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
+    })
+
+    it('still sends immediately when the framework does not ask to hold', () => {
+        testHubModule.onAllTestEvents({ instance: cucumberInstance('s2') })
+
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
+    })
+
+    it('sends a held finish from the worker-end flush if it was never released', async () => {
+        testHubModule.onAllTestEvents({ instance: cucumberInstance('s3'), holdFinishUntilHooksEnd: true })
+
+        await testHubModule.flushPendingTestFinishEvent()
+
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledWith(expect.objectContaining({ uuid: 's3' }))
+    })
+
+    it('worker-end flush waits for a released finish that is still sending', async () => {
+        let settle!: (value: unknown) => void
+        mockGrpcClient.testFrameworkEvent.mockReturnValueOnce(new Promise((resolve) => { settle = resolve }))
+        const args: Record<string, unknown> = { instance: cucumberInstance('s4'), holdFinishUntilHooksEnd: true }
+        testHubModule.onAllTestEvents(args)
+
+        // The scenario end stopped waiting on this release (its timeout fired); the send is still open.
+        void (args.releaseHeldFinish as () => Promise<void>)()
+
+        let drained = false
+        const drain = testHubModule.flushPendingTestFinishEvent()
+        expect(drain).toBeDefined()
+        drain!.then(() => { drained = true })
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(drained).toBe(false)
+
+        settle({ success: true })
+        await drain
+        expect(drained).toBe(true)
+        expect(mockGrpcClient.testFrameworkEvent).toHaveBeenCalledTimes(1)
+        expect(testHubModule.flushPendingTestFinishEvent()).toBeUndefined()
+    })
+})

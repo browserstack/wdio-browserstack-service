@@ -69,7 +69,7 @@ async function emitSkipReport({ framework, test, result, suiteTitle }: QueuedSki
     // gated on it, not on TEST/POST) — same sequence afterTest uses
     const steps: Array<[State, State, Record<string, unknown>]> = [
         [TestFrameworkState.INIT_TEST, HookState.PRE, { test }],
-        [TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle }],
+        [TestFrameworkState.TEST, HookState.PRE, { test, suiteTitle, neverRan: true }],
         [TestFrameworkState.LOG_REPORT, HookState.POST, { test, result }],
         [TestFrameworkState.TEST, HookState.POST, { test, result, suiteTitle }],
     ]
@@ -130,13 +130,13 @@ export function reportSkippedTest(
     identifier: string,
     test: Frameworks.Test,
     suiteTitle?: string,
-    options?: { immediate?: boolean }
+    options?: { immediate?: boolean, failure?: Frameworks.TestResult }
 ): Promise<void> {
     if (startedTests.has(identifier) || reportedSkips.has(identifier)) {
         return reportChain
     }
     reportedSkips.add(identifier)
-    const result = { passed: false, skipped: true } as Frameworks.TestResult
+    const result = options?.failure ?? { passed: false, skipped: true } as Frameworks.TestResult
     const queued: QueuedSkip = { framework, test, result, suiteTitle }
 
     // SDK-7493: only the DETACHED caller needs deferring. `immediate` is for callers wdio
@@ -166,6 +166,8 @@ export function reportSkippedTest(
  * Port of the legacy insights-handler skip propagation: when a BEFORE_ALL/BEFORE_EACH/
  * AFTER_EACH hook fails (or skips), mocha silently drops the remaining tests in the
  * suite — report each state-undefined test as skipped, recursing into nested describes.
+ * Given a `failure`, report them failed with it instead: mocha's `failHookAffectedTests` fails
+ * them rather than dropping them.
  *
  * Reports IMMEDIATELY (SDK-7493): every caller of this — the failed-hook cascade in
  * `afterHook` and the bail cascade in `afterTest` (or in `after()`, for a failure reported after
@@ -173,7 +175,11 @@ export function reportSkippedTest(
  * cannot interleave with a live test the way the un-awaited `onTestSkip` path could. They
  * belong to the hook/test being reported, so they must not slide to end-of-run.
  */
-export async function reportSuiteSkipped(framework: TestFramework, suite: { tests?: unknown[], suites?: unknown[] }): Promise<void> {
+export async function reportSuiteSkipped(
+    framework: TestFramework,
+    suite: { tests?: unknown[], suites?: unknown[] },
+    failure?: Frameworks.TestResult
+): Promise<void> {
     for (const t of (suite.tests || []) as MochaRuntimeTest[]) {
         if (t.state !== undefined) {
             continue
@@ -190,10 +196,10 @@ export async function reportSuiteSkipped(framework: TestFramework, suite: { test
             file: t.file,
             ctx: { test: { parent: t.parent } }
         } as unknown as Frameworks.Test
-        await reportSkippedTest(framework, identifier, synthetic, parentTitle, { immediate: true })
+        await reportSkippedTest(framework, identifier, synthetic, parentTitle, { immediate: true, failure })
     }
     for (const sub of (suite.suites || []) as { tests?: unknown[], suites?: unknown[] }[]) {
-        await reportSuiteSkipped(framework, sub)
+        await reportSuiteSkipped(framework, sub, failure)
     }
 }
 
