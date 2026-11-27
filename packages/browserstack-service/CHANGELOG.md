@@ -1,5 +1,13 @@
 # @wdio/browserstack-service
 
+## 10.0.1
+
+### Patch Changes
+
+- 6fce5e5: - Fixed accessibility results being attributed outside the test that produced them when using tag-scoped accessibility testing on the BrowserStack CLI flow.
+  - Fixed tests outside `includeTagsInTestingScope` / `excludeTagsInTestingScope` being reported as accessibility tests when using the CLI.
+  - Fixed Mocha tests that fail because of a failed `before`/`beforeEach` hook showing as skipped in Test Reporting. They are now reported as failed with the hook's error, matching WebdriverIO 10's default `failHookAffectedTests`.
+
 ## 10.0.0
 
 ### Major Changes
